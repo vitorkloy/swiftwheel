@@ -1,0 +1,927 @@
+import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { ArrowUpRight, Circle, CloudFog, Copy, Highlighter, Minus, Palette, Pen, Save, Square, Type, Undo2, X } from 'lucide-react';
+
+type ShotFormat = 'png' | 'jpeg' | 'webp';
+
+interface Rect {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+}
+
+interface Session {
+  frameUrl?: string;
+  dataUrl?: string;
+  mode: 'region' | 'window';
+  width: number;
+  height: number;
+  preset: Rect | null;
+  cursor: { x: number; y: number } | null;
+  copyOnSelect: boolean;
+  format: ShotFormat;
+  quality: number;
+  language: 'pt' | 'en';
+  demo?: boolean;
+}
+
+type Point = { x: number; y: number };
+type Tool = 'select' | 'pen' | 'arrow' | 'rect' | 'ellipse' | 'line' | 'highlight' | 'text' | 'blur';
+type ShapeTool = 'rect' | 'ellipse' | 'line' | 'arrow';
+
+type Mark =
+  | { tool: 'pen' | 'highlight'; color: string; size: number; points: Point[] }
+  | { tool: 'arrow' | 'rect' | 'ellipse' | 'line' | 'blur'; color: string; size: number; a: Point; b: Point }
+  | { tool: 'text'; color: string; size: number; at: Point; text: string };
+
+type Handle = 'n' | 's' | 'e' | 'w' | 'nw' | 'ne' | 'sw' | 'se';
+
+const COLORS = ['#ffffff', '#111111', '#ff4d4f', '#ffd400', '#3dd68c', '#4c8dff'];
+const WIDTHS = [2, 4, 8];
+
+const COPY: Record<Session['language'], Record<string, string>> = {
+  pt: {
+    pen: 'Caneta', shapes: 'Formas', arrow: 'Seta', rect: 'Retângulo', ellipse: 'Círculo', line: 'Linha', highlight: 'Marca', text: 'Texto', blur: 'Desfoque', undo: 'Desfazer',
+    copy: 'Copiar', save: 'Guardar', cancel: 'Cancelar', color: 'Cor', custom: 'Cor personalizada',
+    copied: 'Copiado', saved: 'Guardado', select: 'Arraste para selecionar',
+  },
+  en: {
+    pen: 'Pen', shapes: 'Shapes', arrow: 'Arrow', rect: 'Rectangle', ellipse: 'Circle', line: 'Line', highlight: 'Marker', text: 'Text', blur: 'Blur', undo: 'Undo',
+    copy: 'Copy', save: 'Save', cancel: 'Cancel', color: 'Color', custom: 'Custom color',
+    copied: 'Copied', saved: 'Saved', select: 'Drag to select',
+  },
+};
+
+function demoSession(): Session {
+  const canvas = document.createElement('canvas');
+  canvas.width = 1280;
+  canvas.height = 720;
+  const g = canvas.getContext('2d');
+  if (g) {
+    const wash = g.createLinearGradient(0, 0, 1280, 720);
+    wash.addColorStop(0, '#1c2430');
+    wash.addColorStop(1, '#10141a');
+    g.fillStyle = wash;
+    g.fillRect(0, 0, 1280, 720);
+    g.fillStyle = '#d7dde6';
+    g.fillRect(180, 120, 420, 240);
+    g.fillStyle = '#8ea0b8';
+    g.beginPath();
+    g.arc(860, 300, 120, 0, Math.PI * 2);
+    g.fill();
+  }
+  return {
+    dataUrl: canvas.toDataURL('image/png'),
+    mode: 'region',
+    width: 1280,
+    height: 720,
+    preset: null,
+    cursor: { x: 640, y: 360 },
+    copyOnSelect: false,
+    format: 'png',
+    quality: 92,
+    language: 'pt',
+    demo: true,
+  };
+}
+
+function clampRect(rect: Rect, bounds: { width: number; height: number }): Rect {
+  const x = Math.max(0, Math.min(rect.x, bounds.width - 1));
+  const y = Math.max(0, Math.min(rect.y, bounds.height - 1));
+  const right = Math.max(x + 1, Math.min(rect.x + rect.width, bounds.width));
+  const bottom = Math.max(y + 1, Math.min(rect.y + rect.height, bounds.height));
+  return { x, y, width: right - x, height: bottom - y };
+}
+
+function normalize(a: Point, b: Point, bounds: { width: number; height: number }): Rect {
+  return clampRect({
+    x: Math.min(a.x, b.x),
+    y: Math.min(a.y, b.y),
+    width: Math.abs(a.x - b.x),
+    height: Math.abs(a.y - b.y),
+  }, bounds);
+}
+
+function hitHandle(point: Point, rect: Rect | null): Handle | null {
+  if (!rect) return null;
+  const spots: Array<[Handle, number, number]> = [
+    ['nw', rect.x, rect.y],
+    ['n', rect.x + rect.width / 2, rect.y],
+    ['ne', rect.x + rect.width, rect.y],
+    ['e', rect.x + rect.width, rect.y + rect.height / 2],
+    ['se', rect.x + rect.width, rect.y + rect.height],
+    ['s', rect.x + rect.width / 2, rect.y + rect.height],
+    ['sw', rect.x, rect.y + rect.height],
+    ['w', rect.x, rect.y + rect.height / 2],
+  ];
+  for (const [handle, x, y] of spots) {
+    if (Math.abs(point.x - x) <= 8 && Math.abs(point.y - y) <= 8) return handle;
+  }
+  return null;
+}
+
+function resizeRect(rect: Rect, handle: Handle, point: Point, bounds: { width: number; height: number }): Rect {
+  let left = rect.x;
+  let top = rect.y;
+  let right = rect.x + rect.width;
+  let bottom = rect.y + rect.height;
+  if (handle.includes('w')) left = point.x;
+  if (handle.includes('e')) right = point.x;
+  if (handle.includes('n')) top = point.y;
+  if (handle.includes('s')) bottom = point.y;
+  return normalize({ x: left, y: top }, { x: right, y: bottom }, bounds);
+}
+
+function inside(point: Point, rect: Rect): boolean {
+  return point.x >= rect.x && point.y >= rect.y && point.x <= rect.x + rect.width && point.y <= rect.y + rect.height;
+}
+
+function textFont(size: number) {
+  return `${14 + size * 4}px "Segoe UI", sans-serif`;
+}
+
+function textBounds(mark: Extract<Mark, { tool: 'text' }>): Rect {
+  const probe = document.createElement('canvas').getContext('2d');
+  const height = 14 + mark.size * 4;
+  if (!probe) return { x: mark.at.x, y: mark.at.y, width: Math.max(24, mark.text.length * height * 0.55), height };
+  probe.font = textFont(mark.size);
+  const width = Math.max(24, probe.measureText(mark.text).width + 8);
+  return { x: mark.at.x - 4, y: mark.at.y - 2, width, height: height + 8 };
+}
+
+function hitText(point: Point, marks: Mark[]): number {
+  for (let index = marks.length - 1; index >= 0; index -= 1) {
+    const mark = marks[index];
+    if (mark.tool !== 'text') continue;
+    if (inside(point, textBounds(mark))) return index;
+  }
+  return -1;
+}
+
+function drawArrow(g: CanvasRenderingContext2D, a: Point, b: Point, color: string, size: number) {
+  const dx = b.x - a.x;
+  const dy = b.y - a.y;
+  const len = Math.hypot(dx, dy) || 1;
+  const ux = dx / len;
+  const uy = dy / len;
+  const head = Math.max(12, size * 4);
+  g.strokeStyle = color;
+  g.fillStyle = color;
+  g.lineWidth = size;
+  g.lineCap = 'round';
+  g.beginPath();
+  g.moveTo(a.x, a.y);
+  g.lineTo(b.x - ux * head * 0.75, b.y - uy * head * 0.75);
+  g.stroke();
+  g.beginPath();
+  g.moveTo(b.x, b.y);
+  g.lineTo(b.x - ux * head - uy * head * 0.45, b.y - uy * head + ux * head * 0.45);
+  g.lineTo(b.x - ux * head + uy * head * 0.45, b.y - uy * head - ux * head * 0.45);
+  g.closePath();
+  g.fill();
+}
+
+function paintMark(g: CanvasRenderingContext2D, mark: Mark, image: HTMLImageElement | null, view: { width: number; height: number }) {
+  g.save();
+  if (mark.tool === 'pen' || mark.tool === 'highlight') {
+    g.strokeStyle = mark.color;
+    g.globalAlpha = mark.tool === 'highlight' ? 0.38 : 1;
+    g.lineWidth = mark.tool === 'highlight' ? mark.size * 5 : mark.size;
+    g.lineCap = 'round';
+    g.lineJoin = 'round';
+    g.beginPath();
+    mark.points.forEach((point, index) => (index === 0 ? g.moveTo(point.x, point.y) : g.lineTo(point.x, point.y)));
+    g.stroke();
+  } else if (mark.tool === 'arrow') {
+    drawArrow(g, mark.a, mark.b, mark.color, mark.size);
+  } else if (mark.tool === 'line') {
+    g.strokeStyle = mark.color;
+    g.lineWidth = mark.size;
+    g.lineCap = 'round';
+    g.beginPath();
+    g.moveTo(mark.a.x, mark.a.y);
+    g.lineTo(mark.b.x, mark.b.y);
+    g.stroke();
+  } else if (mark.tool === 'rect' || mark.tool === 'ellipse') {
+    const x = Math.min(mark.a.x, mark.b.x);
+    const y = Math.min(mark.a.y, mark.b.y);
+    const width = Math.abs(mark.b.x - mark.a.x);
+    const height = Math.abs(mark.b.y - mark.a.y);
+    g.strokeStyle = mark.color;
+    g.lineWidth = mark.size;
+    g.beginPath();
+    if (mark.tool === 'ellipse') g.ellipse(x + width / 2, y + height / 2, Math.max(0.5, width / 2), Math.max(0.5, height / 2), 0, 0, Math.PI * 2);
+    else g.rect(x, y, width, height);
+    g.stroke();
+  } else if (mark.tool === 'text') {
+    g.fillStyle = mark.color;
+    g.font = textFont(mark.size);
+    g.textBaseline = 'top';
+    g.fillText(mark.text, mark.at.x, mark.at.y);
+  } else if (mark.tool === 'blur' && image) {
+    const x = Math.min(mark.a.x, mark.b.x);
+    const y = Math.min(mark.a.y, mark.b.y);
+    const width = Math.max(1, Math.abs(mark.b.x - mark.a.x));
+    const height = Math.max(1, Math.abs(mark.b.y - mark.a.y));
+    const scaleX = image.naturalWidth / Math.max(1, view.width);
+    const scaleY = image.naturalHeight / Math.max(1, view.height);
+    const off = document.createElement('canvas');
+    off.width = Math.max(1, Math.round(width));
+    off.height = Math.max(1, Math.round(height));
+    const og = off.getContext('2d');
+    if (og) {
+      og.imageSmoothingEnabled = false;
+      const block = 8;
+      const smallW = Math.max(1, Math.round(off.width / block));
+      const smallH = Math.max(1, Math.round(off.height / block));
+      og.drawImage(image, x * scaleX, y * scaleY, width * scaleX, height * scaleY, 0, 0, smallW, smallH);
+      og.drawImage(off, 0, 0, smallW, smallH, 0, 0, off.width, off.height);
+      g.drawImage(off, x, y, width, height);
+    }
+  }
+  g.restore();
+}
+
+function drawCursor(g: CanvasRenderingContext2D, cursor: Point) {
+  g.save();
+  g.translate(cursor.x, cursor.y);
+  g.fillStyle = '#fff';
+  g.strokeStyle = '#111';
+  g.lineWidth = 1.4;
+  g.beginPath();
+  g.moveTo(0, 0);
+  g.lineTo(0, 16);
+  g.lineTo(4.2, 12.4);
+  g.lineTo(8.2, 19);
+  g.lineTo(11, 17.6);
+  g.lineTo(6.8, 11.2);
+  g.lineTo(12.4, 11);
+  g.closePath();
+  g.fill();
+  g.stroke();
+  g.restore();
+}
+
+async function renderSelection(
+  image: HTMLImageElement,
+  selection: Rect,
+  marks: Mark[],
+  cursor: Point | null,
+  format: ShotFormat,
+  quality: number,
+): Promise<{ dataUrl: string; pngDataUrl: string }> {
+  const viewW = image.clientWidth || image.naturalWidth || 1;
+  const viewH = image.clientHeight || image.naturalHeight || 1;
+  const scaleX = image.naturalWidth / viewW;
+  const scaleY = image.naturalHeight / viewH;
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.max(1, Math.round(selection.width * scaleX));
+  canvas.height = Math.max(1, Math.round(selection.height * scaleY));
+  const g = canvas.getContext('2d');
+  if (!g) throw new Error('canvas');
+  g.drawImage(
+    image,
+    selection.x * scaleX,
+    selection.y * scaleY,
+    selection.width * scaleX,
+    selection.height * scaleY,
+    0,
+    0,
+    canvas.width,
+    canvas.height,
+  );
+  g.save();
+  g.scale(scaleX, scaleY);
+  g.translate(-selection.x, -selection.y);
+  g.beginPath();
+  g.rect(selection.x, selection.y, selection.width, selection.height);
+  g.clip();
+  if (cursor && inside(cursor, selection)) drawCursor(g, cursor);
+  for (const mark of marks) paintMark(g, mark, image, { width: image.clientWidth, height: image.clientHeight });
+  g.restore();
+  const pngDataUrl = canvas.toDataURL('image/png');
+  if (format === 'png') return { dataUrl: pngDataUrl, pngDataUrl };
+  const mime = format === 'jpeg' ? 'image/jpeg' : 'image/webp';
+  const blob = await new Promise<Blob | null>((resolve) => canvas.toBlob(resolve, mime, quality / 100));
+  if (!blob) return { dataUrl: pngDataUrl, pngDataUrl };
+  const dataUrl = await new Promise<string>((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(reader.error);
+    reader.readAsDataURL(blob);
+  });
+  return { dataUrl, pngDataUrl };
+}
+
+export const CaptureOverlay: React.FC = () => {
+  const [session, setSession] = useState<Session | null>(null);
+  const [selection, setSelection] = useState<Rect | null>(null);
+  const [committed, setCommitted] = useState(false);
+  const [tool, setTool] = useState<Tool>('select');
+  const [shapeTool, setShapeTool] = useState<ShapeTool>('rect');
+  const [shapesOpen, setShapesOpen] = useState(false);
+  const [color, setColor] = useState(COLORS[2]);
+  const [size, setSize] = useState(4);
+  const [marks, setMarks] = useState<Mark[]>([]);
+  const [draft, setDraft] = useState<Mark | null>(null);
+  const [textAt, setTextAt] = useState<Point | null>(null);
+  const [textValue, setTextValue] = useState('');
+  const [textEditIndex, setTextEditIndex] = useState<number | null>(null);
+  const textAtRef = useRef<Point | null>(null);
+  const textValueRef = useRef('');
+  const textEditIndexRef = useRef<number | null>(null);
+  const textInputRef = useRef<HTMLInputElement>(null);
+  const textStampRef = useRef(0);
+  textAtRef.current = textAt;
+  textValueRef.current = textValue;
+  textEditIndexRef.current = textEditIndex;
+  const [status, setStatus] = useState('');
+  const [colorsOpen, setColorsOpen] = useState(false);
+  const [frameReady, setFrameReady] = useState(false);
+  const [dimIn, setDimIn] = useState(false);
+  const [imageEpoch, setImageEpoch] = useState(0);
+  const colorInputRef = useRef<HTMLInputElement>(null);
+  const frameReadyRef = useRef(false);
+  const frameKeyRef = useRef('');
+  const imageRef = useRef<HTMLImageElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const barRef = useRef<HTMLDivElement>(null);
+  const [barBox, setBarBox] = useState({ width: 420, height: 40 });
+  const draftRef = useRef<Mark | null>(null);
+  const dragRef = useRef<
+    | { kind: 'create'; origin: Point; current: Point }
+    | { kind: 'move'; origin: Point; rect: Rect }
+    | { kind: 'resize'; handle: Handle; rect: Rect }
+    | { kind: 'draw'; origin: Point; current: Point }
+    | null
+  >(null);
+
+  useEffect(() => {
+    const apply = (next: Session) => {
+      const preset = next.preset && next.preset.width > 4 ? next.preset : null;
+      const frame = next.frameUrl || next.dataUrl || '';
+      if (frameKeyRef.current !== frame) {
+        frameKeyRef.current = frame;
+        frameReadyRef.current = false;
+        setFrameReady(false);
+        setDimIn(false);
+      }
+      setSession(next);
+      setColorsOpen(false);
+      setSelection(preset);
+      setCommitted(Boolean(preset));
+      setMarks([]);
+      setDraft(null);
+    };
+    if (!window.electron?.onScreenshotSession) {
+      apply(demoSession());
+      return;
+    }
+    const stop = window.electron.onScreenshotSession(apply);
+    const stopVisible = window.electron.onScreenshotVisible?.(() => {
+      window.setTimeout(() => setDimIn(true), 48);
+    });
+    void window.electron.getScreenshotSession?.().then((pending) => {
+      if (pending) apply(pending);
+    });
+    return () => {
+      stop();
+      stopVisible?.();
+    };
+  }, []);
+
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    const image = imageRef.current;
+    const view = session ? { width: session.width, height: session.height } : null;
+    if (!canvas || !image || !view) return;
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = Math.round(view.width * dpr);
+    canvas.height = Math.round(view.height * dpr);
+    const g = canvas.getContext('2d');
+    if (!g) return;
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, view.width, view.height);
+    if (selection && selection.width > 1 && selection.height > 1) {
+      g.beginPath();
+      g.rect(selection.x, selection.y, selection.width, selection.height);
+      g.clip();
+    }
+    const painted = marks.filter((_, index) => index !== textEditIndex);
+    const visible = draft ? [...painted, draft] : painted;
+    for (const mark of visible) paintMark(g, mark, image, view);
+    if (session?.cursor && (!selection || inside(session.cursor, selection))) drawCursor(g, session.cursor);
+  }, [marks, draft, session, imageEpoch, selection, textEditIndex]);
+
+  const label = COPY[session?.language || 'pt'];
+  const bounds = { width: session?.width || 0, height: session?.height || 0 };
+  const showBar = Boolean(session) && committed && Boolean(selection);
+
+  useLayoutEffect(() => {
+    const bar = barRef.current;
+    if (!bar) return;
+    const next = { width: bar.offsetWidth, height: bar.offsetHeight };
+    setBarBox((current) => (current.width === next.width && current.height === next.height ? current : next));
+  }, [showBar, tool, color, size, status, colorsOpen]);
+
+  const pointFrom = (event: React.PointerEvent): Point => {
+    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+    return {
+      x: Math.max(0, Math.min(bounds.width, event.clientX - rect.left)),
+      y: Math.max(0, Math.min(bounds.height, event.clientY - rect.top)),
+    };
+  };
+
+  const selectionRef = useRef<Rect | null>(null);
+  selectionRef.current = selection;
+
+  const remember = (rect: Rect | null) => {
+    if (!session || session.demo || !rect) return;
+    void window.electron?.screenshotAction?.({
+      action: 'remember',
+      region: { x: rect.x, y: rect.y, width: rect.width, height: rect.height },
+    });
+  };
+
+  const exportShot = useCallback(async () => {
+    if (!session || !selection || !imageRef.current) return null;
+    return renderSelection(imageRef.current, selection, marks, session.cursor, session.format, session.quality);
+  }, [marks, selection, session]);
+
+  const run = useCallback(async (action: 'copy' | 'save' | 'pin' | 'wheel' | 'cancel') => {
+    if (action === 'cancel') {
+      if (session?.demo) setSelection(null);
+      else void window.electron?.screenshotAction?.({ action: 'cancel' });
+      return;
+    }
+    const shot = await exportShot();
+    if (!shot || !selection) return;
+    if (session?.demo) {
+      const link = document.createElement('a');
+      link.href = shot.dataUrl;
+      link.download = 'vor-captura.png';
+      link.click();
+      setStatus(label.saved);
+      return;
+    }
+    const result = await window.electron?.screenshotAction?.({
+      action,
+      dataUrl: shot.dataUrl,
+      pngDataUrl: shot.pngDataUrl,
+      width: selection.width,
+      height: selection.height,
+    });
+    if (result?.ok && (action === 'copy' || action === 'save')) setStatus(action === 'copy' ? label.copied : label.saved);
+  }, [exportShot, label.copied, label.saved, selection, session?.demo]);
+
+  const clearTextDraft = useCallback(() => {
+    textAtRef.current = null;
+    textValueRef.current = '';
+    textEditIndexRef.current = null;
+    setTextAt(null);
+    setTextValue('');
+    setTextEditIndex(null);
+  }, []);
+
+  const commitText = useCallback(() => {
+    const value = textValueRef.current.trim();
+    const at = textAtRef.current;
+    const editIndex = textEditIndexRef.current;
+    clearTextDraft();
+    setTool('select');
+    if (!at) return;
+    if (!value) {
+      if (editIndex != null) setMarks((current) => current.filter((_, index) => index !== editIndex));
+      return;
+    }
+    const next: Mark = { tool: 'text', color, size, at, text: value };
+    setMarks((current) => {
+      if (editIndex == null) return [...current, next];
+      return current.map((mark, index) => (index === editIndex ? next : mark));
+    });
+  }, [clearTextDraft, color, size]);
+
+  const beginTextEdit = useCallback((at: Point, value: string, editIndex: number | null) => {
+    textStampRef.current = Date.now();
+    textAtRef.current = at;
+    textValueRef.current = value;
+    textEditIndexRef.current = editIndex;
+    setTextAt(at);
+    setTextValue(value);
+    setTextEditIndex(editIndex);
+    if (editIndex != null) {
+      const mark = marks[editIndex];
+      if (mark?.tool === 'text') {
+        setColor(mark.color);
+        setSize(mark.size);
+      }
+    }
+  }, [marks]);
+
+  const undo = useCallback(() => {
+    setDraft(null);
+    draftRef.current = null;
+    setMarks((current) => current.slice(0, -1));
+  }, []);
+
+  useEffect(() => {
+    if (!textAt) return;
+    textStampRef.current = Date.now();
+    const id = window.setTimeout(() => {
+      const input = textInputRef.current;
+      if (!input) return;
+      input.focus();
+      if (textEditIndexRef.current != null) input.select();
+    }, 0);
+    return () => window.clearTimeout(id);
+  }, [textAt]);
+
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      const typing = document.activeElement instanceof HTMLInputElement;
+      if (event.key === 'Escape') {
+        if (typing) {
+          clearTextDraft();
+          setTool('select');
+          return;
+        }
+        void run('cancel');
+      }
+      if (typing) return;
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !event.shiftKey) {
+        event.preventDefault();
+        undo();
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'c') {
+        event.preventDefault();
+        void run('copy');
+      }
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's') {
+        event.preventDefault();
+        void run('save');
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [clearTextDraft, run, undo]);
+
+  const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
+    if (!session || event.button !== 0) return;
+    setColorsOpen(false);
+    setShapesOpen(false);
+    const point = pointFrom(event);
+    const textHit = selection && inside(point, selection) ? hitText(point, marks) : -1;
+    if (textHit >= 0) {
+      event.preventDefault();
+      const mark = marks[textHit];
+      if (mark?.tool === 'text') beginTextEdit(mark.at, mark.text, textHit);
+      return;
+    }
+    if (tool === 'text' && selection && inside(point, selection)) {
+      event.preventDefault();
+      beginTextEdit(point, '', null);
+      return;
+    }
+    if (textAt) commitText();
+    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* o ponteiro já pode ter sido solto */ }
+    const handle = hitHandle(point, selection);
+    if (handle && selection && committed) {
+      dragRef.current = { kind: 'resize', handle, rect: selection };
+      return;
+    }
+    if (tool !== 'select' && selection && inside(point, selection)) {
+      dragRef.current = { kind: 'draw', origin: point, current: point };
+      return;
+    }
+    if (tool === 'select' && selection && inside(point, selection)) {
+      dragRef.current = { kind: 'move', origin: point, rect: selection };
+      return;
+    }
+    setCommitted(false);
+    setMarks([]);
+    setDraft(null);
+    draftRef.current = null;
+    clearTextDraft();
+    setTool('select');
+    dragRef.current = { kind: 'create', origin: point, current: point };
+  };
+
+  const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    const drag = dragRef.current;
+    if (!drag) return;
+    const point = pointFrom(event);
+    if (drag.kind === 'create') {
+      drag.current = point;
+      const next = normalize(drag.origin, point, bounds);
+      selectionRef.current = next;
+      setSelection(next);
+    } else if (drag.kind === 'move') {
+      const dx = point.x - drag.origin.x;
+      const dy = point.y - drag.origin.y;
+      const next = clampRect({ ...drag.rect, x: drag.rect.x + dx, y: drag.rect.y + dy }, bounds);
+      selectionRef.current = next;
+      setSelection(next);
+    } else if (drag.kind === 'resize') {
+      const next = resizeRect(drag.rect, drag.handle, point, bounds);
+      selectionRef.current = next;
+      setSelection(next);
+    } else if (drag.kind === 'draw') {
+      drag.current = point;
+      if (tool === 'pen' || tool === 'highlight') {
+        const current = draftRef.current;
+        const points = current && (current.tool === 'pen' || current.tool === 'highlight')
+          ? [...current.points, point]
+          : [drag.origin, point];
+        const next: Mark = { tool: tool === 'highlight' ? 'highlight' : 'pen', color, size, points };
+        draftRef.current = next;
+        setDraft(next);
+      } else if (tool === 'arrow' || tool === 'rect' || tool === 'ellipse' || tool === 'line' || tool === 'blur') {
+        const next: Mark = { tool, color, size, a: drag.origin, b: point };
+        draftRef.current = next;
+        setDraft(next);
+      }
+    }
+  };
+
+  const onPointerUp = () => {
+    const drag = dragRef.current;
+    dragRef.current = null;
+    if (!drag) return;
+    if (drag.kind === 'create') {
+      const next = normalize(drag.origin, drag.current, bounds);
+      if (next.width < 6 || next.height < 6) {
+        selectionRef.current = null;
+        setSelection(null);
+        return;
+      }
+      selectionRef.current = next;
+      setSelection(next);
+      setCommitted(true);
+      remember(next);
+      if (session?.copyOnSelect && imageRef.current) {
+        void renderSelection(imageRef.current, next, marks, session.cursor, session.format, session.quality)
+          .then((shot) => {
+            if (session.demo) return;
+            return window.electron?.screenshotAction?.({
+              action: 'copy',
+              dataUrl: shot.dataUrl,
+              pngDataUrl: shot.pngDataUrl,
+              width: next.width,
+              height: next.height,
+            });
+          })
+          .then(() => setStatus(label.copied))
+          .catch(() => undefined);
+      }
+      return;
+    }
+    if (drag.kind === 'move' || drag.kind === 'resize') {
+      remember(selectionRef.current);
+      return;
+    }
+    const drawn = draftRef.current;
+    draftRef.current = null;
+    if (drawn && (drawn.tool !== 'pen' && drawn.tool !== 'highlight' || drawn.points.length > 1)) {
+      setMarks((current) => [...current, drawn]);
+    }
+    setDraft(null);
+  };
+
+  if (!session) return null;
+
+  const handles: Handle[] = ['nw', 'n', 'ne', 'e', 'se', 's', 'sw', 'w'];
+  const handlePoint = (handle: Handle): Point => {
+    if (!selection) return { x: 0, y: 0 };
+    const right = selection.x + selection.width;
+    const bottom = selection.y + selection.height;
+    const midX = selection.x + selection.width / 2;
+    const midY = selection.y + selection.height / 2;
+    if (handle === 'nw') return { x: selection.x, y: selection.y };
+    if (handle === 'n') return { x: midX, y: selection.y };
+    if (handle === 'ne') return { x: right, y: selection.y };
+    if (handle === 'e') return { x: right, y: midY };
+    if (handle === 'se') return { x: right, y: bottom };
+    if (handle === 's') return { x: midX, y: bottom };
+    if (handle === 'sw') return { x: selection.x, y: bottom };
+    return { x: selection.x, y: midY };
+  };
+
+  let barLeft = 8;
+  let barTop = 8;
+  if (selection) {
+    barLeft = selection.x + selection.width - barBox.width;
+    barTop = selection.y + selection.height + 8;
+    if (barLeft < 8) barLeft = Math.max(8, selection.x);
+    if (barLeft + barBox.width > bounds.width - 8) barLeft = Math.max(8, bounds.width - barBox.width - 8);
+    if (barTop + barBox.height > bounds.height - 8) barTop = selection.y - barBox.height - 8;
+    if (barTop < 8) barTop = 8;
+  }
+
+  const shapeTools: Array<{ id: ShapeTool; label: string; icon: React.ReactNode }> = [
+    { id: 'rect', label: label.rect, icon: <Square size={16} strokeWidth={1.75} /> },
+    { id: 'ellipse', label: label.ellipse, icon: <Circle size={16} strokeWidth={1.75} /> },
+    { id: 'line', label: label.line, icon: <Minus size={16} strokeWidth={1.75} /> },
+    { id: 'arrow', label: label.arrow, icon: <ArrowUpRight size={16} strokeWidth={1.75} /> },
+  ];
+  const activeShape = shapeTools.find((item) => item.id === shapeTool) ?? shapeTools[0];
+  const tools: Array<{ id: Tool; label: string; icon: React.ReactNode }> = [
+    { id: 'pen', label: label.pen, icon: <Pen size={16} strokeWidth={1.75} /> },
+    { id: 'highlight', label: label.highlight, icon: <Highlighter size={16} strokeWidth={1.75} /> },
+    { id: 'text', label: label.text, icon: <Type size={16} strokeWidth={1.75} /> },
+    { id: 'blur', label: label.blur, icon: <CloudFog size={16} strokeWidth={1.75} /> },
+  ];
+  const textPx = 14 + size * 4;
+  const editingMark = textEditIndex != null ? marks[textEditIndex] : null;
+  const textColor = editingMark?.tool === 'text' ? editingMark.color : color;
+
+  return (
+    <div
+      className={`cap-stage${frameReady ? ' is-ready' : ''}`}
+      onPointerDown={onPointerDown}
+      onPointerMove={onPointerMove}
+      onPointerUp={onPointerUp}
+    >
+      <img
+        ref={imageRef}
+        src={session.frameUrl || session.dataUrl}
+        alt=""
+        draggable={false}
+        onLoad={() => {
+          setImageEpoch((epoch) => epoch + 1);
+          setFrameReady(true);
+          if (session.demo) {
+            window.setTimeout(() => setDimIn(true), 48);
+            return;
+          }
+          if (frameReadyRef.current) return;
+          frameReadyRef.current = true;
+          void window.electron?.screenshotAction?.({ action: 'ready' });
+        }}
+      />
+      <canvas ref={canvasRef} />
+      <div className={`cap-veil${dimIn ? ' is-in' : ''}`}>
+        {!selection && <div className="cap-dim" style={{ left: 0, top: 0, right: 0, bottom: 0 }} />}
+        {selection && (
+          <>
+            <div className="cap-dim" style={{ left: 0, top: 0, right: 0, height: selection.y }} />
+            <div className="cap-dim" style={{ left: 0, top: selection.y + selection.height, right: 0, bottom: 0 }} />
+            <div className="cap-dim" style={{ left: 0, top: selection.y, width: selection.x, height: selection.height }} />
+            <div className="cap-dim" style={{ left: selection.x + selection.width, top: selection.y, right: 0, height: selection.height }} />
+          </>
+        )}
+      </div>
+      {selection && (
+        <>
+          <div className="cap-sel" style={{ left: selection.x, top: selection.y, width: selection.width, height: selection.height }}>
+            <span className={`cap-size${selection.y < 28 ? ' is-inside' : ''}`}>{Math.round(selection.width)} × {Math.round(selection.height)}</span>
+          </div>
+          {handles.map((handle) => {
+            const at = handlePoint(handle);
+            return <i key={handle} className="cap-handle" style={{ left: at.x, top: at.y, cursor: `${handle}-resize` }} />;
+          })}
+        </>
+      )}
+      {showBar && (
+        <div ref={barRef} className="cap-bar" style={{ left: barLeft, top: barTop }} onPointerDown={(event) => event.stopPropagation()}>
+          <button
+            type="button"
+            className={tool === 'pen' ? 'is-on' : ''}
+            aria-label={label.pen}
+            title={label.pen}
+            onClick={() => { setShapesOpen(false); setTool(tool === 'pen' ? 'select' : 'pen'); }}
+          >
+            <Pen size={16} strokeWidth={1.75} />
+          </button>
+          <span className="cap-shape">
+            <button
+              type="button"
+              className={tool === shapeTool ? 'is-on' : ''}
+              aria-label={label.shapes}
+              title={label.shapes}
+              aria-expanded={shapesOpen}
+              onClick={() => {
+                setColorsOpen(false);
+                setShapesOpen((open) => !open);
+                if (tool !== shapeTool) setTool(shapeTool);
+              }}
+            >
+              {activeShape.icon}
+            </button>
+            {shapesOpen && (
+              <span className={`cap-shape-pop${barTop < 88 ? ' is-below' : ''}`}>
+                {shapeTools.map((item) => (
+                  <button
+                    key={item.id}
+                    type="button"
+                    className={shapeTool === item.id ? 'is-on' : ''}
+                    aria-label={item.label}
+                    title={item.label}
+                    onClick={() => {
+                      setShapeTool(item.id);
+                      setTool(item.id);
+                      setShapesOpen(false);
+                    }}
+                  >
+                    {item.icon}
+                  </button>
+                ))}
+              </span>
+            )}
+          </span>
+          {tools.slice(1).map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={tool === item.id ? 'is-on' : ''}
+              aria-label={item.label}
+              title={item.label}
+              onClick={() => { setShapesOpen(false); setTool(tool === item.id ? 'select' : item.id); }}
+            >
+              {item.icon}
+            </button>
+          ))}
+          <i className="cap-rule" />
+          <span className="cap-color">
+            <button
+              type="button"
+              className={`cap-swatch${colorsOpen ? ' is-on' : ''}`}
+              style={{ background: color }}
+              aria-label={label.color}
+              title={label.color}
+              aria-expanded={colorsOpen}
+              onClick={() => { setShapesOpen(false); setColorsOpen((open) => !open); }}
+            />
+            {colorsOpen && (
+              <span className={`cap-color-pop${barTop < 72 ? ' is-below' : ''}`}>
+                {COLORS.map((swatch) => (
+                  <button
+                    key={swatch}
+                    type="button"
+                    className={`cap-swatch${color === swatch ? ' is-on' : ''}`}
+                    style={{ background: swatch }}
+                    aria-label={swatch}
+                    onClick={() => { setColor(swatch); setColorsOpen(false); }}
+                  />
+                ))}
+                <button type="button" aria-label={label.custom} title={label.custom} onClick={() => colorInputRef.current?.click()}>
+                  <Palette size={16} strokeWidth={1.75} />
+                </button>
+                <input
+                  ref={colorInputRef}
+                  type="color"
+                  value={/^#[0-9a-fA-F]{6}$/.test(color) ? color : '#ff4d4f'}
+                  aria-label={label.custom}
+                  onChange={(event) => { setColor(event.target.value); setColorsOpen(false); }}
+                />
+              </span>
+            )}
+          </span>
+          <i className="cap-rule" />
+          <span className="cap-widths">
+            {WIDTHS.map((width) => (
+              <button key={width} type="button" className={size === width ? 'is-on' : ''} onClick={() => setSize(width)} aria-label={`${width}px`}>
+                <i style={{ width, height: width }} />
+              </button>
+            ))}
+          </span>
+          <i className="cap-rule" />
+          <button type="button" aria-label={label.undo} title={label.undo} disabled={marks.length === 0} onClick={undo}><Undo2 size={16} strokeWidth={1.75} /></button>
+          <button type="button" aria-label={label.copy} title={status === label.copied ? label.copied : label.copy} onClick={() => void run('copy')}><Copy size={16} strokeWidth={1.75} /></button>
+          <button type="button" aria-label={label.save} title={status === label.saved ? label.saved : label.save} onClick={() => void run('save')}><Save size={16} strokeWidth={1.75} /></button>
+          <button type="button" aria-label={label.cancel} title={label.cancel} onClick={() => void run('cancel')}><X size={16} strokeWidth={1.75} /></button>
+          <span className="cap-live" role="status">{status}</span>
+        </div>
+      )}
+      {textAt && (
+        <input
+          ref={textInputRef}
+          className="cap-text"
+          style={{ left: textAt.x, top: textAt.y, color: textColor, fontSize: textPx }}
+          value={textValue}
+          onChange={(event) => {
+            textValueRef.current = event.target.value;
+            setTextValue(event.target.value);
+          }}
+          onBlur={() => {
+            window.setTimeout(() => {
+              if (Date.now() - textStampRef.current < 280) {
+                textInputRef.current?.focus();
+                return;
+              }
+              if (document.activeElement === textInputRef.current) return;
+              commitText();
+            }, 0);
+          }}
+          onKeyDown={(event) => {
+            if (event.key === 'Enter') {
+              event.preventDefault();
+              commitText();
+            }
+            event.stopPropagation();
+          }}
+          onPointerDown={(event) => event.stopPropagation()}
+        />
+      )}
+    </div>
+  );
+};

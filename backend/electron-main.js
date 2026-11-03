@@ -10,6 +10,7 @@ const {
   shell,
   dialog,
   session,
+  protocol,
 } = require("electron");
 const { autoUpdater } = require("electron-updater");
 const { Notification: UpdateNotification } = require("electron");
@@ -22,13 +23,35 @@ const win32Launch = require("./win32-launch");
 const unixPlatform = process.platform === "win32" ? null : require("./platform-unix.cjs");
 const { normalizeFullPersistenceBlob } = require("./persistence-normalize.cjs");
 const { detectGameExecutable } = require("./game-detection.cjs");
+const { DEFAULT_SCREENSHOT, installScreenshot, createShortcutTracker } = require("./screenshot.cjs");
 const crypto = require("crypto");
 const { GlobalKeyboardListener } = require("node-global-key-listener");
 const http = require("http");
 const https = require("https");
 const url = require("url");
 
+/**
+ * Tem de existir antes do `ready`. A página da captura pede o frame por este esquema
+ * em vez de receber um PNG enorme pelo IPC.
+ */
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: "vor-shot",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      corsEnabled: true,
+      bypassCSP: true,
+    },
+  },
+]);
+
 const isDev = !app.isPackaged;
+/** Enquanto o frame está a ser lido, show/resize do painel não pode voltar a pintar o VOR na foto. */
+let screenshotGrabbing = false;
+let startScreenshot = async () => {};
 
 /**
  * Canal de distribuição. A Microsoft Store proíbe mecanismos próprios de atualização — quem
@@ -930,65 +953,15 @@ function startShortcutRecording() {
 
   keyboardListener = new GlobalKeyboardListener();
   recordingActive = true;
+  const tracker = createShortcutTracker();
 
   keyboardListener.addListener((e, down) => {
-    if (e.state === "DOWN" && recordingActive) {
-      // Collect all currently pressed keys
-      const modifiers = {
-        CTRL: false,
-        ALT: false,
-        SHIFT: false,
-        META: false,
-      };
-
-      // Check modifiers using the 'down' object which tracks all pressed keys
-      // The listener provides names like "LEFT CTRL", "RIGHT SHIFT", etc.
-      Object.keys(down).forEach((keyName) => {
-        if (keyName.includes("CTRL")) modifiers.CTRL = true;
-        if (keyName.includes("ALT")) modifiers.ALT = true;
-        if (keyName.includes("SHIFT")) modifiers.SHIFT = true;
-        if (keyName.includes("META") || keyName.includes("WINDOWS"))
-          modifiers.META = true;
-      });
-
-      // Extract the main key
-      let key = e.name;
-
-      // Ignore lone modifiers (don't record if ONLY Ctrl is pressed)
-      if (
-        [
-          "LEFT CTRL",
-          "RIGHT CTRL",
-          "LEFT ALT",
-          "RIGHT ALT",
-          "LEFT SHIFT",
-          "RIGHT SHIFT",
-          "LEFT META",
-          "RIGHT META",
-          "WINDOWS",
-        ].includes(key)
-      ) {
-        return;
-      }
-
-      const formattedModifiers = [];
-      if (modifiers.CTRL) formattedModifiers.push("Ctrl");
-      if (modifiers.ALT) formattedModifiers.push("Alt");
-      if (modifiers.SHIFT) formattedModifiers.push("Shift");
-      if (modifiers.META) formattedModifiers.push("Super"); // Map Win key to Super for Electron compatibility
-
-      // Key name normalization for Zenith format
-      if (key === "SPACE") key = "Space";
-      if (key === "ESCAPE") key = "Escape";
-      if (key.length === 1) key = key.toUpperCase();
-
-      // Handle Function keys F1-F12 (they come in as F1, F2...)
-
-      const shortcutString = [...formattedModifiers, key].join("+");
-
-      if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("shortcut-recorded", shortcutString);
-      }
+    tracker.note(e);
+    if (!recordingActive) return;
+    const shortcutString = tracker.format(e, down);
+    if (!shortcutString) return;
+    if (mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.webContents.send("shortcut-recorded", shortcutString);
     }
   });
 }
@@ -1279,6 +1252,9 @@ let radialOpenPaintSequence = 0;
 /* zenith-verify:radial-handshake-main — prepare → radial-prep-paint-done → open-menu → radial-open-paint-done → show; ver scripts/verify-radial-windowing.mjs */
 /** Verdadeiro enquanto o arrasto de arquivo mantém a roda de arquivos. Atalho e botão do meio não podem abrir a roda de apps nesse intervalo. */
 let fileGestureActive = false;
+/** Janela invisível que lê o caminho do arquivo no DragEnter. Atribuída quando o gesto arma. */
+let placeFileCatcher = () => {};
+let hideFileCatcher = () => {};
 
 function presentRadialWindow(source = "shortcut", fileWheel = null, anchor = null) {
   if (!mainWindow || mainWindow.isDestroyed()) return;
@@ -1371,7 +1347,7 @@ function presentRadialWindow(source = "shortcut", fileWheel = null, anchor = nul
       nativeResizeRisk = true;
     }
   }
-  if (nativeResizeRisk) {
+  if (nativeResizeRisk && source !== "file") {
     diagLog(
       `[RadialOpen] Native bounds differ from centered radial; hiding before resize (mode=${nativeWindowSizeMode}, panel=${rendererPanelVisible})`,
     );
@@ -1479,7 +1455,7 @@ function presentRadialWindow(source = "shortcut", fileWheel = null, anchor = nul
         windowBuriedPassive = false;
         mainWindow.setIgnoreMouseEvents(false);
         mainWindow.setOpacity(1);
-        if (!mainWindow.isVisible()) mainWindow.showInactive();
+        if (source !== "file" && !mainWindow.isVisible()) mainWindow.showInactive();
         if (typeof paintToken === "number") {
           /**
            * O renderer preparou o radial com alfa zero. Liberar o bloom somente depois de `show()`
@@ -1512,6 +1488,13 @@ function presentRadialWindow(source = "shortcut", fileWheel = null, anchor = nul
         if (process.platform === "win32") {
           mainWindow.setAlwaysOnTop(true, "screen-saver", 1);
         }
+        if (source === "file" && anchor) {
+          placeFileCatcher(anchor.x, anchor.y);
+          for (const delay of [80, 240]) {
+            const restackCatcher = setTimeout(() => placeFileCatcher(anchor.x, anchor.y), delay);
+            restackCatcher.unref?.();
+          }
+        }
         radialAnchorFollowsPoint = false;
 
         /**
@@ -1542,7 +1525,7 @@ function presentRadialWindow(source = "shortcut", fileWheel = null, anchor = nul
       /** Main já chamou `updateWindowSize('fullscreen')` (exceto minimizado: bounds em fila). */
       preSizedByMain: !wasMinimized,
       /** O painel continua no ecrã por baixo do radial — o renderer não o pode fechar. */
-      keepPanel: panelOverlayActive,
+      keepPanel: source === "file" ? false : panelOverlayActive,
       /**
        * Rect de ecrã do painel, SEMPRE que ele fica por baixo do radial.
        *
@@ -1582,6 +1565,11 @@ function presentRadialWindow(source = "shortcut", fileWheel = null, anchor = nul
    * Caminho rápido: janela já visível e não minimizada — handshake prepare-radial custa ~2 rAF + IPC
    * e parece “lag” ao abrir. O prep mantém-se só quando minimizado ou HWND oculto (bandeja / flash DWM).
    */
+  if (source === "file") {
+    sendOpenMenuAndReveal(false);
+    return;
+  }
+
   if (!wasMinimized && visibleOk) {
     setImmediate(sendOpenMenuAndReveal);
     return;
@@ -2915,6 +2903,7 @@ app.whenReady().then(async () => {
     mouseTriggerMode: "hold",
     mouseTriggerButton: "middle",
     openAtLogin: true,
+    screenshot: { ...DEFAULT_SCREENSHOT },
   };
 
   const syncLoginItemSettings = (openAtLogin) => {
@@ -2978,6 +2967,13 @@ app.whenReady().then(async () => {
       currentSettings.uiLanguage = ui.uiLanguage;
     }
     if (typeof ui.language === "string") currentSettings.language = ui.language;
+    if (ui.screenshot && typeof ui.screenshot === "object") {
+      currentSettings.screenshot = {
+        ...DEFAULT_SCREENSHOT,
+        ...currentSettings.screenshot,
+        ...ui.screenshot,
+      };
+    }
   };
 
   let rebuildTrayMenu = () => {};
@@ -3827,17 +3823,37 @@ app.whenReady().then(async () => {
     }
   });
 
-  // Configurar Ícone na Bandeja (Tray)
-  const iconPath = isDev
-    ? path.join(__dirname, "../public/icon.png")
-    : path.join(__dirname, "../dist/icon.png");
-  try {
-    const trayIcon = nativeImage.createFromPath(iconPath);
-    if (trayIcon.isEmpty()) {
-      console.warn("WARNING: Tray icon is empty. Path:", iconPath);
+  // Bandeja: glifo no tamanho físico do slot (16 px lógicos × escala), sem esmagar um PNG grande para 16.
+  const trayIconDir = path.join(__dirname, isDev ? "../public" : "../dist");
+  const trayPixelSize = () => {
+    let factor = 1;
+    try { factor = screen.getPrimaryDisplay().scaleFactor || 1; } catch { /* ignore */ }
+    const target = Math.round(16 * factor);
+    return [16, 20, 24, 32].reduce(
+      (best, size) => (Math.abs(size - target) < Math.abs(best - target) ? size : best),
+      16,
+    );
+  };
+  const loadTrayImage = () => {
+    const size = trayPixelSize();
+    const names = [`tray-icon-${size}.png`, "tray-icon.png", "icon.png"];
+    for (const name of names) {
+      const candidate = path.join(trayIconDir, name);
+      if (!fs.existsSync(candidate)) continue;
+      const image = nativeImage.createFromPath(candidate);
+      if (image.isEmpty()) continue;
+      const current = image.getSize();
+      if (current.width === size && current.height === size) return image;
+      return image.resize({ width: size, height: size, quality: "best" });
     }
-    const resizedIcon = trayIcon.resize({ width: 16, height: 16 });
-    tray = new Tray(resizedIcon);
+    return nativeImage.createEmpty();
+  };
+  try {
+    const trayIcon = loadTrayImage();
+    if (trayIcon.isEmpty()) {
+      console.warn("WARNING: Tray icon is empty. Dir:", trayIconDir);
+    }
+    tray = new Tray(trayIcon);
     rebuildTrayMenu = () => {
       if (!tray || tray.isDestroyed()) return;
       const pt = trayMenuLocale() === "pt";
@@ -3859,6 +3875,15 @@ app.whenReady().then(async () => {
     };
     rebuildTrayMenu();
     tray.setToolTip("VOR");
+    screen.on("display-metrics-changed", () => {
+      try {
+        if (!tray || tray.isDestroyed()) return;
+        const next = loadTrayImage();
+        if (!next.isEmpty()) tray.setImage(next);
+      } catch (e) {
+        diagLog(`[Tray] DPI: ${e.message}`);
+      }
+    });
     try {
       const shiftWheels = require("./shift-wheels.cjs");
       const FILE_SOURCES = new Set([
@@ -3870,6 +3895,8 @@ app.whenReady().then(async () => {
       let fileDragMode = null;
       let fileDragPath = "";
       let fileSourceOk = false;
+      let fileButtonDown = false;
+      let fileMods = { shift: false, ctrl: false, alt: false };
       let fileSourceToken = 0;
       let fileCursorTimer = null;
       const stopFileCursor = () => {
@@ -3890,9 +3917,13 @@ app.whenReady().then(async () => {
           } catch (e) { /* ignore */ }
         }, 16);
       };
+      const fileSourceScript = path.join(__dirname, "file-source.ps1").replace(
+        `${path.sep}app.asar${path.sep}`,
+        `${path.sep}app.asar.unpacked${path.sep}`,
+      );
       const fileSourceHelper = spawn(
         "powershell",
-        ["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File", path.join(__dirname, "file-source.ps1")],
+        ["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File", fileSourceScript],
         { stdio: ["pipe", "pipe", "ignore"] },
       );
       let fileSourceBuf = "";
@@ -3915,26 +3946,106 @@ app.whenReady().then(async () => {
           resolve("");
         }
       });
+      const fileDropScript = path.join(__dirname, "file-drop.ps1").replace(
+        `${path.sep}app.asar${path.sep}`,
+        `${path.sep}app.asar.unpacked${path.sep}`,
+      );
+      const fileDropHelper = spawn(
+        "powershell",
+        ["-NoProfile", "-STA", "-ExecutionPolicy", "Bypass", "-File", fileDropScript],
+        { stdio: ["pipe", "pipe", "pipe"] },
+      );
+      let fileDropBuf = "";
+      let fileCatcherHideTimer = null;
+      fileDropHelper.stderr.on("data", (chunk) => {
+        const text = chunk.toString("utf8").trim();
+        if (text) diagLog(`[FileDrop] ${text}`);
+      });
+      fileDropHelper.stdout.on("data", (chunk) => {
+        fileDropBuf += chunk.toString("utf8");
+        const lines = fileDropBuf.split(/\r?\n/);
+        fileDropBuf = lines.pop() || "";
+        for (const raw of lines) {
+          const line = raw.trim();
+          if (line === "drop") {
+            if (fileCatcherHideTimer) {
+              clearTimeout(fileCatcherHideTimer);
+              fileCatcherHideTimer = null;
+            }
+            try { fileDropHelper.stdin.write("hide\n"); } catch { /* ignore */ }
+            continue;
+          }
+          if (!line.startsWith("path ")) continue;
+          const dragged = line.slice(5).trim();
+          if (!dragged || dragged === fileDragPath || !fileDragOpen || !fileDragMode) continue;
+          const point = screen.getCursorScreenPoint();
+          revealFileWheel(point.x, point.y, fileDragMode, dragged);
+        }
+      });
+      placeFileCatcher = (dipX, dipY) => {
+        let phys = { x: dipX, y: dipY };
+        try {
+          if (typeof screen.dipToScreenPoint === "function") {
+            phys = screen.dipToScreenPoint({ x: dipX, y: dipY });
+          }
+        } catch { /* coordenada já utilizável */ }
+        const scale = screen.getDisplayNearestPoint({ x: dipX, y: dipY }).scaleFactor || 1;
+        const size = Math.max(240, Math.round(320 * scale));
+        const x = Math.round(phys.x - size / 2);
+        const y = Math.round(phys.y - size / 2);
+        try {
+          fileDropHelper.stdin.write(`show ${x} ${y} ${size} ${size}\n`);
+        } catch { /* helper fechado */ }
+      };
+      hideFileCatcher = () => {
+        if (fileCatcherHideTimer) clearTimeout(fileCatcherHideTimer);
+        fileCatcherHideTimer = setTimeout(() => {
+          fileCatcherHideTimer = null;
+          try { fileDropHelper.stdin.write("hide\n"); } catch { /* ignore */ }
+        }, 450);
+      };
       const fileWheelMode = (ev) => {
         const keys = currentSettings.fileWheelKeys || {
           convert: "shift",
           tools: "ctrl",
           actions: "alt",
         };
-        const down = { shift: !!ev.shiftKey || !!ev.shift, ctrl: !!ev.ctrlKey || !!ev.ctrl, alt: !!ev.altKey || !!ev.alt };
+        const down = {
+          shift: !!(ev && (ev.shiftKey || ev.shift)) || !!fileMods.shift,
+          ctrl: !!(ev && (ev.ctrlKey || ev.ctrl)) || !!fileMods.ctrl,
+          alt: !!(ev && (ev.altKey || ev.alt)) || !!fileMods.alt,
+        };
         if (down[keys.convert]) return "convert";
         if (down[keys.tools]) return "tools";
         if (down[keys.actions]) return "actions";
         return null;
       };
-      const cancelFileWheel = () => {
+      const modifierFromEvent = (ev) => {
+        const code = ev && (ev.rawcode || ev.keycode);
+        const named = {
+          16: "shift", 160: "shift", 161: "shift", 42: "shift", 54: "shift",
+          17: "ctrl", 162: "ctrl", 163: "ctrl", 29: "ctrl", 3613: "ctrl",
+          18: "alt", 164: "alt", 165: "alt", 56: "alt", 3640: "alt",
+        };
+        return named[code] || named[ev && ev.keycode] || null;
+      };
+      const releaseFileOverlay = (confirmSelection) => {
         fileDragOpen = false;
         fileGestureActive = false;
         fileDragMode = null;
+        fileDragOrigin = null;
         stopFileCursor();
         if (!mainWindow || mainWindow.isDestroyed()) return;
-        mainWindow.webContents.send("open-menu", { closeOnly: true, source: "file", x: 0, y: 0, fileWheel: null });
+        try {
+          mainWindow.setAlwaysOnTop(false);
+          mainWindow.setIgnoreMouseEvents(true, { forward: true });
+        } catch { /* ignore */ }
+        if (!confirmSelection) {
+          mainWindow.webContents.send("open-menu", { closeOnly: true, source: "file", x: 0, y: 0, fileWheel: null });
+        }
+        hideFileCatcher();
       };
+      const cancelFileWheel = () => releaseFileOverlay();
       const revealFileWheel = (x, y, mode, filePath) => {
         if (!mainWindow || mainWindow.isDestroyed()) return;
         const switching = fileDragOpen && mode !== fileDragMode;
@@ -3944,18 +4055,43 @@ app.whenReady().then(async () => {
         const built = fileDragPath
           ? shiftWheels.build(fileDragPath, mode)
           : shiftWheels.pending(mode);
-        mainWindow.setIgnoreMouseEvents(false);
-        mainWindow.setAlwaysOnTop(true, "screen-saver", 1);
-        if (!mainWindow.isVisible()) mainWindow.showInactive();
         mainWindow.webContents.send("file-wheel", { ...built, x, y });
         if (!switching && !filePath) {
           fileGestureActive = true;
           startFileCursor();
+          try { if (mainWindow.isVisible()) mainWindow.hide(); } catch { /* ignore */ }
           showFileWheelAtCursor(built, x, y);
         }
+        if (!filePath) placeFileCatcher(x, y);
       };
-      ipcMain.handle("run-file-slice", (_event, id, filePath) => {
+      const noteFileMods = (ev) => {
+        fileMods = {
+          shift: fileMods.shift || !!(ev.shiftKey || ev.shift),
+          ctrl: fileMods.ctrl || !!(ev.ctrlKey || ev.ctrl),
+          alt: fileMods.alt || !!(ev.altKey || ev.alt),
+        };
+      };
+      setImmediate(() => {
+        try { shiftWheels.tools(); } catch { /* a primeira consulta não pode atrasar o gesto */ }
+      });
+      const tryOpenHeldFileWheel = () => {
+        if (!fileButtonDown || !fileDragOrigin || fileDragOpen || !fileSourceOk) return;
+        const point = screen.getCursorScreenPoint();
+        const dx = point.x - fileDragOrigin.x;
+        const dy = point.y - fileDragOrigin.y;
+        if (dx * dx + dy * dy <= 144) return;
+        const mode = fileWheelMode(fileMods);
+        if (!mode) return;
+        revealFileWheel(point.x, point.y, mode, "");
+      };
+      ipcMain.handle("run-file-slice", async (_event, id, filePath) => {
         try {
+          await shiftWheels.prepare(id, filePath, (status) => {
+            try {
+              const { Notification } = require("electron");
+              if (Notification.isSupported()) new Notification({ title: "VOR", body: status }).show();
+            } catch { /* ignore */ }
+          });
           const out = shiftWheels.run(id, filePath);
           if (id === "act:copyPath") {
             const { clipboard } = require("electron");
@@ -3976,6 +4112,8 @@ app.whenReady().then(async () => {
       const { uIOhook } = require("uiohook-napi");
       uIOhook.on("mousedown", (e) => {
         if (e.button !== 1) return;
+        noteFileMods(e);
+        fileButtonDown = true;
         fileDragOrigin = { x: e.x, y: e.y };
         fileDragOpen = false;
         fileDragMode = null;
@@ -3983,11 +4121,14 @@ app.whenReady().then(async () => {
         fileSourceOk = false;
         const token = ++fileSourceToken;
         queryFileSource(e.x, e.y).then((name) => {
-          if (token !== fileSourceToken) return;
+          if (token !== fileSourceToken || !fileButtonDown) return;
           fileSourceOk = FILE_SOURCES.has(name);
+          tryOpenHeldFileWheel();
         });
       });
       uIOhook.on("mousemove", (e) => {
+        if (!fileButtonDown) return;
+        noteFileMods(e);
         if (!fileDragOrigin || fileDragOpen || !fileSourceOk) return;
         const dx = e.x - fileDragOrigin.x;
         const dy = e.y - fileDragOrigin.y;
@@ -3998,6 +4139,9 @@ app.whenReady().then(async () => {
         revealFileWheel(point.x, point.y, mode, "");
       });
       uIOhook.on("keydown", (e) => {
+        const slot = modifierFromEvent(e);
+        if (slot) fileMods[slot] = true;
+        else noteFileMods(e);
         if (e.keycode === 1) {
           if (fileDragOpen) cancelFileWheel();
           return;
@@ -4015,22 +4159,28 @@ app.whenReady().then(async () => {
         }
         if (mode !== fileDragMode) revealFileWheel(point.x, point.y, mode, fileDragPath);
       });
+      uIOhook.on("keyup", (e) => {
+        const slot = modifierFromEvent(e);
+        if (slot) fileMods[slot] = false;
+        else noteFileMods(e);
+      });
       uIOhook.on("mouseup", (e) => {
         if (e.button !== 1) return;
-        fileDragOrigin = null;
+        fileButtonDown = false;
         fileSourceOk = false;
-        stopFileCursor();
-        if (!fileDragOpen || !mainWindow || mainWindow.isDestroyed()) {
-          fileDragOpen = false;
-          fileGestureActive = false;
-          return;
-        }
-        fileDragOpen = false;
-        fileGestureActive = false;
-        mainWindow.webContents.send("mmb-release");
+        if (fileDragOpen) {
+          try {
+            const point = screen.getCursorScreenPoint();
+            mainWindow?.webContents.send("mmb-cursor", { x: point.x, y: point.y });
+            mainWindow?.webContents.send("mmb-release");
+          } catch { /* ignore */ }
+          releaseFileOverlay(true);
+        } else fileDragOrigin = null;
       });
       uIOhook.start();
-    } catch (e) { diagLog(`[FileWheels] ${e.message}`); }
+    } catch (e) {
+      diagLog(`[FileWheels] ${e.message}`);
+    }
     tray.setContextMenu(contextMenu);
 
     // Feedback de início
@@ -4073,8 +4223,44 @@ app.whenReady().then(async () => {
       }
     };
     for (const workspace of currentSettings.workspaces || []) visit(workspace?.apps);
+    const shot = currentSettings.screenshot || {};
+    entries.push(`shot:${shot.enabled}:${shot.shortcutRegion}:${shot.shortcutFull}:${shot.shortcutWindow}`);
     return entries.join("\u0001");
   };
+
+  const shotApi = installScreenshot({
+    ipcMain,
+    app,
+    isDev,
+    preloadPath: path.join(__dirname, "electron-preload.js"),
+    captureHtmlPath: path.join(__dirname, "../dist/capture.html"),
+    getMainWindow: () => mainWindow,
+    getScreenshotSettings: () => currentSettings.screenshot,
+    getActiveWin: getActiveWinModule,
+    diagLog,
+    language: () => {
+      if (currentSettings.uiLanguage === "pt" || currentSettings.language === "pt") return "pt";
+      if (currentSettings.uiLanguage === "en" || currentSettings.language === "en") return "en";
+      return String(app.getLocale() || "").toLowerCase().startsWith("pt") ? "pt" : "en";
+    },
+    rememberRegion: (region) => {
+      currentSettings.screenshot = {
+        ...DEFAULT_SCREENSHOT,
+        ...currentSettings.screenshot,
+        lastRegion: region,
+      };
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("screenshot-remember", region);
+      }
+    },
+    showFileWheelAtCursor,
+    buildFileWheel: (file) => require("./shift-wheels.cjs").build(file, "tools"),
+    setGrabbing: (value) => { screenshotGrabbing = !!value; },
+    replaceScreenshotSettings: (next) => {
+      currentSettings.screenshot = { ...DEFAULT_SCREENSHOT, ...next };
+    },
+  });
+  startScreenshot = shotApi.capture;
 
   const registerGlobalShortcut = (force = false) => {
     const registrationSignature = shortcutRegistrationSignature();
@@ -4197,6 +4383,7 @@ app.whenReady().then(async () => {
     if (workspaceShortcutsMenuOpen && workspaceShortcutsUseNumeric) {
       registerWorkspaceShortcuts();
     }
+    shotApi.registerShortcuts(globalShortcut);
   };
 
   const unregisterWorkspaceShortcuts = () => {
@@ -4396,10 +4583,12 @@ app.whenReady().then(async () => {
     console.log("[Shortcuts] Pausing global shortcuts for recording...");
     lastShortcutRegistrationSignature = null;
     globalShortcut.unregisterAll();
+    shotApi.setShortcutsPaused(true);
   });
 
   ipcMain.on("resume-global-shortcut", () => {
     console.log("[Shortcuts] Resuming global shortcuts...");
+    shotApi.setShortcutsPaused(false);
     registerGlobalShortcut();
     // (though recording is usually done in settings where menu is not 'open-radial' but 'open-settings')
   });
@@ -5105,6 +5294,7 @@ app.whenReady().then(async () => {
               mmbHoldOpenTimer = null;
             }
             mmbFirstDownAt = 0;
+            if (fileGestureActive) continue;
             (async () => {
               try {
                 await ensureMainWindow();
@@ -5533,6 +5723,11 @@ ipcMain.on("execute-command", async (event, command, commandType, options = {}) 
   }
 
   const trimmedCommand = command.trim();
+
+  if (trimmedCommand === "vor:screenshot") {
+    void startScreenshot("region");
+    return;
+  }
 
   // CRITICAL: Resolve GUIDs to real paths FIRST, before any detection logic
   let resolvedCommand = resolveShellPath(trimmedCommand);
@@ -6341,7 +6536,20 @@ ipcMain.on("request-keyboard-focus", () => {
   settle.unref?.();
 });
 
+ipcMain.on("show-inactive", () => {
+  if (!mainWindow || mainWindow.isDestroyed()) return;
+  windowBuriedPassive = false;
+  try { mainWindow.webContents.setBackgroundThrottling(false); } catch { /* ignore */ }
+  mainWindow.setIgnoreMouseEvents(false);
+  mainWindow.setOpacity(1);
+  mainWindow.showInactive();
+  if (process.platform === "win32") {
+    mainWindow.setAlwaysOnTop(true, "screen-saver", 1);
+  }
+});
+
 ipcMain.on("show-window", () => {
+  if (screenshotGrabbing) return;
   if (!mainWindow || mainWindow.isDestroyed()) return;
 
   windowBuriedPassive = false;
@@ -6541,11 +6749,13 @@ ipcMain.handle("get-startup-apps", async () => {
 
 // IPC: Toggle Window Size
 ipcMain.on("set-window-size", (event, mode, anchorScreenPoint) => {
+  if (screenshotGrabbing) return;
   updateWindowSize(mode, anchorScreenPoint);
 });
 
 /** Same as set-window-size but invoke() so the renderer can await before painting (avoids one frame at windowed bounds). */
 ipcMain.handle("apply-window-size", (event, mode, anchorScreenPoint) => {
+  if (screenshotGrabbing) return false;
   updateWindowSize(mode, anchorScreenPoint);
   return true;
 });

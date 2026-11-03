@@ -4,6 +4,7 @@ import { getIcon } from '../iconMap';
 import { CornerUpLeft } from 'lucide-react';
 import { SmartIcon } from './SmartIcon';
 import { RovylLogo } from './RovylLogo';
+import { FilePetalWheel } from './FilePetalWheel';
 import { getTranslation } from '../translations';
 import { RadialHud } from './RadialHud';
 import {
@@ -616,15 +617,16 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
   // in picker mode the root level is a synthetic workspace list, not `apps`, so
   // a passive effect showed one wheel and replaced it on the next frame.
   useLayoutEffect(() => {
-    if (!isOpen || folderStack.length > 0) return;
+    if (!isOpen || fileMode || folderStack.length > 0) return;
     const next = getRootRadialApps(config, apps);
     setCurrentLevelApps((prev) => (sameRadialLevel(prev, next) ? prev : next));
-  }, [isOpen, folderStack.length, apps, config.workspaceSwitchMode, config.workspaces, config]);
+  }, [isOpen, fileMode, folderStack.length, apps, config.workspaceSwitchMode, config.workspaces, config]);
 
   /**
    * Dispara a saída das fatias: montam colapsadas no hub e o frame seguinte assume o estado final.
    * Corre também a cada troca de nível (pasta / workspace), por isso o mesmo movimento serve os dois.
    */
+  const bloomKey = fileMode ? "file" : currentLevelApps;
   useLayoutEffect(() => {
     if (!isOpen) {
       setBloom(false);
@@ -634,14 +636,14 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
     if (!animationReady) return;
     const raf = requestAnimationFrame(() => setBloom(true));
     return () => cancelAnimationFrame(raf);
-  }, [isOpen, currentLevelApps, animationReady]);
+  }, [isOpen, bloomKey, animationReady]);
 
   /** Lista vazia: manter foco visual no centro (volta / centro) — antes o rato não atualizava o hub. */
   useEffect(() => {
-    if (!isOpen || currentLevelApps.length > 0) return;
+    if (!isOpen || fileMode || currentLevelApps.length > 0) return;
     setActiveIndex(null);
     setIsCenterActive(true);
-  }, [isOpen, currentLevelApps.length]);
+  }, [isOpen, fileMode, currentLevelApps.length]);
 
   const t = (key: string) => getTranslation(config, key);
 
@@ -676,18 +678,18 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
   useLayoutEffect(() => {
     if (!isOpen || !fileMode) return;
     openingTimeRef.current = Date.now();
-    setHasMoved(false);
-    setIsCenterActive(false);
+    setHasMoved(true);
     setFolderStack([]);
-    setCurrentLevelApps(apps);
-    setActiveIndex(null);
-    setBloom(false);
-
     window.focus();
     document.body.focus();
-    if (menuRef.current) {
-      menuRef.current.focus();
-    }
+    if (menuRef.current) menuRef.current.focus();
+  }, [isOpen, fileMode]);
+
+  useLayoutEffect(() => {
+    if (!isOpen || !fileMode) return;
+    setCurrentLevelApps(apps);
+    setActiveIndex(null);
+    setIsCenterActive(false);
   }, [isOpen, fileMode, apps]);
 
   // Stable Interaction Logic (Performance Optimization)
@@ -1559,6 +1561,7 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
     >
         <>
           {/* Escurecimento único (sem máscara radial — evita halo / “luz” à volta do radial) */}
+          {!fileMode && (
           <div
             className="zn-radial-scrim fixed inset-0 z-[2]"
             style={{
@@ -1569,13 +1572,16 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
               willChange: 'opacity',
             }}
           />
+          )}
 
+          {!fileMode && (
           <RadialHud
             isOpen={isOpen && bloom}
             config={config}
             batteryLevel={batteryLevel}
             weather={weather}
           />
+          )}
 
           {/* Menu Container */}
           <div
@@ -1615,7 +1621,18 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
               />
             )}
 
+            {fileMode && (
+              <FilePetalWheel
+                items={currentLevelApps}
+                activeIndex={activeIndex}
+                centerActive={isCenterActive}
+                formatLabel={hubCaption}
+                bloom={isOpen && bloom}
+              />
+            )}
+
             {/* Central Hub */}
+            {!fileMode && (
             <div
               className={`
                 zn-radial-hub absolute top-0 left-0
@@ -1754,8 +1771,10 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
                 </div>
               )}
             </div>
+            )}
 
             {/* Context pill: where you are in the wheel + the gesture that goes back. */}
+            {!fileMode && (
             <div
               className="zn-radial-pill absolute left-0 top-0 pointer-events-none z-30"
               style={{
@@ -1794,9 +1813,10 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
                 </span>
               </div>
             </div>
+            )}
 
             {/* App Icons — a troca entre níveis é o próprio bloom (ver efeito `bloom`). */}
-            {currentLevelApps.map((app, index) => {
+            {!fileMode && currentLevelApps.map((app, index) => {
                 const isActive = index === activeIndex;
                 let angularDistance: number | null = null;
                 if (activeIndex !== null) {

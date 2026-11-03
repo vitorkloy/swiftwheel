@@ -8,27 +8,14 @@ on:
 permissions:
   contents: write
 
+# A release multiplataforma (Windows + macOS + Linux) fica no workflow Build,
+# disparado pela mesma tag. Este ficheiro existe só para compatibilidade com
+# quem ainda dispara "Release" à mão; o Build é a fonte de verdade.
 jobs:
-  windows:
-    name: windows installer
-    runs-on: windows-latest
-    env:
-      CSC_IDENTITY_AUTO_DISCOVERY: false
+  note:
+    runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-          cache: npm
-
-      - run: npm ci
-      - run: npm run build
-      - run: npx electron-builder --win nsis --publish never
-
-      - name: Publicar release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.ref_name }}
-          name: VOR ${{ github.ref_name }}
-          files: build-out/*.exe
+      - name: A release é o job Build
+        run: |
+          echo "A tag ${{ github.ref_name }} dispara o workflow Build, que publica Windows, macOS e Linux."
+          echo "Não é preciso um segundo job de release aqui."

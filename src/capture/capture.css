@@ -1,0 +1,266 @@
+:root {
+  --zn-bg: #151515;
+  --zn-line: rgba(255, 255, 255, 0.13);
+  --zn-r-panel: 10px;
+  --zn-r-control: 8px;
+  --zn-r-chip: 6px;
+  --zn-ctl-sm: 26px;
+  --zn-scrim: rgba(6, 6, 8, 0.66);
+  --zn-text: rgba(255, 255, 255, 0.93);
+}
+
+html, body, #root {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: #111111;
+  color: var(--zn-text);
+  font-family: "Segoe UI", system-ui, sans-serif;
+  user-select: none;
+  cursor: crosshair;
+}
+
+.cap-stage {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  background: #111111;
+  opacity: 0;
+}
+
+.cap-stage.is-ready {
+  opacity: 1;
+  transition: opacity 160ms ease-out;
+}
+
+.cap-stage img,
+.cap-stage canvas {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+}
+
+.cap-veil {
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  pointer-events: none;
+  z-index: 2;
+  transition: opacity 280ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+.cap-veil.is-in {
+  opacity: 1;
+}
+
+.cap-dim {
+  position: absolute;
+  background: var(--zn-scrim);
+  pointer-events: none;
+}
+
+.cap-sel {
+  position: absolute;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.92);
+  pointer-events: none;
+}
+
+.cap-size {
+  position: absolute;
+  left: 0;
+  top: -22px;
+  padding: 2px 6px;
+  border-radius: var(--zn-r-chip);
+  background: var(--zn-bg);
+  color: var(--zn-text);
+  font-size: 11px;
+  letter-spacing: 0.02em;
+  pointer-events: none;
+}
+
+.cap-size.is-inside {
+  top: 4px;
+  left: 4px;
+}
+
+.cap-handle {
+  position: absolute;
+  width: 8px;
+  height: 8px;
+  margin: -4px;
+  background: #fff;
+  border: 1px solid #111;
+  border-radius: 1px;
+  pointer-events: none;
+  z-index: 3;
+}
+
+.cap-bar, .cap-text {
+  position: absolute;
+  z-index: 4;
+  pointer-events: auto;
+}
+
+.cap-bar {
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  gap: 2px;
+  width: max-content;
+  height: 40px;
+  padding: 0 6px;
+  border: 1px solid var(--zn-line);
+  border-radius: var(--zn-r-panel);
+  background: var(--zn-bg);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.cap-bar button {
+  display: grid;
+  place-items: center;
+  width: var(--zn-ctl-sm);
+  height: var(--zn-ctl-sm);
+  min-height: 0;
+  padding: 0;
+  border: 0;
+  border-radius: var(--zn-r-control);
+  background: transparent;
+  color: var(--zn-text);
+  cursor: pointer;
+}
+
+.cap-bar button.is-on,
+.cap-bar button:hover {
+  background: rgba(255, 255, 255, 0.1);
+}
+
+.cap-bar button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.cap-bar button:disabled:hover {
+  background: transparent;
+}
+
+.cap-swatch {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.28);
+}
+
+.cap-bar button.cap-swatch {
+  width: 18px;
+  height: 18px;
+}
+
+.cap-bar button.cap-swatch.is-on {
+  box-shadow: 0 0 0 1px #fff;
+}
+
+.cap-color {
+  position: relative;
+  display: grid;
+  place-items: center;
+  width: var(--zn-ctl-sm);
+  height: var(--zn-ctl-sm);
+}
+
+.cap-color-pop {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--zn-line);
+  border-radius: var(--zn-r-panel);
+  background: var(--zn-bg);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+}
+
+.cap-color-pop.is-below {
+  bottom: auto;
+  top: calc(100% + 8px);
+}
+
+.cap-shape {
+  position: relative;
+  display: grid;
+  place-items: center;
+}
+
+.cap-shape-pop {
+  position: absolute;
+  left: 50%;
+  bottom: calc(100% + 8px);
+  transform: translateX(-50%);
+  display: grid;
+  grid-template-columns: repeat(2, var(--zn-ctl-sm));
+  gap: 2px;
+  padding: 4px;
+  border: 1px solid var(--zn-line);
+  border-radius: var(--zn-r-panel);
+  background: var(--zn-bg);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45);
+  z-index: 5;
+}
+
+.cap-shape-pop.is-below {
+  bottom: auto;
+  top: calc(100% + 8px);
+}
+
+.cap-color-pop input[type='color'] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  opacity: 0;
+  pointer-events: none;
+}
+
+.cap-rule {
+  width: 1px;
+  height: 16px;
+  margin: 0 4px;
+  background: var(--zn-line);
+}
+
+.cap-widths {
+  display: flex;
+  gap: 2px;
+}
+
+.cap-widths button i {
+  display: block;
+  border-radius: 50%;
+  background: currentColor;
+}
+
+.cap-live {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+.cap-text {
+  min-width: 140px;
+  padding: 4px 6px;
+  border: 0;
+  border-radius: var(--zn-r-control);
+  background: var(--zn-bg);
+  color: var(--zn-text);
+  font: inherit;
+  font-size: 16px;
+  outline: 1px solid rgba(255, 255, 255, 0.4);
+  user-select: text;
+  cursor: text;
+}

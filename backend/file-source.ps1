@@ -31,12 +31,13 @@ public class VorFileSource {
   }
 }
 "@
-[Console]::Out.AutoFlush = $true
+$OutputEncoding = [Console]::OutputEncoding = [System.Text.Encoding]::UTF8
 while (($line = [Console]::In.ReadLine()) -ne $null) {
   $parts = $line.Trim().Split(' ')
-  if ($parts.Length -lt 2) { Write-Output ""; continue }
+  if ($parts.Length -lt 2) { Write-Output ""; [Console]::Out.Flush(); continue }
   $x = 0; $y = 0
   [void][int]::TryParse($parts[0], [ref]$x)
   [void][int]::TryParse($parts[1], [ref]$y)
   try { Write-Output ([VorFileSource]::NameAt($x, $y)) } catch { Write-Output "" }
+  [Console]::Out.Flush()
 }

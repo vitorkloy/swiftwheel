@@ -4,10 +4,12 @@ import { RadialMenu } from './components/RadialMenu';
 import { Toast } from './components/Toast';
 import { Coordinates, AppItem, UIConfig, UserProfile, Workspace } from './types';
 import {
+  DEFAULT_SCREENSHOT,
   DEFAULT_UI_CONFIG,
   MINIMAL_MAIN_WORKSPACE_APPS,
   stripInternalWidgetApps,
   stripInternalWidgetsFromConfig,
+  withScreenshotWheel,
   workspaceContainsBundledDemoApp,
 } from './defaults';
 import { Minus, X, Maximize, Square, AlertTriangle, ArrowLeft, ArrowRight, PanelLeftClose } from 'lucide-react';
@@ -456,6 +458,12 @@ export default function App() {
   const [config, setConfig] = useState<UIConfig>(DEFAULT_UI_CONFIG);
   const configRef = useRef(config);
   configRef.current = config;
+  useEffect(() => window.electron?.onScreenshotRemember?.((region) => {
+    setConfig((current) => ({
+      ...current,
+      screenshot: { ...DEFAULT_SCREENSHOT, ...current.screenshot, lastRegion: region },
+    }));
+  }), []);
   const targetWorkspaceIndexRef = useRef(config.activeWorkspaceIndex);
   targetWorkspaceIndexRef.current = config.activeWorkspaceIndex;
   const switchDebounceTimer = useRef<NodeJS.Timeout | null>(null);
@@ -619,6 +627,12 @@ export default function App() {
     localStorage.setItem('zenith_icon_normalization_version', ICON_NORMALIZATION_VERSION);
     // console.log('[Icons] Cache-busted: re-fetching icons with new normalization.');
   }, [isLoaded]);
+
+  useEffect(() => {
+    if (!executionError) return;
+    const timer = window.setTimeout(() => setExecutionError(null), 4000);
+    return () => window.clearTimeout(timer);
+  }, [executionError]);
 
   // Listen for execution errors from backend
   useEffect(() => {
@@ -1265,7 +1279,7 @@ export default function App() {
       const uiLanguage = nextConfig.uiLanguage ?? (nextConfig.language === 'pt' ? 'pt' : 'system');
       const systemIsPortuguese = (navigator.language || 'en').toLowerCase().startsWith('pt');
       const language = uiLanguage === 'pt' ? 'pt' : uiLanguage === 'en' ? 'en' : (systemIsPortuguese ? 'pt' : 'en');
-      nextConfig = { ...nextConfig, uiLanguage, language };
+      nextConfig = withScreenshotWheel({ ...nextConfig, uiLanguage, language });
 
       hydratedFromPersistenceRef.current =
         !!(finalData || loadedFromLocalStorageMigration);
@@ -1688,6 +1702,7 @@ export default function App() {
     coordSpace: 'client' | 'screen' = 'client',
     opts?: {
       preSizedByMain?: boolean;
+      showInactive?: boolean;
       keepPanel?: boolean;
       panelRect?: ScreenRect | null;
       clientPosition?: Coordinates | null;
@@ -1856,7 +1871,9 @@ export default function App() {
        * só recompõe o HWND. Pela mesma razão não há `invalidatePaint` ao abrir — no Windows
        * costuma causar um flash (textura antiga) logo a seguir ao radial aparecer.
        */
-      if (!panelWindowStays && typeof opts?.paintToken !== 'number') {
+      if (opts?.showInactive) {
+        window.electron.showInactive?.();
+      } else if (!panelWindowStays && typeof opts?.paintToken !== 'number') {
         window.electron.showWindow();
       }
       lastVisibility.current = true;
@@ -2114,6 +2131,7 @@ export default function App() {
       if (data.source !== 'file' && closeMenuFromTrigger()) return;
       void openMenuRef.current(data.x, data.y, data.source === 'file' ? 'mmb' : (data.source ?? 'shortcut'), 'screen', {
         preSizedByMain: data.preSizedByMain === true,
+        showInactive: data.source === 'file',
         keepPanel: data.keepPanel === true,
         panelRect: data.panelRect ?? null,
         clientPosition: data.clientPosition ?? null,
@@ -2416,6 +2434,13 @@ export default function App() {
 
     /** Widgets internos (Notas / Alarme / Cronómetro / Pomodoro) foram removidos — ignorar restos de configs antigos. */
     if (command.startsWith('internal:')) {
+      return;
+    }
+
+    if (command === 'vor:screenshot' && isDesktopMode && window.electron) {
+      setIsMenuOpen(false);
+      window.electron.hideWindow();
+      window.electron.executeCommand(command, commandType, options);
       return;
     }
 
@@ -2922,7 +2947,15 @@ export default function App() {
               iconSize: config.fileWheelIconSize ?? 55,
               appSpacing: config.fileWheelSpacing ?? 10,
             } : radialMenuConfig}
-            hubCaption={fileWheel?.format ?? null}
+            hubCaption={
+              fileWheel && fileWheel.items.length === 0
+                ? (fileWheel.mode === 'convert'
+                    ? 'Sem conversões para este formato. Toque Ctrl para ferramentas ou Alt para ações.'
+                    : fileWheel.mode === 'actions'
+                      ? 'Sem ferramentas para este formato. Toque Shift para converter.'
+                      : 'Sem ferramentas para este formato. Toque Shift para converter ou Alt para ações.')
+                : (fileWheel?.format ?? null)
+            }
             fileMode={Boolean(fileWheel)}
             triggerSource={triggerSource}
             updateReady={updateReady}

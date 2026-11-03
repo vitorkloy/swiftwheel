@@ -5,6 +5,7 @@ contextBridge.exposeInMainWorld("electron", {
     ipcRenderer.send("execute-command", command, commandType, options),
   hideWindow: () => ipcRenderer.send("hide-window"),
   showWindow: () => ipcRenderer.send("show-window"),
+  showInactive: () => ipcRenderer.send("show-inactive"),
   /** Superfícies com campo de texto (gate da licença) precisam do HWND em foreground para receber teclas. */
   requestKeyboardFocus: () => ipcRenderer.send("request-keyboard-focus"),
   getAppVersion: () => ipcRenderer.invoke("get-app-version"),
@@ -150,6 +151,24 @@ contextBridge.exposeInMainWorld("electron", {
   quitApp: () => ipcRenderer.send("quit-app"),
   selectFile: () => ipcRenderer.invoke("select-file"),
   selectFolder: () => ipcRenderer.invoke("select-folder"),
+  startScreenshot: (mode) => ipcRenderer.invoke("start-screenshot", mode),
+  onScreenshotSession: (callback) => {
+    const listener = (_event, session) => callback(session);
+    ipcRenderer.on("screenshot-session", listener);
+    return () => ipcRenderer.removeListener("screenshot-session", listener);
+  },
+  getScreenshotSession: () => ipcRenderer.invoke("screenshot-pending"),
+  onScreenshotVisible: (callback) => {
+    const listener = () => callback();
+    ipcRenderer.on("screenshot-visible", listener);
+    return () => ipcRenderer.removeListener("screenshot-visible", listener);
+  },
+  screenshotAction: (payload) => ipcRenderer.invoke("screenshot-action", payload),
+  onScreenshotRemember: (callback) => {
+    const listener = (_event, region) => callback(region);
+    ipcRenderer.on("screenshot-remember", listener);
+    return () => ipcRenderer.removeListener("screenshot-remember", listener);
+  },
   selectImage: () => ipcRenderer.invoke("select-image"),
   removeManagedCustomIcon: (urlOrPath) =>
     ipcRenderer.invoke("remove-managed-custom-icon", urlOrPath),

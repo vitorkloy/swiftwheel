@@ -27,14 +27,14 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: rovyl-windows
+            artifact: vor-windows
             builder_args: --win nsis
             files: |
-              build-out/Rovyl.exe
-              build-out/Rovyl.exe.blockmap
+              build-out/VOR_*_x64-setup.exe
+              build-out/VOR_*_x64-setup.exe.blockmap
               build-out/latest.yml
           - os: macos-latest
-            artifact: rovyl-macos
+            artifact: vor-macos
             builder_args: --mac dmg zip --x64 --arm64
             files: |
               build-out/*.dmg
@@ -42,7 +42,7 @@ jobs:
               build-out/*.blockmap
               build-out/latest-mac.yml
           - os: ubuntu-latest
-            artifact: rovyl-linux
+            artifact: vor-linux
             builder_args: --linux AppImage deb --x64
             files: |
               build-out/*.AppImage
@@ -63,7 +63,9 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libx11-dev libxtst-dev libxt-dev libxinerama-dev libxrandr-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxkbfile-dev
       - run: npm ci
-      - run: npm run test:platform-unix
+      - name: Unix platform tests
+        if: runner.os != 'Windows'
+        run: npm run test:platform-unix
       - name: Build (vite + electron-builder, sem publicar, sem assinatura)
         shell: bash
         run: |
@@ -85,20 +87,23 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: rovyl-*
+          pattern: vor-*
           path: dist
           merge-multiple: true
-      - name: Publish GitHub Release (uma vez por tag, 3 SOs)
+      - name: Publish GitHub Release (Windows, macOS e Linux)
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ inputs.release_tag || github.ref_name }}
         run: |
-          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            echo "Release $TAG já existe — nada a fazer."; exit 0
-          fi
           ls -la dist
-          for f in Rovyl.exe Rovyl.exe.blockmap latest.yml latest-mac.yml latest-linux.yml; do
-            test -f "dist/$f" || { echo "faltando dist/$f"; exit 1; }
-          done
+          test -n "$(find dist -maxdepth 1 -type f | head -n 1)" || { echo "nenhum artefacto em dist/"; exit 1; }
+          if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            echo "Release $TAG já existe — a acrescentar artefactos."
+            gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+            exit 0
+          fi
           gh release create "$TAG" dist/* \
-            --repo "$GITHUB_REPOSITORY" --title "Rovyl $TAG" --generate-notes --verify-tag
+            --repo "$GITHUB_REPOSITORY" \
+            --title "VOR $TAG" \
+            --generate-notes \
+            --verify-tag

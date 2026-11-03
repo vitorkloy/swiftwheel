@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="70 70 372 372" width="372" height="372">
+  <defs>
+    <linearGradient id="tl" gradientUnits="userSpaceOnUse" x1="110" y1="110" x2="190" y2="190">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e2e2e2"/>
+    </linearGradient>
+    <linearGradient id="cur" gradientUnits="userSpaceOnUse" x1="252" y1="252" x2="340" y2="360">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#e8e8e8"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Anel com 8 segmentos nítidos para a bandeja (branco / alto contraste) -->
+  <g stroke-width="14" stroke-linejoin="round">
+    <path d="M197.77 81.46 A184 184 0 0 1 314.23 81.46 L302.71 109.26 A154 154 0 0 0 209.29 109.26 Z" fill="#e0e0e0" stroke="#e0e0e0"/>
+    <path d="M338.25 91.41 A184 184 0 0 1 420.59 173.75 L392.79 185.27 A154 154 0 0 0 326.73 119.21 Z" fill="#d0d0d0" stroke="#d0d0d0"/>
+    <path d="M430.54 197.77 A184 184 0 0 1 430.54 314.23 L402.74 302.71 A154 154 0 0 0 402.74 209.29 Z" fill="#cccccc" stroke="#cccccc"/>
+    <path d="M420.59 338.25 A184 184 0 0 1 338.25 420.59 L326.73 392.79 A154 154 0 0 0 392.79 326.73 Z" fill="#c0c0c0" stroke="#c0c0c0"/>
+    <path d="M314.23 430.54 A184 184 0 0 1 197.77 430.54 L209.29 402.74 A154 154 0 0 0 302.71 402.74 Z" fill="#bebebe" stroke="#bebebe"/>
+    <path d="M173.75 420.59 A184 184 0 0 1 91.41 338.25 L119.21 326.73 A154 154 0 0 0 185.27 392.79 Z" fill="#c8c8c8" stroke="#c8c8c8"/>
+    <path d="M81.46 314.23 A184 184 0 0 1 81.46 197.77 L109.26 209.29 A154 154 0 0 0 109.26 302.71 Z" fill="#dadada" stroke="#dadada"/>
+    <path d="M91.41 173.75 A184 184 0 0 1 173.75 91.41 L185.27 119.21 A154 154 0 0 0 119.21 185.27 Z" fill="url(#tl)" stroke="url(#tl)"/>
+  </g>
+
+  <!-- Cursor com destaque -->
+  <path d="M260 264 L331 331 L289 340 L260 360 Z" fill="url(#cur)" stroke="#ffffff" stroke-width="14" stroke-linejoin="round"/>
+</svg>

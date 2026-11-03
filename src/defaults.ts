@@ -1,4 +1,31 @@
-import { AppItem, UIConfig, Workspace } from "./types";
+import { AppItem, ScreenshotSettings, UIConfig, Workspace } from "./types";
+
+export const DEFAULT_SCREENSHOT: ScreenshotSettings = {
+  enabled: true,
+  shortcutRegion: "PrintScreen",
+  shortcutFull: "Shift+PrintScreen",
+  shortcutWindow: "Alt+PrintScreen",
+  format: "png",
+  quality: 92,
+  copyOnSelect: false,
+  showToasts: true,
+  rememberRegion: false,
+  includeCursor: false,
+  saveDirectory: "",
+  lastRegion: null,
+  wheelSeeded: false,
+};
+
+export const SCREENSHOT_WHEEL_APP: AppItem = {
+  id: "vor-screenshot",
+  type: "app",
+  label: "Captura",
+  iconName: "Camera",
+  iconSource: "lucide",
+  command: "vor:screenshot",
+  commandType: "app",
+  description: "Captura de tela",
+};
 
 export const DEFAULT_APPS: AppItem[] = [
   {
@@ -142,10 +169,9 @@ export function workspaceContainsBundledDemoApp(workspace: Workspace): boolean {
 }
 
 /**
- * Main workspace before Start Menu discovery: vazio — nunca a roda de demonstração completa
- * (evita apps errados no primeiro paint / no disco). Era aqui que viviam os widgets internos.
+ * Main workspace before Start Menu discovery: só a captura, nunca a roda de demonstração.
  */
-export const MINIMAL_MAIN_WORKSPACE_APPS: AppItem[] = [];
+export const MINIMAL_MAIN_WORKSPACE_APPS: AppItem[] = [SCREENSHOT_WHEEL_APP];
 
 // Default Workspaces
 export const DEFAULT_WORKSPACES: Workspace[] = [
@@ -258,7 +284,44 @@ export const DEFAULT_UI_CONFIG: UIConfig = {
   fileWheelSpacing: 10,
   performanceMode: false,
   mainStartMenuDiscoveryDone: false,
+  screenshot: DEFAULT_SCREENSHOT,
 };
+
+function workspaceHasScreenshot(items: AppItem[]): boolean {
+  for (const item of items) {
+    if (item.command === "vor:screenshot") return true;
+    if (item.children?.length && workspaceHasScreenshot(item.children)) return true;
+  }
+  return false;
+}
+
+function sameShortcut(a: string, b: string) {
+  return a.replace(/\s+/g, "").toLowerCase() === b.replace(/\s+/g, "").toLowerCase();
+}
+
+/** Seleção e ecrã inteiro gravados iguais voltam aos três padrões. */
+function repairScreenshotShortcuts(screenshot: ScreenshotSettings): ScreenshotSettings {
+  if (!sameShortcut(screenshot.shortcutRegion, screenshot.shortcutFull)) return screenshot;
+  return {
+    ...screenshot,
+    shortcutRegion: DEFAULT_SCREENSHOT.shortcutRegion,
+    shortcutFull: DEFAULT_SCREENSHOT.shortcutFull,
+    shortcutWindow: DEFAULT_SCREENSHOT.shortcutWindow,
+  };
+}
+
+/** A primeira leitura depois desta versão coloca a captura na roda principal, uma vez. */
+export function withScreenshotWheel(config: UIConfig): UIConfig {
+  const screenshot = repairScreenshotShortcuts({ ...DEFAULT_SCREENSHOT, ...(config.screenshot ?? {}) });
+  const present = (config.workspaces ?? []).some((workspace) => workspaceHasScreenshot(workspace.apps ?? []));
+  if (present || screenshot.wheelSeeded) {
+    return { ...config, screenshot: { ...screenshot, wheelSeeded: true } };
+  }
+  const workspaces = (config.workspaces ?? []).map((workspace, index) =>
+    index === 0 ? { ...workspace, apps: [...(workspace.apps ?? []), SCREENSHOT_WHEEL_APP] } : workspace,
+  );
+  return { ...config, workspaces, screenshot: { ...screenshot, wheelSeeded: true } };
+}
 
 /**
  * Configs antigos guardaram atalhos `internal:*` (Notas / Alarme / Cronómetro / Pomodoro).

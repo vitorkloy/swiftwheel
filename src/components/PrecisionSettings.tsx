@@ -15,6 +15,7 @@ import {
   GripVertical,
   Loader2,
   AlertTriangle,
+  Camera,
   Monitor,
   Mouse,
   Pencil,
@@ -28,7 +29,8 @@ import {
   X,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
-import type { AppItem, UIConfig, Workspace } from '../types';
+import type { AppItem, ScreenshotSettings, UIConfig, Workspace } from '../types';
+import { DEFAULT_SCREENSHOT } from '../defaults';
 import { getIcon } from '../iconMap';
 import { resolveWebsiteIconFields } from '../siteFavicon';
 import { SmartIcon } from './SmartIcon';
@@ -50,11 +52,11 @@ interface PrecisionSettingsProps {
   isPage?: boolean;
 }
 
-type SectionId = 'general' | 'trigger' | 'appearance' | 'spaces' | 'advanced';
+type SectionId = 'general' | 'trigger' | 'appearance' | 'capture' | 'spaces' | 'advanced';
 
 /** O modal fica reservado ao que não cabe numa linha: listas longas, gravação e edição. */
 type Editor =
-  | { kind: 'shortcut' }
+  | { kind: 'shortcut'; target?: 'global' | 'shot-region' | 'shot-full' | 'shot-window' }
   | { kind: 'blocked' }
   | { kind: 'workspace'; index: number }
   | null;
@@ -99,6 +101,7 @@ const SECTIONS: Array<{ id: SectionId; label: string; caption: string; icon: Luc
   { id: 'general', label: 'General', caption: 'Core VOR behavior.', icon: Settings },
   { id: 'trigger', label: 'Activation', caption: 'How and where the wheel appears.', icon: Mouse },
   { id: 'appearance', label: 'Appearance', caption: 'Shape, presence, and theme.', icon: Palette },
+  { id: 'capture', label: 'Screenshots', caption: 'Freeze, mark, and keep a capture.', icon: Camera },
   { id: 'spaces', label: 'Workspaces', caption: 'Contexts and their shortcuts.', icon: SquareStack },
   { id: 'advanced', label: 'Advanced', caption: 'Performance, protection, and data.', icon: Shield },
 ];
@@ -114,10 +117,41 @@ const PT: Record<string, string> = {
   'How and where the wheel appears.': 'Como e onde a roda aparece.',
   Appearance: 'Aparência',
   'Shape, presence, and theme.': 'Forma, presença e tema.',
+  Screenshots: 'Captura de tela',
+  'Freeze, mark, and keep a capture.': 'Congela, marca e guarda uma captura.',
   Workspaces: 'Espaços',
   'Contexts and their shortcuts.': 'Contextos e os seus atalhos.',
   Advanced: 'Avançado',
   'Performance, protection, and data.': 'Desempenho, proteção e dados.',
+  'Selection shortcut': 'Atalho de seleção',
+  'Opens the freeze frame. Default is Print Screen.': 'Abre o ecrã congelado. O padrão é Print Screen.',
+  'Full screen shortcut': 'Atalho de tela cheia',
+  'Copies the whole display immediately.': 'Copia o monitor inteiro na hora.',
+  'Active window shortcut': 'Atalho da janela ativa',
+  'Starts with the focused window already selected.': 'Começa com a janela em foco já selecionada.',
+  'If Windows opens Snipping Tool instead, turn that Print Screen option off or pick another combination.': 'Se o Windows abrir a Ferramenta de Captura, desligue essa opção do Print Screen ou escolha outra combinação.',
+  'File format': 'Formato do ficheiro',
+  'PNG keeps the original. JPEG and WebP are smaller.': 'PNG mantém o original. JPEG e WebP ficam menores.',
+  Quality: 'Qualidade',
+  'Compression for JPEG and WebP.': 'Compressão de JPEG e WebP.',
+  'Copy after selection': 'Copiar depois de selecionar',
+  'Put the selected area on the clipboard as soon as you release the pointer.': 'Põe a área selecionada no clipboard assim que solta o ponteiro.',
+  'Show notifications': 'Mostrar notificações',
+  'A system notification after copying or saving.': 'Uma notificação do sistema depois de copiar ou guardar.',
+  'Remember the last area': 'Lembrar a última área',
+  'Reopen the previous rectangle on the same display.': 'Reabre o retângulo anterior no mesmo monitor.',
+  'Include the pointer': 'Incluir o ponteiro',
+  'Draws the mouse pointer on a selection capture.': 'Desenha o ponteiro do rato numa captura com seleção.',
+  'Save folder': 'Pasta de destino',
+  'Pictures / Screenshots when this stays empty.': 'Imagens / Capturas de Tela enquanto isto estiver vazio.',
+  Choose: 'Escolher',
+  'Capture now': 'Capturar agora',
+  'Freeze this screen and drag a region.': 'Congela este ecrã e arrasta uma região.',
+  Capture: 'Capturar',
+  Shortcuts: 'Atalhos',
+  Format: 'Formato',
+  Behavior: 'Comportamento',
+  'Print Screen can stay with Windows. If the shortcut never reaches VOR, record another combination.': 'O Print Screen pode ficar com o Windows. Se o atalho não chegar ao VOR, grave outra combinação.',
   Startup: 'Arranque',
   'Start with Windows': 'Iniciar com o Windows',
   'VOR is ready as soon as you sign in to Windows.': 'O VOR fica pronto assim que inicia sessão no Windows.',
@@ -485,6 +519,14 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
     window.electron?.setSettings?.({ fileWheelKeys, globalShortcut: config.globalShortcut });
   }, [config.fileWheelKeys, config.globalShortcut, update]);
 
+  const shot: ScreenshotSettings = { ...DEFAULT_SCREENSHOT, ...config.screenshot };
+  const updateShot = useCallback((patch: Partial<ScreenshotSettings>) => {
+    setConfig((current) => ({
+      ...current,
+      screenshot: { ...DEFAULT_SCREENSHOT, ...current.screenshot, ...patch },
+    }));
+  }, [setConfig]);
+
   const sections = useMemo<Record<SectionId, SettingItem[]>>(() => {
     const range = (
       key: string,
@@ -650,6 +692,90 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
         range('backdrop', 'Presence', 'Background dimming', 'How much the rest of the screen recedes.',
           config.backdropOpacity ?? 1, 0, 1, (value) => update('backdropOpacity', value), (value) => `${Math.round(value * 100)}%`, 0.01),
       ],
+      capture: [
+        {
+          key: 'shot-note', group: 'Shortcuts', title: 'Screenshots',
+          description: 'If Windows opens Snipping Tool instead, turn that Print Screen option off or pick another combination.',
+          kind: 'note',
+        },
+        {
+          key: 'shot-region', group: 'Shortcuts', title: 'Selection shortcut',
+          description: 'Opens the freeze frame. Default is Print Screen.',
+          kind: 'open', value: shot.shortcutRegion,
+          onOpen: () => setEditor({ kind: 'shortcut', target: 'shot-region' }),
+        },
+        {
+          key: 'shot-full', group: 'Shortcuts', title: 'Full screen shortcut',
+          description: 'Copies the whole display immediately.',
+          kind: 'open', value: shot.shortcutFull,
+          onOpen: () => setEditor({ kind: 'shortcut', target: 'shot-full' }),
+        },
+        {
+          key: 'shot-window', group: 'Shortcuts', title: 'Active window shortcut',
+          description: 'Starts with the focused window already selected.',
+          kind: 'open', value: shot.shortcutWindow,
+          onOpen: () => setEditor({ kind: 'shortcut', target: 'shot-window' }),
+        },
+        {
+          key: 'shot-format', group: 'Format', title: 'File format',
+          description: 'PNG keeps the original. JPEG and WebP are smaller.',
+          kind: 'segmented', current: shot.format,
+          choices: [
+            { value: 'png', label: 'PNG' },
+            { value: 'jpeg', label: 'JPEG' },
+            { value: 'webp', label: 'WebP' },
+          ],
+          onChange: (value) => updateShot({ format: value as ScreenshotSettings['format'] }),
+        },
+        ...(shot.format === 'png' ? [] : [
+          range('shot-quality', 'Format', 'Quality', 'Compression for JPEG and WebP.',
+            shot.quality, 50, 100, (value) => updateShot({ quality: value }), (value) => `${Math.round(value)}%`),
+        ]),
+        {
+          key: 'shot-copy', group: 'Behavior', title: 'Copy after selection',
+          description: 'Put the selected area on the clipboard as soon as you release the pointer.',
+          kind: 'bool', enabled: shot.copyOnSelect,
+          onToggle: () => updateShot({ copyOnSelect: !shot.copyOnSelect }),
+        },
+        {
+          key: 'shot-toast', group: 'Behavior', title: 'Show notifications',
+          description: 'A system notification after copying or saving.',
+          kind: 'bool', enabled: shot.showToasts,
+          onToggle: () => updateShot({ showToasts: !shot.showToasts }),
+        },
+        {
+          key: 'shot-remember', group: 'Behavior', title: 'Remember the last area',
+          description: 'Reopen the previous rectangle on the same display.',
+          kind: 'bool', enabled: shot.rememberRegion,
+          onToggle: () => updateShot({ rememberRegion: !shot.rememberRegion }),
+        },
+        {
+          key: 'shot-cursor', group: 'Behavior', title: 'Include the pointer',
+          description: 'Draws the mouse pointer on a selection capture.',
+          kind: 'bool', enabled: shot.includeCursor,
+          onToggle: () => updateShot({ includeCursor: !shot.includeCursor }),
+        },
+        {
+          key: 'shot-folder', group: 'Behavior', title: 'Save folder',
+          description: shot.saveDirectory || 'Pictures / Screenshots when this stays empty.',
+          kind: 'open',
+          value: shot.saveDirectory ? (shot.saveDirectory.split(/[/\\]/).filter(Boolean).pop() || 'Choose') : 'Choose',
+          onOpen: () => {
+            void window.electron?.selectFolder?.().then((folder) => {
+              if (folder) updateShot({ saveDirectory: folder });
+            });
+          },
+        },
+        {
+          key: 'shot-now', group: 'Capture', title: 'Capture now',
+          description: 'Freeze this screen and drag a region.',
+          kind: 'action', actionLabel: 'Capture', actionIcon: Camera,
+          onRun: () => {
+            onClose();
+            window.setTimeout(() => { void window.electron?.startScreenshot?.('region'); }, 280);
+          },
+        },
+      ],
       spaces: [
         ...config.workspaces.map((workspace, index) => ({
           key: workspace.id,
@@ -749,7 +875,7 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
         },
       ],
     };
-  }, [config, gameMode, theme, apps, update, updateInfo, updateBusy, updateNote, isStoreBuild, runUpdateCheck, onReset, deleteWorkspace, reorderWorkspaces, assignFileWheelKey]);
+  }, [config, gameMode, theme, apps, update, updateShot, updateInfo, updateBusy, updateNote, isStoreBuild, runUpdateCheck, onReset, onClose, deleteWorkspace, reorderWorkspaces, assignFileWheelKey]);
 
   const tr = (text?: string) => {
     if (!text) return '';
@@ -1299,9 +1425,23 @@ function SettingsEditor({
   let content: React.ReactNode = null;
 
   if (editor.kind === 'shortcut') {
-    title = 'Global shortcut';
-    description = 'Record a combination that does not conflict with your applications.';
-    content = <ShortcutRecorder value={config.globalShortcut} onChange={(value) => update('globalShortcut', value)} />;
+    const target = editor.target ?? 'global';
+    if (target === 'global') {
+      title = 'Global shortcut';
+      description = 'Record a combination that does not conflict with your applications.';
+      content = <ShortcutRecorder value={config.globalShortcut} onChange={(value) => update('globalShortcut', value)} />;
+    } else {
+      const field = target === 'shot-full' ? 'shortcutFull' : target === 'shot-window' ? 'shortcutWindow' : 'shortcutRegion';
+      const shot = { ...DEFAULT_SCREENSHOT, ...config.screenshot };
+      title = target === 'shot-full' ? 'Full screen shortcut' : target === 'shot-window' ? 'Active window shortcut' : 'Selection shortcut';
+      description = 'Print Screen can stay with Windows. If the shortcut never reaches VOR, record another combination.';
+      content = (
+        <ShortcutRecorder
+          value={shot[field]}
+          onChange={(value) => update('screenshot', { ...shot, [field]: value })}
+        />
+      );
+    }
   }
 
   if (editor.kind === 'blocked') {

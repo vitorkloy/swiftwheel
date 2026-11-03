@@ -1,7 +1,7 @@
 {
   "name": "vor",
   "private": true,
-  "version": "0.2.12",
+  "version": "0.2.13",
   "main": "backend/electron-main.js",
   "author": "vitorkloy",
   "description": "VOR — Visual Operations Router",
@@ -71,7 +71,8 @@
       "resources/bin/**/*",
       "node_modules/sql.js/dist/sql-wasm.wasm",
       "node_modules/active-win/**/*",
-      "node_modules/uiohook-napi/**/*"
+      "node_modules/uiohook-napi/**/*",
+      "node_modules/node-global-key-listener/**/*"
     ],
     "directories": {
       "output": "build-out"
@@ -102,7 +103,7 @@
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
       "guid": "7c2a9e14-6b21-4d0a-9f33-000000000200",
-      "artifactName": "VOR_0.2.12_x64-setup.${ext}",
+      "artifactName": "VOR_${version}_x64-setup.${ext}",
       "include": "nsis/installer.nsh",
       "deleteAppDataOnUninstall": true
     },

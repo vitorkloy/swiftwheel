@@ -89,6 +89,23 @@ export const CLOCK_HUD_POSITIONS = [
 
 export type ClockHudPosition = (typeof CLOCK_HUD_POSITIONS)[number];
 
+export interface ScreenshotSettings {
+  enabled: boolean;
+  shortcutRegion: string;
+  shortcutFull: string;
+  shortcutWindow: string;
+  format: "png" | "jpeg" | "webp";
+  quality: number;
+  copyOnSelect: boolean;
+  showToasts: boolean;
+  rememberRegion: boolean;
+  includeCursor: boolean;
+  saveDirectory: string;
+  lastRegion: { x: number; y: number; width: number; height: number } | null;
+  /** A fatia da roda só é oferecida uma vez. Apagar depois não a repõe. */
+  wheelSeeded: boolean;
+}
+
 export interface UIConfig {
   accentColor: string;
   /** Cor aplicada ao item apontado no menu radial. Opcional para compatibilidade com configs antigas. */
@@ -164,6 +181,7 @@ export interface UIConfig {
     lastSuccessfulLoad?: string;
     version?: number;
   };
+  screenshot?: ScreenshotSettings;
 }
 
 export interface RadialState {
@@ -180,6 +198,7 @@ export interface ElectronAPI {
   ) => void;
   hideWindow: () => void;
   showWindow: () => void;
+  showInactive?: () => void;
   requestKeyboardFocus?: () => void;
   getAppVersion?: () => Promise<string>;
   /** Canal de distribuição: 'store' (MSIX) não tem atualização própria. */
@@ -373,6 +392,47 @@ export interface ElectronAPI {
     dev?: boolean;
     error?: string;
   }>;
+  startScreenshot?: (mode?: "region" | "full" | "window") => Promise<{ ok: boolean }>;
+  getScreenshotSession?: () => Promise<{
+    frameUrl?: string;
+    dataUrl?: string;
+    mode: "region" | "window";
+    width: number;
+    height: number;
+    preset: { x: number; y: number; width: number; height: number } | null;
+    cursor: { x: number; y: number } | null;
+    copyOnSelect: boolean;
+    format: "png" | "jpeg" | "webp";
+    quality: number;
+    language: "pt" | "en";
+  } | null>;
+  onScreenshotSession?: (
+    callback: (session: {
+      frameUrl?: string;
+      dataUrl?: string;
+      mode: "region" | "window";
+      width: number;
+      height: number;
+      preset: { x: number; y: number; width: number; height: number } | null;
+      cursor: { x: number; y: number } | null;
+      copyOnSelect: boolean;
+      format: "png" | "jpeg" | "webp";
+      quality: number;
+      language: "pt" | "en";
+    }) => void,
+  ) => () => void;
+  onScreenshotVisible?: (callback: () => void) => () => void;
+  screenshotAction?: (payload: {
+    action: "copy" | "save" | "pin" | "wheel" | "cancel" | "remember" | "ready";
+    dataUrl?: string;
+    pngDataUrl?: string;
+    width?: number;
+    height?: number;
+    region?: { x: number; y: number; width: number; height: number } | null;
+  }) => Promise<{ ok: boolean; error?: string; file?: string }>;
+  onScreenshotRemember?: (
+    callback: (region: { x: number; y: number; width: number; height: number }) => void,
+  ) => () => void;
 }
 
 declare global {
