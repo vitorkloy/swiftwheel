@@ -136,13 +136,17 @@ function inside(point: Point, rect: Rect): boolean {
   return point.x >= rect.x && point.y >= rect.y && point.x <= rect.x + rect.width && point.y <= rect.y + rect.height;
 }
 
+function textFontPx(size: number) {
+  return 11 + size * 2;
+}
+
 function textFont(size: number) {
-  return `${14 + size * 4}px "Segoe UI", sans-serif`;
+  return `${textFontPx(size)}px "Segoe UI", sans-serif`;
 }
 
 function textBounds(mark: Extract<Mark, { tool: 'text' }>): Rect {
   const probe = document.createElement('canvas').getContext('2d');
-  const height = 14 + mark.size * 4;
+  const height = textFontPx(mark.size);
   if (!probe) return { x: mark.at.x, y: mark.at.y, width: Math.max(24, mark.text.length * height * 0.55), height };
   probe.font = textFont(mark.size);
   const width = Math.max(24, probe.measureText(mark.text).width + 8);
@@ -769,7 +773,7 @@ export const CaptureOverlay: React.FC = () => {
     { id: 'text', label: label.text, icon: <Type size={16} strokeWidth={1.75} /> },
     { id: 'blur', label: label.blur, icon: <CloudFog size={16} strokeWidth={1.75} /> },
   ];
-  const textPx = 14 + size * 4;
+  const textPx = textFontPx(size);
   const editingMark = textEditIndex != null ? marks[textEditIndex] : null;
   const textColor = editingMark?.tool === 'text' ? editingMark.color : color;
 
@@ -964,16 +968,20 @@ export const CaptureOverlay: React.FC = () => {
         </div>
       )}
       {textAt && (
-        <div className="cap-text-wrap" style={{ left: textAt.x, top: textAt.y }} onPointerDown={(event) => event.stopPropagation()}>
+        <div
+          className="cap-text-wrap"
+          style={{ left: textAt.x, top: textAt.y, fontSize: textPx }}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
           <input
             ref={textInputRef}
             className="cap-text"
             style={{
               color: textColor,
-              fontSize: textPx,
-              width: `${Math.min(22, Math.max(4, (textValue || ' ').length + 1))}ch`,
+              width: `${Math.min(28, Math.max(2, (textValue || ' ').length + 1))}ch`,
             }}
             value={textValue}
+            spellCheck={false}
             onChange={(event) => {
               textValueRef.current = event.target.value;
               setTextValue(event.target.value);
@@ -1004,7 +1012,7 @@ export const CaptureOverlay: React.FC = () => {
             }}
           />
           <button type="button" className="cap-text-x" aria-label={label.discardText} title={label.discardText} onClick={cancelText}>
-            <X size={14} strokeWidth={2} />
+            <X size={10} strokeWidth={2.25} />
           </button>
         </div>
       )}
