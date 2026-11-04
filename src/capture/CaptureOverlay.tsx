@@ -42,12 +42,12 @@ const WIDTHS = [2, 4, 8];
 const COPY: Record<Session['language'], Record<string, string>> = {
   pt: {
     pen: 'Caneta', shapes: 'Formas', arrow: 'Seta', rect: 'Retângulo', ellipse: 'Círculo', line: 'Linha', highlight: 'Marca', text: 'Texto', blur: 'Desfoque', undo: 'Desfazer',
-    copy: 'Copiar', save: 'Guardar', cancel: 'Cancelar', color: 'Cor', custom: 'Cor personalizada',
+    copy: 'Copiar', save: 'Guardar', cancel: 'Cancelar', discardText: 'Descartar texto', color: 'Cor', custom: 'Cor personalizada',
     copied: 'Copiado', saved: 'Guardado', select: 'Arraste para selecionar',
   },
   en: {
     pen: 'Pen', shapes: 'Shapes', arrow: 'Arrow', rect: 'Rectangle', ellipse: 'Circle', line: 'Line', highlight: 'Marker', text: 'Text', blur: 'Blur', undo: 'Undo',
-    copy: 'Copy', save: 'Save', cancel: 'Cancel', color: 'Color', custom: 'Custom color',
+    copy: 'Copy', save: 'Save', cancel: 'Cancel', discardText: 'Discard text', color: 'Color', custom: 'Custom color',
     copied: 'Copied', saved: 'Saved', select: 'Drag to select',
   },
 };
@@ -115,7 +115,7 @@ function hitHandle(point: Point, rect: Rect | null): Handle | null {
     ['w', rect.x, rect.y + rect.height / 2],
   ];
   for (const [handle, x, y] of spots) {
-    if (Math.abs(point.x - x) <= 8 && Math.abs(point.y - y) <= 8) return handle;
+    if (Math.abs(point.x - x) <= 10 && Math.abs(point.y - y) <= 10) return handle;
   }
   return null;
 }
@@ -345,8 +345,13 @@ export const CaptureOverlay: React.FC = () => {
   const frameKeyRef = useRef('');
   const imageRef = useRef<HTMLImageElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const stageRef = useRef<HTMLDivElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
   const [barBox, setBarBox] = useState({ width: 420, height: 40 });
+  const [hoverHandle, setHoverHandle] = useState<Handle | null>(null);
+  const [resizeHandle, setResizeHandle] = useState<Handle | null>(null);
+  const [hoverMove, setHoverMove] = useState(false);
+  const [moving, setMoving] = useState(false);
   const draftRef = useRef<Mark | null>(null);
   const dragRef = useRef<
     | { kind: 'create'; origin: Point; current: Point }
@@ -424,8 +429,9 @@ export const CaptureOverlay: React.FC = () => {
     setBarBox((current) => (current.width === next.width && current.height === next.height ? current : next));
   }, [showBar, tool, color, size, status, colorsOpen]);
 
-  const pointFrom = (event: React.PointerEvent): Point => {
-    const rect = (event.currentTarget as HTMLElement).getBoundingClientRect();
+  const pointFrom = (event: { clientX: number; clientY: number }): Point => {
+    const stage = stageRef.current;
+    const rect = stage ? stage.getBoundingClientRect() : { left: 0, top: 0 };
     return {
       x: Math.max(0, Math.min(bounds.width, event.clientX - rect.left)),
       y: Math.max(0, Math.min(bounds.height, event.clientY - rect.top)),
@@ -471,9 +477,15 @@ export const CaptureOverlay: React.FC = () => {
       width: selection.width,
       height: selection.height,
     });
-    if (result?.ok && (action === 'copy' || action === 'save')) setStatus(action === 'copy' ? label.copied : label.saved);
-  }, [exportShot, label.copied, label.saved, selection, session?.demo]);
+    if (!result?.ok) return;
+    if (action === 'copy') {
+      void window.electron?.screenshotAction?.({ action: 'cancel' });
+      return;
+    }
+    if (action === 'save') setStatus(label.saved);
+  }, [exportShot, label.saved, selection, session?.demo]);
 
+  const textCancelRef = useRef(false);
   const clearTextDraft = useCallback(() => {
     textAtRef.current = null;
     textValueRef.current = '';
@@ -482,6 +494,14 @@ export const CaptureOverlay: React.FC = () => {
     setTextValue('');
     setTextEditIndex(null);
   }, []);
+
+  const cancelText = useCallback(() => {
+    textCancelRef.current = true;
+    textStampRef.current = Date.now();
+    clearTextDraft();
+    setTool('select');
+    window.setTimeout(() => { textCancelRef.current = false; }, 0);
+  }, [clearTextDraft]);
 
   const commitText = useCallback(() => {
     const value = textValueRef.current.trim();
@@ -540,9 +560,9 @@ export const CaptureOverlay: React.FC = () => {
     const onKey = (event: KeyboardEvent) => {
       const typing = document.activeElement instanceof HTMLInputElement;
       if (event.key === 'Escape') {
-        if (typing) {
-          clearTextDraft();
-          setTool('select');
+        if (typing || textAtRef.current) {
+          event.preventDefault();
+          cancelText();
           return;
         }
         void run('cancel');
@@ -563,7 +583,7 @@ export const CaptureOverlay: React.FC = () => {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [clearTextDraft, run, undo]);
+  }, [cancelText, run, undo]);
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!session || event.button !== 0) return;
@@ -583,10 +603,11 @@ export const CaptureOverlay: React.FC = () => {
       return;
     }
     if (textAt) commitText();
-    try { event.currentTarget.setPointerCapture(event.pointerId); } catch { /* o ponteiro já pode ter sido solto */ }
+    try { stageRef.current?.setPointerCapture(event.pointerId); } catch { /* o ponteiro já pode ter sido solto */ }
     const handle = hitHandle(point, selection);
     if (handle && selection && committed) {
       dragRef.current = { kind: 'resize', handle, rect: selection };
+      setResizeHandle(handle);
       return;
     }
     if (tool !== 'select' && selection && inside(point, selection)) {
@@ -595,6 +616,7 @@ export const CaptureOverlay: React.FC = () => {
     }
     if (tool === 'select' && selection && inside(point, selection)) {
       dragRef.current = { kind: 'move', origin: point, rect: selection };
+      setMoving(true);
       return;
     }
     setCommitted(false);
@@ -608,8 +630,23 @@ export const CaptureOverlay: React.FC = () => {
 
   const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
-    if (!drag) return;
     const point = pointFrom(event);
+    if (!drag) {
+      if (hoverHandle) {
+        setHoverMove(false);
+        return;
+      }
+      const overMove = Boolean(
+        committed
+        && tool === 'select'
+        && selection
+        && !textAt
+        && inside(point, selection)
+        && !hitHandle(point, selection),
+      );
+      setHoverMove(overMove);
+      return;
+    }
     if (drag.kind === 'create') {
       drag.current = point;
       const next = normalize(drag.origin, point, bounds);
@@ -646,6 +683,8 @@ export const CaptureOverlay: React.FC = () => {
   const onPointerUp = () => {
     const drag = dragRef.current;
     dragRef.current = null;
+    setResizeHandle(null);
+    setMoving(false);
     if (!drag) return;
     if (drag.kind === 'create') {
       const next = normalize(drag.origin, drag.current, bounds);
@@ -734,9 +773,23 @@ export const CaptureOverlay: React.FC = () => {
   const editingMark = textEditIndex != null ? marks[textEditIndex] : null;
   const textColor = editingMark?.tool === 'text' ? editingMark.color : color;
 
+  const stageCursor = textAt || tool === 'text'
+    ? 'text'
+    : resizeHandle
+      ? `${resizeHandle}-resize`
+      : hoverHandle
+        ? `${hoverHandle}-resize`
+        : moving
+          ? 'grabbing'
+          : hoverMove
+            ? 'grab'
+            : 'crosshair';
+
   return (
     <div
-      className={`cap-stage${frameReady ? ' is-ready' : ''}`}
+      ref={stageRef}
+      className={`cap-stage${frameReady ? ' is-ready' : ''}${textAt ? ' is-text' : ''}`}
+      style={{ cursor: stageCursor }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
@@ -777,7 +830,25 @@ export const CaptureOverlay: React.FC = () => {
           </div>
           {handles.map((handle) => {
             const at = handlePoint(handle);
-            return <i key={handle} className="cap-handle" style={{ left: at.x, top: at.y, cursor: `${handle}-resize` }} />;
+            return (
+              <button
+                key={handle}
+                type="button"
+                className="cap-handle"
+                aria-label={handle}
+                style={{ left: at.x, top: at.y, cursor: `${handle}-resize` }}
+                onPointerEnter={() => setHoverHandle(handle)}
+                onPointerLeave={() => setHoverHandle((current) => (current === handle ? null : current))}
+                onPointerDown={(event) => {
+                  if (!selection || !committed) return;
+                  event.preventDefault();
+                  event.stopPropagation();
+                  try { stageRef.current?.setPointerCapture(event.pointerId); } catch { /* ignore */ }
+                  dragRef.current = { kind: 'resize', handle, rect: selection };
+                  setResizeHandle(handle);
+                }}
+              />
+            );
           })}
         </>
       )}
@@ -893,34 +964,49 @@ export const CaptureOverlay: React.FC = () => {
         </div>
       )}
       {textAt && (
-        <input
-          ref={textInputRef}
-          className="cap-text"
-          style={{ left: textAt.x, top: textAt.y, color: textColor, fontSize: textPx }}
-          value={textValue}
-          onChange={(event) => {
-            textValueRef.current = event.target.value;
-            setTextValue(event.target.value);
-          }}
-          onBlur={() => {
-            window.setTimeout(() => {
-              if (Date.now() - textStampRef.current < 280) {
-                textInputRef.current?.focus();
+        <div className="cap-text-wrap" style={{ left: textAt.x, top: textAt.y }} onPointerDown={(event) => event.stopPropagation()}>
+          <input
+            ref={textInputRef}
+            className="cap-text"
+            style={{
+              color: textColor,
+              fontSize: textPx,
+              width: `${Math.min(22, Math.max(4, (textValue || ' ').length + 1))}ch`,
+            }}
+            value={textValue}
+            onChange={(event) => {
+              textValueRef.current = event.target.value;
+              setTextValue(event.target.value);
+            }}
+            onBlur={() => {
+              window.setTimeout(() => {
+                if (textCancelRef.current) return;
+                if (Date.now() - textStampRef.current < 280) {
+                  textInputRef.current?.focus();
+                  return;
+                }
+                if (document.activeElement === textInputRef.current) return;
+                commitText();
+              }, 0);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
+                cancelText();
                 return;
               }
-              if (document.activeElement === textInputRef.current) return;
-              commitText();
-            }, 0);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === 'Enter') {
-              event.preventDefault();
-              commitText();
-            }
-            event.stopPropagation();
-          }}
-          onPointerDown={(event) => event.stopPropagation()}
-        />
+              if (event.key === 'Enter') {
+                event.preventDefault();
+                commitText();
+              }
+              event.stopPropagation();
+            }}
+          />
+          <button type="button" className="cap-text-x" aria-label={label.discardText} title={label.discardText} onClick={cancelText}>
+            <X size={14} strokeWidth={2} />
+          </button>
+        </div>
       )}
     </div>
   );

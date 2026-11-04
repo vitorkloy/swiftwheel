@@ -248,25 +248,75 @@ function installScreenshot(ctx) {
     }
   };
 
-  const grabDisplay = async (display) => {
-    const scale = display.scaleFactor || 1;
-    const width = Math.max(1, Math.round(display.size.width * scale));
-    const height = Math.max(1, Math.round(display.size.height * scale));
-    const sources = await desktopCapturer.getSources({
-      types: ["screen"],
-      thumbnailSize: { width, height },
-      fetchWindowIcons: false,
-    });
+  const virtualDesktopBounds = () => {
     const displays = screen.getAllDisplays();
-    const index = displays.findIndex((item) => item.id === display.id);
-    const source = sources.find((item) => String(item.display_id) === String(display.id))
-      || sources[index]
-      || sources[0];
-    if (!source || source.thumbnail.isEmpty()) throw new Error("captura vazia");
-    return source.thumbnail;
+    if (!displays.length) throw new Error("nenhum monitor");
+    const originX = Math.min(...displays.map((item) => item.bounds.x));
+    const originY = Math.min(...displays.map((item) => item.bounds.y));
+    const right = Math.max(...displays.map((item) => item.bounds.x + item.bounds.width));
+    const bottom = Math.max(...displays.map((item) => item.bounds.y + item.bounds.height));
+    return {
+      displays,
+      origin: { x: originX, y: originY },
+      bounds: {
+        x: originX,
+        y: originY,
+        width: Math.max(1, Math.round(right - originX)),
+        height: Math.max(1, Math.round(bottom - originY)),
+      },
+    };
   };
 
-  const activeWindowRect = async (display) => {
+  /** Congela todos os monitores num PNG DIP alinhado ao desktop virtual. */
+  const grabVirtualDesktop = async () => {
+    const { displays, origin, bounds } = virtualDesktopBounds();
+    let maxW = 1;
+    let maxH = 1;
+    for (const display of displays) {
+      const scale = display.scaleFactor || 1;
+      maxW = Math.max(maxW, Math.round(display.size.width * scale));
+      maxH = Math.max(maxH, Math.round(display.size.height * scale));
+    }
+    const sources = await desktopCapturer.getSources({
+      types: ["screen"],
+      thumbnailSize: { width: maxW, height: maxH },
+      fetchWindowIcons: false,
+    });
+    const sharp = require("sharp");
+    const composites = [];
+    for (let index = 0; index < displays.length; index += 1) {
+      const display = displays[index];
+      const source = sources.find((item) => String(item.display_id) === String(display.id))
+        || sources[index]
+        || sources[0];
+      if (!source || source.thumbnail.isEmpty()) continue;
+      const dipW = Math.max(1, Math.round(display.bounds.width));
+      const dipH = Math.max(1, Math.round(display.bounds.height));
+      const resized = await sharp(source.thumbnail.toPNG())
+        .resize(dipW, dipH, { fit: "fill" })
+        .png()
+        .toBuffer();
+      composites.push({
+        input: resized,
+        left: Math.round(display.bounds.x - origin.x),
+        top: Math.round(display.bounds.y - origin.y),
+      });
+    }
+    if (!composites.length) throw new Error("captura vazia");
+    const buffer = await sharp({
+      create: {
+        width: bounds.width,
+        height: bounds.height,
+        channels: 3,
+        background: { r: 0, g: 0, b: 0 },
+      },
+    }).composite(composites).png().toBuffer();
+    const image = nativeImage.createFromBuffer(buffer);
+    if (image.isEmpty()) throw new Error("captura vazia");
+    return { image, origin, bounds };
+  };
+
+  const activeWindowRect = async (origin, virtual) => {
     const getActive = ctx.getActiveWin();
     if (!getActive) return null;
     let info = null;
@@ -275,34 +325,37 @@ function installScreenshot(ctx) {
     if (!bounds || !Number.isFinite(bounds.width) || bounds.width < 8) return null;
     if (info.owner?.processId === process.pid) return null;
     let { x, y, width, height } = bounds;
-    const scale = display.scaleFactor || 1;
-    const screenBounds = display.bounds;
-    if (scale > 1 && (width > screenBounds.width * 1.25 || height > screenBounds.height * 1.25)) {
+    const nearest = screen.getDisplayNearestPoint({
+      x: Math.round(x + width / 2),
+      y: Math.round(y + height / 2),
+    });
+    const scale = nearest.scaleFactor || 1;
+    if (scale > 1 && (width > nearest.bounds.width * 1.25 || height > nearest.bounds.height * 1.25)) {
       x /= scale;
       y /= scale;
       width /= scale;
       height /= scale;
     }
-    const left = Math.max(screenBounds.x, x);
-    const top = Math.max(screenBounds.y, y);
-    const right = Math.min(screenBounds.x + screenBounds.width, x + width);
-    const bottom = Math.min(screenBounds.y + screenBounds.height, y + height);
+    const left = Math.max(virtual.x, x);
+    const top = Math.max(virtual.y, y);
+    const right = Math.min(virtual.x + virtual.width, x + width);
+    const bottom = Math.min(virtual.y + virtual.height, y + height);
     if (right - left < 8 || bottom - top < 8) return null;
     return {
-      x: Math.round(left - screenBounds.x),
-      y: Math.round(top - screenBounds.y),
+      x: Math.round(left - origin.x),
+      y: Math.round(top - origin.y),
       width: Math.round(right - left),
       height: Math.round(bottom - top),
     };
   };
 
-  const openOverlay = async (display, session) => {
+  const createOverlayShell = async (bounds) => {
     closeOverlay();
     const win = new BrowserWindow({
-      x: display.bounds.x,
-      y: display.bounds.y,
-      width: display.bounds.width,
-      height: display.bounds.height,
+      x: bounds.x,
+      y: bounds.y,
+      width: bounds.width,
+      height: bounds.height,
       frame: false,
       transparent: false,
       alwaysOnTop: true,
@@ -314,7 +367,7 @@ function installScreenshot(ctx) {
       enableLargerThanScreen: true,
       autoHideMenuBar: true,
       backgroundColor: "#000000",
-      opacity: 0,
+      focusable: true,
       webPreferences: {
         preload: ctx.preloadPath,
         contextIsolation: true,
@@ -329,38 +382,33 @@ function installScreenshot(ctx) {
     win.on("closed", () => {
       if (overlay === win) overlay = null;
     });
+    if (ctx.isDev) await win.loadURL("http://localhost:5173/capture.html");
+    else await win.loadFile(ctx.captureHtmlPath);
+    if (!win.isDestroyed()) win.setBounds(bounds);
+    return win;
+  };
+
+  const openOverlay = async (bounds, session, prepared) => {
+    const win = prepared && !prepared.isDestroyed()
+      ? prepared
+      : await createOverlayShell(bounds);
+    if (win.isDestroyed()) return;
+    overlay = win;
     let revealed = false;
-    const fadeIn = () => {
-      if (win.isDestroyed()) return;
-      const started = Date.now();
-      const duration = 140;
-      const tick = () => {
-        if (win.isDestroyed()) return;
-        const t = Math.min(1, (Date.now() - started) / duration);
-        const eased = 1 - (1 - t) * (1 - t);
-        win.setOpacity(eased);
-        if (t < 1) setTimeout(tick, 16);
-        else win.setOpacity(1);
-      };
-      tick();
-    };
     const reveal = () => {
       if (revealed || win.isDestroyed()) return;
       revealed = true;
-      win.setOpacity(0);
-      win.show();
+      win.setOpacity(1);
+      win.setBounds(bounds);
+      win.showInactive();
       win.focus();
-      fadeIn();
       win.webContents.send("screenshot-visible");
+      ctx.setGrabbing(false);
     };
     revealOverlay = reveal;
     pendingSession = session;
-    if (ctx.isDev) await win.loadURL("http://localhost:5173/capture.html");
-    else await win.loadFile(ctx.captureHtmlPath);
-    if (win.isDestroyed()) return;
-    win.setBounds(display.bounds);
     win.webContents.send("screenshot-session", session);
-    const timer = setTimeout(reveal, 900);
+    const timer = setTimeout(reveal, 450);
     win.once("closed", () => clearTimeout(timer));
   };
 
@@ -370,20 +418,24 @@ function installScreenshot(ctx) {
     if (overlay && !overlay.isDestroyed()) return;
     busy = true;
     ctx.setGrabbing(true);
+    let shell = null;
     try {
       const point = screen.getCursorScreenPoint();
-      const display = screen.getDisplayNearestPoint(point);
+      const virtual = virtualDesktopBounds();
       const cursor = {
-        x: point.x - display.bounds.x,
-        y: point.y - display.bounds.y,
+        x: point.x - virtual.origin.x,
+        y: point.y - virtual.origin.y,
       };
       let preset = null;
-      if (mode === "window") preset = await activeWindowRect(display);
+      if (mode === "window") preset = await activeWindowRect(virtual.origin, virtual.bounds);
       else if (mode === "region" && cfg.rememberRegion && cfg.lastRegion) preset = cfg.lastRegion;
+
+      const shellPromise = mode === "full"
+        ? Promise.resolve(null)
+        : createOverlayShell(virtual.bounds);
       hideOurWindows();
-      await new Promise((resolve) => setTimeout(resolve, 40));
-      hideOurWindows();
-      const image = await grabDisplay(display);
+      const { image, bounds } = await grabVirtualDesktop();
+      shell = await shellPromise;
 
       if (mode === "full") {
         clipboard.writeImage(image);
@@ -392,21 +444,24 @@ function installScreenshot(ctx) {
       }
 
       const language = ctx.language() === "pt" ? "pt" : "en";
-      await openOverlay(display, {
+      await openOverlay(bounds, {
         frameUrl: publishFrame(image),
         mode: mode === "window" ? "window" : "region",
-        width: display.bounds.width,
-        height: display.bounds.height,
+        width: bounds.width,
+        height: bounds.height,
         preset,
         cursor: cfg.includeCursor ? cursor : null,
         copyOnSelect: !!cfg.copyOnSelect,
         format: cfg.format === "jpeg" || cfg.format === "webp" ? cfg.format : "png",
         quality: Math.min(100, Math.max(50, Number(cfg.quality) || 92)),
         language,
-      });
+      }, shell);
     } catch (e) {
       ctx.diagLog(`[Screenshot] ${e.message}`);
       toast(ctx.language() === "pt" ? "Não foi possível capturar a tela." : "Could not capture the screen.");
+      if (shell && !shell.isDestroyed()) {
+        try { shell.close(); } catch { /* ignore */ }
+      }
     } finally {
       ctx.setGrabbing(false);
       busy = false;
