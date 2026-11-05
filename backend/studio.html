@@ -34,6 +34,11 @@
   .seg button.on { background: #fff; color: #111; }
   .bar { flex-wrap: wrap; }
   .muted { color: #a1a1aa; }
+  .form { width: min(520px, 100%); display: flex; flex-direction: column; gap: 14px; }
+  .form .row { justify-content: space-between; }
+  .form .row > span:first-child { color: #d4d4d8; min-width: 150px; }
+  .form input.txt { flex: 1; }
+  .form input[type="range"] { flex: 1; }
   input.txt, input[type="color"] { background: #1b1b1b; color: #fff; border: 1px solid rgba(255,255,255,.2); border-radius: 6px; padding: 4px 6px; height: 30px; }
   body { animation: pop .22s cubic-bezier(.2,1.2,.3,1); }
   @keyframes pop { from { transform: scale(.96); opacity: 0; } to { transform: none; opacity: 1; } }
@@ -373,6 +378,67 @@ async function imageTool(tool) {
   };
 }
 
+/** Formulário de opções (Comprimir, Metadados, Canais) na mesma janela base. */
+function formTool(tool) {
+  const box = document.createElement("div");
+  box.className = "form";
+  const values = Object.assign({}, ...(job.form || []).map((f) => ({ [f.k]: f.value })), job.state || {});
+  const name = String(job.filePath).split(/[\\/]/).pop();
+  const head = document.createElement("div");
+  head.className = "muted";
+  head.textContent = name;
+  box.appendChild(head);
+  const rows = [];
+  (job.form || []).forEach((f) => {
+    const row = document.createElement("label");
+    row.className = "row";
+    const cap = document.createElement("span");
+    cap.textContent = f.label;
+    row.appendChild(cap);
+    let input;
+    if (f.type === "seg") {
+      input = document.createElement("span");
+      input.className = "seg";
+      f.options.forEach(([v, t]) => {
+        const b = document.createElement("button");
+        b.type = "button"; b.textContent = t;
+        b.className = String(values[f.k]) === String(v) ? "on" : "";
+        b.onclick = () => { values[f.k] = v; input.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b)); sync(); };
+        input.appendChild(b);
+      });
+    } else if (f.type === "check") {
+      input = document.createElement("input");
+      input.type = "checkbox"; input.checked = !!values[f.k];
+      input.onchange = () => { values[f.k] = input.checked; sync(); };
+    } else if (f.type === "file") {
+      input = document.createElement("input");
+      input.type = "file"; input.accept = "image/*";
+      input.onchange = () => { values[f.k] = input.files[0] && input.files[0].path || ""; };
+    } else {
+      input = document.createElement("input");
+      input.type = f.type === "range" ? "range" : f.type === "number" ? "number" : "text";
+      input.className = "txt";
+      if (f.min != null) input.min = String(f.min);
+      if (f.max != null) input.max = String(f.max);
+      input.value = values[f.k] == null ? "" : String(values[f.k]);
+      const out = document.createElement("b");
+      input.oninput = () => { values[f.k] = input.value; if (f.unit) out.textContent = input.value + f.unit; };
+      if (f.unit) { out.textContent = input.value + f.unit; row.appendChild(input); input = out; }
+    }
+    row.appendChild(input);
+    box.appendChild(row);
+    rows.push([f, row]);
+  });
+  function sync() {
+    rows.forEach(([f, row]) => {
+      row.hidden = !!f.when && Object.entries(f.when).some(([k, v]) => String(values[k]) !== String(v));
+    });
+  }
+  sync();
+  $("main").appendChild(box);
+  $("ok").onclick = () => done({ opts: values, state: values });
+}
+
 function timeBar(kind) {
   $("bar").hidden = false;
   const extra = kind === "speed" ? '<label>Velocidade <input id="rate" type="range" min="0.5" max="2" step="0.1" value="1.5"></label>'
@@ -503,7 +569,8 @@ window.studio.job().then((data) => {
     $("strip").appendChild(t);
   });
   $("all").hidden = !(job.rest && job.rest.length);
-  if (["cropImage", "redactImage", "editImage", "annotateImage", "frameImage"].includes(tool)) imageTool(tool);
+  if (job.form) formTool(tool);
+  else if (["cropImage", "redactImage", "editImage", "annotateImage", "frameImage"].includes(tool)) imageTool(tool);
   else if (["cropVideo", "redactVideo", "trimVideo", "splitVideo", "changeVideoSpeed", "videoSnapshots"].includes(tool)) videoTool(tool);
   else if (["trimAudio", "redactAudio", "audioToVideo"].includes(tool)) audioTool(tool);
   else pdfTool(tool);

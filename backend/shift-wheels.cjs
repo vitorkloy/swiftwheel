@@ -207,13 +207,13 @@ function downloadFile(url, dest) {
  * perfil bloqueado, ffmpeg à espera de stdin) nunca devolvia erro.
  */
 function spawnWait(cmd, args, options = {}) {
-  const { timeout = 120000, verbatim = false, env, cwd } = options;
+  const { timeout = 120000, verbatim = false, env, cwd, onStdout } = options;
   return new Promise((resolve, reject) => {
     let child;
     try {
       child = spawn(cmd, args, {
         windowsHide: true,
-        stdio: ["ignore", "ignore", "pipe"],
+        stdio: ["ignore", onStdout ? "pipe" : "ignore", "pipe"],
         windowsVerbatimArguments: verbatim,
         env: env || process.env,
         cwd,
@@ -235,6 +235,7 @@ function spawnWait(cmd, args, options = {}) {
       try { child.kill(); } catch { /* ignore */ }
       finish(new Error(`${path.basename(cmd)} demorou demais e foi cancelado`));
     }, timeout);
+    if (onStdout) child.stdout.on("data", (chunk) => { try { onStdout(chunk.toString("utf8")); } catch { /* ignore */ } });
     child.stderr.on("data", (chunk) => {
       if (stderr.length < 4000) stderr += chunk.toString("utf8");
     });
@@ -248,6 +249,39 @@ function spawnWait(cmd, args, options = {}) {
       }
     });
   });
+}
+
+/** Progresso do trabalho atual (0..1), ligado por `run`/`applyStudio` ao toast do Electron. */
+let jobProgress = null;
+
+/** Duração em segundos, lida do cabeçalho que o ffmpeg imprime (sem precisar de ffprobe). */
+function mediaDuration(file) {
+  return new Promise((resolve) => {
+    let text = "";
+    let child;
+    try { child = spawn(need("ffmpeg"), ["-hide_banner", "-i", file], { windowsHide: true, stdio: ["ignore", "ignore", "pipe"] }); } catch { resolve(0); return; }
+    child.stderr.on("data", (c) => { if (text.length < 20000) text += c.toString("utf8"); });
+    const done = () => {
+      const m = text.match(/Duration:\s*(\d+):(\d+):(\d+(?:\.\d+)?)/);
+      resolve(m ? Number(m[1]) * 3600 + Number(m[2]) * 60 + Number(m[3]) : 0);
+    };
+    child.on("exit", done);
+    child.on("error", () => resolve(0));
+  });
+}
+
+/** ffmpeg com `-progress pipe:1`: alimenta o toast com a porcentagem real. */
+async function ffmpegRun(args, { input, timeout = 30 * 60 * 1000, speed = 1 } = {}) {
+  const sink = jobProgress;
+  const dur = sink && input ? (await mediaDuration(input)) / speed : 0;
+  let buf = "";
+  const onStdout = dur > 0 ? (text) => {
+    buf = (buf + text).slice(-400);
+    const m = buf.match(/out_time_(?:us|ms)=(\d+)(?![\s\S]*out_time_(?:us|ms)=)/);
+    if (m) sink(Math.min(0.99, Number(m[1]) / 1e6 / dur));
+  } : undefined;
+  const full = dur > 0 ? ["-progress", "pipe:1", "-nostats", ...args] : args;
+  await spawnWait(need("ffmpeg"), full, { timeout, onStdout });
 }
 
 function pdfLocked(err) {
@@ -720,6 +754,7 @@ function toolsFor(id, filePath) {
     if (tool === "createPDF" || tool === "mergePDF") need.add("mutool");
     else if (tool === "createCollage" || tool === "zipFiles") { /* sharp/tar embutidos */ }
     else if (kind === "pdf") need.add("mutool");
+    else if (kind === "image" && tool === "compress" && !["jpg", "png", "webp", "tiff", "avif", "gif"].includes(from)) need.add("magick");
     else if (kind === "image" && !["compress", "resize50", "resize1080", "rotate90", "cropImage", "redactImage", "editImage", "annotateImage", "frameImage"].includes(tool)) need.add("magick");
     else if (kind === "audio" || kind === "video" || kind === "gif") need.add("ffmpeg");
   }
@@ -764,7 +799,51 @@ const STUDIO = new Set([
   "cropVideo", "redactVideo", "trimVideo", "splitVideo", "changeVideoSpeed", "videoSnapshots",
   "trimAudio", "redactAudio", "audioToVideo",
   "organizePDF", "splitPDF",
+  "compress", "removeMetadata", "audioChannels",
 ]);
+
+/** Ferramentas que abrem só um formulário de opções (a janela base do estúdio, sem preview). */
+const FORM = new Set(["compress", "removeMetadata", "audioChannels"]);
+
+/** Campos do formulário de cada ferramenta, conforme o tipo do arquivo. */
+function studioForm(id, filePath) {
+  const tool = String(id || "").slice(5);
+  if (!FORM.has(tool)) return null;
+  const kind = kindOf(fmtOf(filePath));
+  const seg = (k, label, options, value) => ({ k, label, type: "seg", options, value });
+  const text = (k, label, value = "") => ({ k, label, type: "text", value });
+  if (tool === "compress" && kind === "image") {
+    return [
+      seg("mode", "Modo", [["quality", "Qualidade"], ["target", "Tamanho alvo"]], "quality"),
+      { k: "quality", label: "Qualidade", type: "range", min: 10, max: 100, value: 80, unit: "%", when: { mode: "quality" } },
+      { k: "targetKB", label: "Tamanho (KB)", type: "number", min: 5, value: 500, when: { mode: "target" } },
+      seg("maxSide", "Lado máximo", [["0", "Original"], ["3840", "4K"], ["1920", "1920"], ["1280", "1280"], ["800", "800"]], "0"),
+      seg("format", "Formato", [["auto", "Automático"], ["jpg", "JPG"], ["webp", "WEBP"], ["png", "PNG"]], "auto"),
+    ];
+  }
+  if (tool === "compress" && (kind === "video" || kind === "gif")) {
+    return [
+      seg("quality", "Qualidade", [["alta", "Alta"], ["media", "Média"], ["baixa", "Baixa"]], "media"),
+      seg("height", "Resolução", [["0", "Original"], ["1080", "1080p"], ["720", "720p"], ["480", "480p"]], "0"),
+      { k: "targetMB", label: "Tamanho alvo (MB, opcional)", type: "number", min: 0, value: "" },
+    ];
+  }
+  if (tool === "compress" && kind === "audio") return [seg("bitrate", "Taxa (kbps)", [["64", "64"], ["96", "96"], ["128", "128"], ["192", "192"]], "128")];
+  if (tool === "compress" && kind === "pdf") return [seg("level", "Nível", [["leve", "Leve (150 dpi)"], ["forte", "Forte (96 dpi)"]], "leve")];
+  if (tool === "audioChannels") return [seg("mode", "Canais", [["mono", "Mono"], ["stereo", "Estéreo"], ["swap", "Inverter E/D"], ["left", "Só esquerdo"], ["right", "Só direito"]], "mono")];
+  if (tool === "removeMetadata") {
+    const fields = [{ k: "strip", label: "Remover todos os metadados", type: "check", value: true }];
+    if (kind === "image") fields.push(text("title", "Descrição"), text("artist", "Autor"), text("copyright", "Direitos autorais"), text("make", "Câmera (marca)"), text("model", "Câmera (modelo)"));
+    else if (kind === "pdf") fields.push(text("title", "Título"), text("artist", "Autor"), text("comment", "Assunto"), text("keywords", "Palavras-chave"));
+    else {
+      fields.push(text("title", "Título"), text("artist", "Artista"), text("album", "Álbum"), text("year", "Ano"), text("genre", "Gênero"), text("comment", "Comentário"));
+      if (kind === "audio" && ["mp3", "m4a", "flac"].includes(fmtOf(filePath))) fields.push({ k: "cover", label: "Capa (imagem)", type: "file", value: "" });
+    }
+    fields.slice(1).forEach((f) => { f.when = { strip: false }; });
+    return fields;
+  }
+  return null;
+}
 
 function needsStudio(id) {
   return id.startsWith("tool:") && STUDIO.has(id.slice(5));
@@ -849,7 +928,7 @@ function buildMany(paths, mode) {
     if (kind === "image") ids.push("createPDF", "createCollage");
     if (kind === "pdf") ids.push("mergePDF");
     if (kind !== "mixed" && kind !== "folder") {
-      toolIds(kind, fmtOf(paths[0])).filter((id) => !STUDIO.has(id)).forEach((id) => ids.push(id));
+      toolIds(kind, fmtOf(paths[0])).filter((id) => !STUDIO.has(id) || FORM.has(id)).forEach((id) => ids.push(id));
     }
     ids.push("zipFiles");
     items = ids.map((id) => item(`tool:${id}`, toolTitle(id), toolGate(id)));
@@ -1091,9 +1170,11 @@ async function convert(filePath, to) {
   if (kind === "audio" || kind === "video" || kind === "gif") {
     const args = ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", filePath];
     if (to === "mp3") args.push("-vn", "-b:a", "192k");
-    if (to === "gif") args.push("-vf", "fps=12,scale='min(640,iw)':-2:flags=lanczos");
-    if (kind === "gif" || to === "mp4" || to === "mov") args.push("-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2");
-    await spawnWait(need("ffmpeg"), [...args, dest], { timeout: 30 * 60 * 1000 });
+    // GIF com paleta própria (palettegen/paletteuse): cores fiéis e arquivo bem menor que a paleta fixa.
+    else if (to === "gif") args.push("-filter_complex", "fps=12,scale='min(640,iw)':-2:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle", "-loop", "0");
+    else if (kind === "gif" || to === "mp4" || to === "mov") args.push("-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2");
+    if (kind === "gif" && to !== "gif") args.push("-movflags", "+faststart");
+    await ffmpegRun([...args, dest], { input: filePath });
     return exists(dest);
   }
   if (kind === "subtitle") return convertSubtitle(filePath, dest, to);
@@ -1142,13 +1223,111 @@ async function convert(filePath, to) {
   }
 }
 
-async function runTool(tool, filePath) {
+function hasTags(o) {
+  return ["title", "artist", "album", "year", "comment", "copyright", "make", "model", "keywords", "genre"].some((k) => o && String(o[k] || "").trim());
+}
+
+/** Comprime imagem por qualidade (%) ou por tamanho alvo (busca binária da qualidade, depois reduz a resolução). */
+async function compressImage(filePath, opts = {}) {
+  const sharp = require("sharp");
+  const dir = path.dirname(filePath);
+  const stem = path.parse(filePath).name;
+  const from = fmtOf(filePath);
+  let source = filePath;
+  let tmp = null;
+  try {
+    if (!["jpg", "png", "webp", "tiff", "avif", "gif", "heic"].includes(from) || from === "heic") {
+      tmp = scratch();
+      source = path.join(tmp, "src.png");
+      await spawnWait(need("magick"), [`${filePath}[0]`, source]);
+    }
+    const meta = await sharp(source, { failOn: "none" }).metadata();
+    const alpha = !!meta.hasAlpha;
+    let fmt = opts.format && opts.format !== "auto" ? opts.format : (from === "webp" ? "webp" : (from === "png" && alpha ? "png" : "jpg"));
+    const target = opts.mode === "target" ? Math.max(5, Number(opts.targetKB) || 0) * 1024 : 0;
+    if (target && fmt === "png") fmt = alpha ? "webp" : "jpg";
+    const maxSide = Number(opts.maxSide) || 0;
+    const encode = async (quality, scale = 1) => {
+      let img = sharp(source, { failOn: "none" }).rotate();
+      const w = meta.width || 0, h = meta.height || 0;
+      const limit = Math.max(w, h) * scale;
+      const side = maxSide ? Math.min(maxSide, limit) : limit;
+      if (side && side < Math.max(w, h)) img = img.resize({ width: w >= h ? Math.round(side) : undefined, height: h > w ? Math.round(side) : undefined, withoutEnlargement: true });
+      if (fmt === "jpg") img = img.flatten({ background: "#ffffff" }).jpeg({ quality, mozjpeg: true });
+      else if (fmt === "webp") img = img.webp({ quality, effort: 4 });
+      else img = img.png({ palette: true, quality, compressionLevel: 9 });
+      return img.toBuffer();
+    };
+    let out;
+    if (!target) out = await encode(Math.min(100, Math.max(5, Number(opts.quality) || 80)));
+    else {
+      let scale = 1;
+      for (let round = 0; round < 6; round += 1) {
+        let lo = 5, hi = 95, best = null;
+        while (lo <= hi) {
+          const mid = (lo + hi) >> 1;
+          const buf = await encode(mid, scale);
+          if (buf.length <= target) { best = buf; lo = mid + 1; } else hi = mid - 1;
+        }
+        if (best) { out = best; break; }
+        scale *= 0.75;
+      }
+      if (!out) throw new Error("Não foi possível chegar a esse tamanho — tente um valor maior");
+    }
+    const dest = uniquePath(dir, `${stem} Comprimido`, fmt);
+    fs.writeFileSync(dest, out);
+    return exists(dest);
+  } finally {
+    if (tmp) fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+/** Vídeo: qualidade (CRF), resolução máxima e, se pedido, tamanho alvo (bitrate calculado pela duração). */
+async function compressVideo(filePath, opts, ff, dest) {
+  const crf = { alta: 23, media: 28, baixa: 33 }[opts.quality] || 28;
+  const height = Number(opts.height) || 0;
+  const vf = height ? `scale=-2:'min(${height},ih)'` : "scale=trunc(iw/2)*2:trunc(ih/2)*2";
+  const targetMB = Number(opts.targetMB) || 0;
+  let rate = ["-crf", String(crf)];
+  if (targetMB > 0) {
+    const dur = await mediaDuration(filePath);
+    if (dur > 0) {
+      const kbps = Math.max(150, Math.floor((targetMB * 8192) / dur - 128));
+      rate = ["-b:v", `${kbps}k`, "-maxrate", `${kbps}k`, "-bufsize", `${kbps * 2}k`];
+    }
+  }
+  return ff(["-c:v", "libx264", ...rate, "-preset", "veryfast", "-vf", vf, "-c:a", "aac", "-b:a", "128k", "-pix_fmt", "yuv420p", "-movflags", "+faststart"], dest);
+}
+
+/** Tags de áudio/vídeo (título, artista, álbum, ano, comentário) e capa em MP3/M4A/FLAC. */
+async function mediaTags(filePath, opts) {
+  const dir = path.dirname(filePath);
+  const stem = path.parse(filePath).name;
+  const ext = path.extname(filePath).slice(1) || "bin";
+  const from = fmtOf(filePath);
+  const dest = uniquePath(dir, `${stem} Metadados`, ext);
+  const args = ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", filePath];
+  const cover = opts.cover && fs.existsSync(opts.cover) && ["mp3", "m4a", "flac"].includes(from) ? opts.cover : null;
+  if (cover) args.push("-i", cover, "-map", "0:a", "-map", "1:v", "-disposition:v:0", "attached_pic");
+  else args.push("-map", "0");
+  args.push("-c", "copy");
+  if (from === "mp3") args.push("-id3v2_version", "3");
+  const tag = { title: "title", artist: "artist", album: "album", year: "date", comment: "comment", genre: "genre", copyright: "copyright" };
+  Object.entries(tag).forEach(([k, name]) => {
+    const v = String((opts && opts[k]) || "").trim();
+    if (v) args.push("-metadata", `${name}=${v}`);
+  });
+  await spawnWait(need("ffmpeg"), [...args, dest], { timeout: 10 * 60 * 1000 });
+  return exists(dest);
+}
+
+async function runTool(tool, filePath, opts = {}) {
   const dir = path.dirname(filePath);
   const stem = path.parse(filePath).name;
   const from = fmtOf(filePath);
   const kind = kindOf(from);
   const ext = path.extname(filePath).slice(1) || "bin";
-  const ff = (args, dest) => spawnWait(need("ffmpeg"), ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", filePath, ...args, dest], { timeout: 30 * 60 * 1000 }).then(() => exists(dest));
+  const ff = (args, dest, extra = []) => ffmpegRun(["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", filePath, ...extra, ...args, dest], { input: filePath }).then(() => exists(dest));
   if (tool === "extractArchive") {
     const destDir = uniqueDir(dir, stem);
     fs.mkdirSync(destDir, { recursive: true });
@@ -1165,13 +1344,28 @@ async function runTool(tool, filePath) {
     return destDir;
   }
   if (kind === "pdf") {
+    if (tool === "removeMetadata" && !opts.strip && hasTags(opts)) {
+      const dest = uniquePath(dir, `${stem} Metadados`, "pdf");
+      const tmp = scratch();
+      try {
+        const script = path.join(tmp, "meta.js");
+        fs.writeFileSync(script, PDF_META_JS, "utf8");
+        const plan = path.join(tmp, "meta.json");
+        fs.writeFileSync(plan, JSON.stringify({ Title: opts.title || "", Author: opts.artist || "", Subject: opts.comment || "", Keywords: opts.keywords || "" }), "utf8");
+        await mutoolRun(["run", script, filePath, plan, dest], { timeout: 300000 });
+        return exists(dest);
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+    }
     if (tool === "compress" || tool === "removeMetadata") {
       const dest = uniquePath(dir, `${stem} ${tool === "compress" ? "Comprimido" : "Sem Metadados"}`, "pdf");
+      const strong = opts.level === "forte";
       // compress: reamostra imagens acima de 150 dpi para 150 dpi e recomprime em JPEG (q75), só se ficar menor.
       const args = tool === "compress"
         ? ["clean", "-gggg", "-z", "-f", "-i", "-Z", "-m",
-          "--color-image-subsample-dpi", "200,150", "--gray-image-subsample-dpi", "200,150",
-          "--color-image-recompress-method", "jpeg:75", "--gray-image-recompress-method", "jpeg:75"]
+          "--color-image-subsample-dpi", strong ? "110,96" : "200,150", "--gray-image-subsample-dpi", strong ? "110,96" : "200,150",
+          "--color-image-recompress-method", strong ? "jpeg:55" : "jpeg:75", "--gray-image-recompress-method", strong ? "jpeg:55" : "jpeg:75"]
         : ["clean", "-gg", "-z"];
       await mutoolRun([...args, filePath, dest], { timeout: 300000 });
       exists(dest);
@@ -1202,11 +1396,19 @@ async function runTool(tool, filePath) {
     }
   }
   if (kind === "image") {
-    if (tool === "compress") {
-      const dest = uniquePath(dir, `${stem} Comprimido`, "jpg");
-      return nativeConvertible(from, "jpg")
-        ? nativeImage(filePath, dest, "jpg")
-        : spawnWait(need("magick"), [`${filePath}[0]`, "-background", "white", "-flatten", "-quality", "80", dest]).then(() => exists(dest));
+    if (tool === "compress") return compressImage(filePath, opts);
+    if (tool === "removeMetadata" && !opts.strip && hasTags(opts) && ["jpg", "png", "webp", "tiff", "avif"].includes(from)) {
+      // Regrava só as tags pedidas; o resto (inclusive localização/GPS) sai.
+      const dest = uniquePath(dir, `${stem} Metadados`, ext);
+      const sharp = require("sharp");
+      const IFD0 = {};
+      if (opts.artist) IFD0.Artist = String(opts.artist);
+      if (opts.title) IFD0.ImageDescription = String(opts.title);
+      if (opts.copyright) IFD0.Copyright = String(opts.copyright);
+      if (opts.make) IFD0.Make = String(opts.make);
+      if (opts.model) IFD0.Model = String(opts.model);
+      await sharp(filePath, { failOn: "none" }).rotate().withExif({ IFD0 }).toFile(dest);
+      return exists(dest);
     }
     if (tool === "removeMetadata") {
       const dest = uniquePath(dir, `${stem} Sem Metadados`, ext);
@@ -1229,11 +1431,21 @@ async function runTool(tool, filePath) {
     }
   }
   if (kind === "audio" || kind === "video" || kind === "gif") {
+    if (tool === "removeMetadata" && !opts.strip && (hasTags(opts) || opts.cover)) return mediaTags(filePath, opts);
     if (tool === "removeMetadata") return ff(["-map_metadata", "-1", "-c", "copy"], uniquePath(dir, `${stem} Sem Metadados`, ext));
-    if (tool === "compress" && kind === "audio") return ff(["-vn", "-b:a", "128k"], uniquePath(dir, `${stem} Comprimido`, "mp3"));
-    if (tool === "compress") return ff(["-c:v", "libx264", "-crf", "28", "-preset", "veryfast", "-c:a", "aac", "-b:a", "128k", "-pix_fmt", "yuv420p"], uniquePath(dir, `${stem} Comprimido`, "mp4"));
+    if (tool === "compress" && kind === "audio") {
+      const kbps = [48, 64, 96, 128, 160, 192].includes(Number(opts.bitrate)) ? Number(opts.bitrate) : 128;
+      return ff(["-vn", "-b:a", `${kbps}k`], uniquePath(dir, `${stem} Comprimido`, "mp3"));
+    }
+    if (tool === "compress") return compressVideo(filePath, opts, ff, uniquePath(dir, `${stem} Comprimido`, "mp4"));
     if (tool === "normalizeAudio") return ff(["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"], uniquePath(dir, `${stem} Normalizado`, ext));
-    if (tool === "audioChannels") return ff(["-ac", "1"], uniquePath(dir, `${stem} Mono`, ext));
+    if (tool === "audioChannels") {
+      const mode = opts.mode || "mono";
+      if (mode === "stereo") return ff(["-ac", "2"], uniquePath(dir, `${stem} Estéreo`, ext));
+      if (mode === "swap") return ff(["-af", "pan=stereo|c0=c1|c1=c0"], uniquePath(dir, `${stem} Canais Invertidos`, ext));
+      if (mode === "left" || mode === "right") return ff(["-af", `pan=mono|c0=${mode === "left" ? "c0" : "c1"}`], uniquePath(dir, `${stem} ${mode === "left" ? "Esquerdo" : "Direito"}`, ext));
+      return ff(["-ac", "1"], uniquePath(dir, `${stem} Mono`, ext));
+    }
     if (tool === "muteVideo") return ff(["-c:v", "copy", "-an"], uniquePath(dir, `${stem} Sem Som`, ext));
     if (tool === "videoSnapshots") {
       const outDir = uniqueDir(dir, `${stem} Capturas`);
@@ -1301,14 +1513,19 @@ async function runMany(id, paths) {
   throw new Error("Essa ferramenta ainda não está disponível para este arquivo");
 }
 
-async function run(id, filePath) {
+async function run(id, filePath, { onProgress } = {}) {
   const dir = path.dirname(filePath);
   const stem = path.parse(filePath).name;
-  if (id.startsWith("conv:")) return convert(filePath, id.slice(5));
-  if (id.startsWith("tool:")) {
-    const tool = id.slice(5);
-    if (tool === "copy") return run("act:copy", filePath);
-    return runTool(tool, filePath);
+  jobProgress = onProgress || null;
+  try {
+    if (id.startsWith("conv:")) return await convert(filePath, id.slice(5));
+    if (id.startsWith("tool:")) {
+      const tool = id.slice(5);
+      if (tool === "copy") return await run("act:copy", filePath);
+      return await runTool(tool, filePath);
+    }
+  } finally {
+    jobProgress = null;
   }
   if (id === "act:copy") {
     const dest = uniquePath(dir, stem, path.extname(filePath).slice(1) || "bin");
@@ -1351,8 +1568,13 @@ async function applyStudio(id, filePath, spec) {
   const stem = path.parse(filePath).name;
   const ext = path.extname(filePath).slice(1) || "bin";
   const job = spec || {};
+  if (FORM.has(tool)) {
+    jobProgress = job.onProgress || null;
+    try { return await runTool(tool, filePath, job.opts || {}); } finally { jobProgress = null; }
+  }
   if (job.png) return writePng(job.png, uniquePath(dir, `${stem} ${STUDIO_SUFFIX[tool] || "Editado"}`, "png"));
-  const ff = (args, dest) => spawnWait(need("ffmpeg"), ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", ...args, dest], { timeout: 30 * 60 * 1000 }).then(() => exists(dest));
+  jobProgress = job.onProgress || null;
+  const ff = (args, dest) => ffmpegRun(["-nostdin", "-hide_banner", "-loglevel", "error", "-y", ...args, dest], { input: filePath }).then(() => exists(dest));
   const start = Math.max(0, Number(job.start) || 0);
   const end = Math.max(start, Number(job.end) || 0);
   if (tool === "trimVideo" || tool === "trimAudio") {
@@ -1426,6 +1648,17 @@ async function applyStudio(id, filePath, spec) {
   throw new Error("Essa ferramenta ainda não está disponível para este arquivo");
 }
 
+/** Script do `mutool run`: grava Título/Autor/Assunto/Palavras-chave sem rasterizar. */
+const PDF_META_JS = `
+var doc = Document.openDocument(scriptArgs[0]);
+var pdf = doc.asPDF ? doc.asPDF() : doc;
+var meta = JSON.parse(read(scriptArgs[1]));
+var info = pdf.getTrailer().get("Info");
+if (!info || info.isNull()) { info = pdf.addObject(pdf.newDictionary()); pdf.getTrailer().put("Info", info); }
+for (var k in meta) { if (meta[k]) info.put(k, pdf.newString(meta[k])); }
+pdf.save(scriptArgs[2], "garbage,compress");
+`;
+
 /** Script do `mutool run`: reordena, gira e remove páginas sem perder qualidade. */
 const ORGANIZE_JS = `
 var src = Document.openDocument(scriptArgs[0]);
@@ -1456,4 +1689,4 @@ async function studioPages(filePath) {
   return { tmp, pages };
 }
 
-module.exports = { build, isBatch, isDir, runMany, uniqueTarget, pending, run, tools, prepare, targets, toolsFor, kindOf, fmtOf, needsStudio, applyStudio, studioPages };
+module.exports = { studioForm, build, isBatch, isDir, runMany, uniqueTarget, pending, run, tools, prepare, targets, toolsFor, kindOf, fmtOf, needsStudio, applyStudio, studioPages };

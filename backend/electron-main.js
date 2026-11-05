@@ -4169,7 +4169,8 @@ app.whenReady().then(async () => {
             pages = prep.pages;
           }
           try { bus.removeHandler("studio-job"); } catch { /* ignore */ }
-          bus.handle("studio-job", () => ({ id: sliceId, filePath: target, pages, ...batch }));
+          const form = shiftWheels.studioForm(sliceId, target);
+          bus.handle("studio-job", () => ({ id: sliceId, filePath: target, pages, form, ...batch }));
           await win.loadFile(path.join(__dirname, "studio.html"));
         })().catch((err) => {
           if (!settled) {
@@ -4318,14 +4319,16 @@ app.whenReady().then(async () => {
               const spec = await openFileStudio(id, p, { files: list, index: i, total: list.length, rest: list.slice(i + 1), state: studioState });
               if (spec.state) studioState = spec.state;
               showShiftToast(label, list.length > 1 ? i / list.length : -1);
-              out = await shiftWheels.applyStudio(id, p, spec);
+              const tick = (f) => showShiftToast(label, list.length > 1 ? (i + f) / list.length : f);
+              out = await shiftWheels.applyStudio(id, p, { ...spec, onProgress: tick });
               if (spec.all) {
                 // "Aplicar a Todos": mesmo ajuste nos arquivos restantes, sem reabrir a janela.
                 for (let j = i + 1; j < list.length; j += 1) {
                   showShiftToast(`${shiftVerb(id)} ${j + 1} de ${list.length}`, j / list.length);
                   const each = Array.isArray(spec.pngs) ? { ...spec, png: spec.pngs[j - i] } : spec;
                   if (Array.isArray(spec.pngs) && !each.png) { failed += 1; continue; }
-                  try { out = await shiftWheels.applyStudio(id, list[j], each); } catch (err) {
+                  const tickJ = (f) => showShiftToast(`${shiftVerb(id)} ${j + 1} de ${list.length}`, (j + f) / list.length);
+                  try { out = await shiftWheels.applyStudio(id, list[j], { ...each, onProgress: tickJ }); } catch (err) {
                     failed += 1;
                     lastError = err && err.message ? err.message : String(err);
                   }
@@ -4336,7 +4339,7 @@ app.whenReady().then(async () => {
             }
             showShiftToast(label, list.length > 1 ? i / list.length : -1);
             try {
-              out = await shiftWheels.run(id, p);
+              out = await shiftWheels.run(id, p, { onProgress: (f) => showShiftToast(label, list.length > 1 ? (i + f) / list.length : f) });
             } catch (err) {
               if (list.length === 1) throw err;
               failed += 1;
