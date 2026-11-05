@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="utf-8" />
+<title>VOR · Prateleira</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; font: 12.5px/1.3 "Segoe UI", sans-serif; color: #f4f4f5; user-select: none; }
+  .shelf { margin: 6px; height: calc(100% - 12px); display: flex; flex-direction: column; border-radius: 14px; background: rgba(21,21,23,.94); border: 1px solid rgba(255,255,255,.14); box-shadow: 0 10px 28px rgba(0,0,0,.4); animation: pop .2s cubic-bezier(.2,1.2,.3,1); }
+  .shelf.over { border-color: #fff; }
+  @keyframes pop { from { transform: scale(.94); opacity: 0; } }
+  header { display: flex; align-items: center; gap: 6px; padding: 8px 10px 6px; -webkit-app-region: drag; }
+  header b { flex: 1; font-size: 11px; letter-spacing: .06em; color: #a1a1aa; }
+  header button { -webkit-app-region: no-drag; background: transparent; color: #d4d4d8; border: 0; border-radius: 6px; padding: 2px 6px; cursor: pointer; font-size: 12px; }
+  header button:hover { background: rgba(255,255,255,.1); }
+  ul { list-style: none; margin: 0; padding: 0 6px 6px; overflow: auto; flex: 1; }
+  li { display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: 8px; cursor: grab; }
+  li:hover { background: rgba(255,255,255,.07); }
+  li img { width: 24px; height: 24px; flex: none; }
+  li span { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  li button { visibility: hidden; background: transparent; border: 0; color: #a1a1aa; cursor: pointer; }
+  li:hover button { visibility: visible; }
+  .all { margin: 0 6px 6px; padding: 7px; text-align: center; border-radius: 8px; background: rgba(255,255,255,.08); cursor: grab; }
+  .empty { color: #71717a; text-align: center; padding: 14px 8px; }
+</style>
+</head>
+<body>
+<div class="shelf" id="shelf">
+  <header><b id="count">PRATELEIRA</b><button id="clear" title="Limpar">Limpar</button><button id="close" title="Fechar (Esc)">✕</button></header>
+  <ul id="list"></ul>
+  <div class="all" id="all" draggable="true" hidden>Arrastar todos</div>
+</div>
+<script>
+let items = [];
+const $ = (id) => document.getElementById(id);
+function draw() {
+  $("list").innerHTML = "";
+  $("count").textContent = items.length ? `PRATELEIRA · ${items.length}` : "PRATELEIRA";
+  if (!items.length) { const e = document.createElement("li"); e.className = "empty"; e.textContent = "Solte arquivos aqui"; $("list").appendChild(e); }
+  items.forEach((it) => {
+    const li = document.createElement("li");
+    li.draggable = true;
+    li.title = it.path;
+    const img = document.createElement("img");
+    if (it.icon) img.src = it.icon;
+    const name = document.createElement("span");
+    name.textContent = it.name;
+    const x = document.createElement("button");
+    x.textContent = "✕"; x.title = "Tirar da prateleira";
+    x.onclick = (ev) => { ev.stopPropagation(); window.shelf.remove(it.path); };
+    li.append(img, name, x);
+    li.addEventListener("dragstart", (ev) => { ev.preventDefault(); window.shelf.drag([it.path]); });
+    li.ondblclick = () => window.shelf.open(it.path);
+    $("list").appendChild(li);
+  });
+  $("all").hidden = items.length < 2;
+}
+window.shelf.onItems((next) => { items = next; draw(); });
+$("all").addEventListener("dragstart", (ev) => { ev.preventDefault(); window.shelf.drag(items.map((i) => i.path)); });
+$("clear").onclick = () => window.shelf.clear();
+$("close").onclick = () => window.shelf.close();
+window.addEventListener("keydown", (ev) => { if (ev.key === "Escape") window.shelf.close(); });
+const shelfEl = $("shelf");
+window.addEventListener("dragover", (ev) => { ev.preventDefault(); shelfEl.classList.add("over"); });
+window.addEventListener("dragleave", () => shelfEl.classList.remove("over"));
+window.addEventListener("drop", (ev) => {
+  ev.preventDefault();
+  shelfEl.classList.remove("over");
+  const paths = [...(ev.dataTransfer.files || [])].map((f) => f.path).filter(Boolean);
+  if (paths.length) window.shelf.add(paths);
+});
+draw();
+</script>
+</body>
+</html>

@@ -4103,21 +4103,116 @@ app.whenReady().then(async () => {
           "foreach ($p in ($env:VOR_FILES -split '\\|')) { if ($p) { [void]$c.Add($p) } }; [System.Windows.Forms.Clipboard]::SetFileDropList($c)"],
           { windowsHide: true, env: { ...process.env, VOR_FILES: list.join("|") } });
       };
-      const openFloatShelf = (target) => {
+      /**
+       * Prateleira flutuante (Float): uma janela só, reaproveitada; acumula itens, gruda na borda
+       * da tela ao soltar perto dela e arrasta os arquivos para outros apps (startDrag nativo).
+       * Fechar destrói a janela — nada fica em memória.
+       */
+      let floatShelf = null;
+      let floatItems = [];
+      const shelfIcons = new Map();
+      const pushShelf = async () => {
+        if (!floatShelf || floatShelf.isDestroyed()) return;
+        const { app: electronApp } = require("electron");
+        const items = [];
+        for (const p of floatItems) {
+          let icon = shelfIcons.get(p);
+          if (icon === undefined) {
+            try { icon = (await electronApp.getFileIcon(p, { size: "normal" })).toDataURL(); } catch { icon = ""; }
+            shelfIcons.set(p, icon);
+          }
+          items.push({ path: p, name: path.basename(p), icon });
+        }
+        if (!floatShelf || floatShelf.isDestroyed()) return;
+        floatShelf.webContents.send("shelf-items", items);
+        const height = Math.min(420, 44 + Math.max(1, items.length) * 36 + (items.length > 1 ? 40 : 0) + 12);
+        const [w] = floatShelf.getSize();
+        floatShelf.setSize(w, height);
+        snapShelf();
+      };
+      const snapShelf = () => {
+        if (!floatShelf || floatShelf.isDestroyed()) return;
+        const b = floatShelf.getBounds();
+        const area = screen.getDisplayMatching(b).workArea;
+        const SNAP = 28;
+        let { x, y } = b;
+        if (Math.abs(b.x - area.x) < SNAP) x = area.x;
+        if (Math.abs(area.x + area.width - (b.x + b.width)) < SNAP) x = area.x + area.width - b.width;
+        if (Math.abs(b.y - area.y) < SNAP) y = area.y;
+        if (Math.abs(area.y + area.height - (b.y + b.height)) < SNAP) y = area.y + area.height - b.height;
+        x = Math.min(Math.max(x, area.x), area.x + area.width - b.width);
+        y = Math.min(Math.max(y, area.y), area.y + area.height - b.height);
+        if (x !== b.x || y !== b.y) floatShelf.setPosition(x, y);
+      };
+      const openFloatShelf = (targets) => {
         const { BrowserWindow } = require("electron");
-        const shelf = new BrowserWindow({
-          width: 280,
-          height: 64,
-          frame: false,
-          transparent: true,
-          alwaysOnTop: true,
-          skipTaskbar: true,
-          resizable: false,
-          webPreferences: { preload: path.join(__dirname, "studio-preload.js"), contextIsolation: true },
+        const list = (Array.isArray(targets) ? targets : [targets]).map(String).filter(Boolean);
+        list.forEach((p) => { if (!floatItems.includes(p)) floatItems.push(p); });
+        if (floatShelf && !floatShelf.isDestroyed()) {
+          floatShelf.showInactive();
+          pushShelf();
+          return;
+        }
+        const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+        const w = 260;
+        floatShelf = new BrowserWindow({
+          width: w, height: 120, x: area.x + area.width - w, y: area.y + Math.round(area.height * 0.25),
+          frame: false, transparent: true, alwaysOnTop: true, skipTaskbar: true, resizable: false,
+          show: false, hasShadow: false, maximizable: false, minimizable: false, fullscreenable: false,
+          webPreferences: { preload: path.join(__dirname, "float-shelf-preload.js"), contextIsolation: true, sandbox: false },
         });
-        const name = path.basename(target).replace(/[&<>]/g, "");
-        const html = `<!doctype html><meta charset="utf-8"><body draggable="true" style="margin:8px;background:#151515;color:#f4f4f5;font:13px Segoe UI;border:1px solid rgba(255,255,255,.16);border-radius:12px;height:48px;display:flex;align-items:center;padding:0 14px;cursor:grab">${name}<script>document.body.addEventListener('dragstart',(e)=>{e.preventDefault();window.studio.drag(${JSON.stringify(target)});});</script></body>`;
-        shelf.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+        floatShelf.setAlwaysOnTop(true, "floating");
+        let snapTimer = null;
+        floatShelf.on("moved", snapShelf);
+        floatShelf.on("move", () => { clearTimeout(snapTimer); snapTimer = setTimeout(snapShelf, 250); });
+        floatShelf.on("closed", () => { floatShelf = null; floatItems = []; shelfIcons.clear(); });
+        floatShelf.loadFile(path.join(__dirname, "float-shelf.html")).then(() => {
+          if (!floatShelf || floatShelf.isDestroyed()) return;
+          floatShelf.showInactive();
+          pushShelf();
+        }).catch(() => {});
+      };
+      const fromShelf = (event) => floatShelf && !floatShelf.isDestroyed() && event.sender === floatShelf.webContents;
+      ipcMain.on("shelf-drag", (event, files) => {
+        if (!fromShelf(event)) return;
+        const list = (Array.isArray(files) ? files : [files]).map(String).filter((p) => fs.existsSync(p));
+        if (!list.length) return;
+        try {
+          const { nativeImage } = require("electron");
+          const icon = nativeImage.createFromPath(path.join(__dirname, "..", "build", "icon.ico"));
+          event.sender.startDrag({ file: list[0], files: list, icon: icon.isEmpty() ? nativeImage.createEmpty() : icon.resize({ width: 32 }) });
+        } catch { /* o arrasto nativo falhou */ }
+      });
+      ipcMain.on("shelf-add", (event, files) => { if (fromShelf(event)) openFloatShelf(files); });
+      ipcMain.on("shelf-remove", (event, file) => {
+        if (!fromShelf(event)) return;
+        floatItems = floatItems.filter((p) => p !== file);
+        pushShelf();
+      });
+      ipcMain.on("shelf-open", (event, file) => { if (fromShelf(event)) require("electron").shell.openPath(String(file)).catch(() => {}); });
+      ipcMain.on("shelf-clear", (event) => { if (fromShelf(event)) { floatItems = []; pushShelf(); } });
+      ipcMain.on("shelf-close", (event) => { if (fromShelf(event)) floatShelf.close(); });
+      /**
+       * Compartilhar: abre o painel nativo de compartilhamento do Windows pelo verbo do Explorer
+       * (Windows.ModernShare). Seleção múltipla ou sistema sem o verbo: copia os arquivos e avisa.
+       */
+      const shareFiles = (list) => {
+        const { execFile } = require("child_process");
+        const fallback = () => {
+          copyFileToClipboard(list);
+          try {
+            const { Notification } = require("electron");
+            if (Notification.isSupported()) new Notification({ title: "VOR", body: list.length > 1 ? `${list.length} itens copiados — cole no app para compartilhar.` : "Arquivo copiado — cole no app para compartilhar." }).show();
+          } catch { /* ignore */ }
+        };
+        if (list.length !== 1) { fallback(); return; }
+        const script = "$f = $env:VOR_FILE; $sh = New-Object -ComObject Shell.Application; " +
+          "$item = $sh.Namespace([IO.Path]::GetDirectoryName($f)).ParseName([IO.Path]::GetFileName($f)); " +
+          "if (-not $item) { exit 2 }; " +
+          "try { $item.InvokeVerb('Windows.ModernShare'); Start-Sleep -Milliseconds 1500; exit 0 } catch { exit 3 }";
+        execFile("powershell.exe", ["-NoProfile", "-STA", "-Command", script], { windowsHide: true, env: { ...process.env, VOR_FILE: list[0] }, timeout: 15000 }, (err) => {
+          if (err) fallback();
+        });
       };
       ipcMain.on("studio-drag", (event, target) => {
         try {
@@ -4271,12 +4366,16 @@ app.whenReady().then(async () => {
           for (const p of shiftWheels.isBatch(id) ? list.slice(0, 1) : list) {
             await shiftWheels.prepare(id, p, (status) => showShiftToast(status, -1));
           }
-          if (id === "act:airDrop" || id === "act:copy") {
+          if (id === "act:airDrop") {
+            shareFiles(list);
+            return { ok: true, out: filePath };
+          }
+          if (id === "act:copy") {
             copyFileToClipboard(list);
             return { ok: true, out: filePath };
           }
           if (id === "act:float") {
-            openFloatShelf(list[0]);
+            openFloatShelf(list);
             return { ok: true, out: filePath };
           }
           if (id === "act:copyPath") {

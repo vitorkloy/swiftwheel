@@ -1539,8 +1539,12 @@ async function run(id, filePath, { onProgress } = {}) {
   }
   if (id === "act:copyPath") return filePath;
   if (id === "act:openTerminal") {
-    spawn("cmd", ["/C", "start", "cmd", "/K", `cd /d "${dir}"`], { detached: true, stdio: "ignore", windowsVerbatimArguments: true }).unref();
-    return dir;
+    // Pasta: abre nela; arquivo: abre na pasta dele. Windows Terminal se existir, senão PowerShell.
+    const where = isDir(filePath) ? filePath : dir;
+    const wt = which("wt") || (process.env.LOCALAPPDATA && [path.join(process.env.LOCALAPPDATA, "Microsoft", "WindowsApps", "wt.exe")].find((p) => fs.existsSync(p)));
+    if (wt) spawn(wt, ["-d", where], { detached: true, stdio: "ignore", windowsHide: false }).unref();
+    else spawn("cmd", ["/C", "start", "", "powershell.exe", "-NoExit", "-Command", `Set-Location -LiteralPath '${where.replace(/'/g, "''")}'`], { detached: true, stdio: "ignore", cwd: where }).unref();
+    return where;
   }
   throw new Error("Essa ação ainda não está disponível");
 }
