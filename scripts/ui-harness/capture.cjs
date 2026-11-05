@@ -20,9 +20,16 @@ async function shoot(name, win, theme) {
   fs.writeFileSync(path.join(out, `${name}-${theme}.png`), img.toPNG());
   console.log("saved", `${name}-${theme}.png`);
 }
-const make = (w, h, preload) => new BrowserWindow({ width: w, height: h, show: false, frame: false, transparent: false, backgroundColor: "#00000000",
-  webPreferences: { preload, contextIsolation: true, webSecurity: false, offscreen: false } });
+const make = (w, h, preload) => watch(new BrowserWindow({ width: w, height: h, show: false, frame: false, transparent: false, backgroundColor: "#00000000",
+  webPreferences: { preload, contextIsolation: true, webSecurity: false, offscreen: false } }));
+function watch(win) {
+  win.webContents.on("console-message", (_e, level, msg) => { if (level >= 2) console.log("console:", msg); });
+  win.webContents.on("render-process-gone", (_e, d) => console.log("gone:", d.reason));
+  win.webContents.on("did-fail-load", (_e, code, desc, url) => console.log("fail:", code, desc, url));
+  return win;
+}
 
+process.on("unhandledRejection", (e) => console.log("rejection:", e && e.message));
 app.whenReady().then(async () => {
   const accent = process.env.VOR_ACCENT || "#FFFFFF";
   for (const theme of ["black", "white"]) {
@@ -39,13 +46,13 @@ app.whenReady().then(async () => {
       try { ipcMain.removeHandler("studio-job"); } catch { /* ignore */ }
       ipcMain.handle("studio-job", () => ({ pages: [], ...job, appearance }));
       const s = make(size[0], size[1], path.join(backend, "studio-preload.js"));
-      await s.loadFile(path.join(backend, "studio.html"));
+      await s.loadFile(path.join(backend, "studio.html")).catch((e) => console.log("load", e.message));
       await sleep(400);
       await shoot(name, s, theme); s.destroy();
     }
 
     const shelf = make(296, 260, path.join(backend, "float-shelf-preload.js"));
-    await shelf.loadFile(path.join(backend, "float-shelf.html"));
+    await shelf.loadFile(path.join(backend, "float-shelf.html")).catch((e) => console.log("load", e.message));
     shelf.webContents.send("shelf-theme", appearance);
     shelf.webContents.send("shelf-items", ["photo.jpg", "image.png", "doc.pdf", "video.mp4"].map((n) => ({ path: path.join(samples, n), name: n, icon: "" })));
     await shoot("shelf", shelf, theme); shelf.destroy();
