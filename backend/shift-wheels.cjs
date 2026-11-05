@@ -1217,6 +1217,17 @@ async function convert(filePath, to) {
     else if (to === "gif") args.push("-filter_complex", "fps=12,scale='min(640,iw)':-2:flags=lanczos,split[a][b];[a]palettegen=stats_mode=diff[p];[b][p]paletteuse=dither=bayer:bayer_scale=4:diff_mode=rectangle", "-loop", "0");
     else if (kind === "gif" || to === "mp4" || to === "mov") args.push("-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2");
     if (kind === "gif" && to !== "gif") args.push("-movflags", "+faststart");
+    if (kind === "audio") {
+      // Capa embutida (stream de imagem): mantém em MP3/M4A/FLAC; se o destino recusar, converte só o áudio.
+      const keepCover = ["mp3", "m4a", "flac"].includes(to);
+      try {
+        await ffmpegRun([...args, "-map", "0:a", ...(keepCover ? ["-map", "0:v?", "-c:v", "copy", "-disposition:v", "attached_pic"] : []), dest], { input: filePath });
+      } catch (err) {
+        if (!keepCover) throw err;
+        await ffmpegRun([...args, "-map", "0:a", dest], { input: filePath });
+      }
+      return exists(dest);
+    }
     await ffmpegRun([...args, dest], { input: filePath });
     return exists(dest);
   }
