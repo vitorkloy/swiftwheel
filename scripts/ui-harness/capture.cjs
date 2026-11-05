@@ -20,8 +20,9 @@ async function shoot(name, win, theme) {
   fs.writeFileSync(path.join(out, `${name}-${theme}.png`), img.toPNG());
   console.log("saved", `${name}-${theme}.png`);
 }
-const make = (w, h, preload) => watch(new BrowserWindow({ width: w, height: h, show: false, frame: false, transparent: false, backgroundColor: "#00000000",
-  webPreferences: { preload, contextIsolation: true, webSecurity: false, offscreen: true } }));
+// Offscreen pinta janelas pequenas, mas não decodifica <img> de file:// no estúdio; o estúdio usa janela real fora da tela.
+const make = (w, h, preload, real = false) => watch(new BrowserWindow({ width: w, height: h, show: real, x: real ? -4000 : undefined, y: 0, skipTaskbar: true, frame: false, transparent: false, backgroundColor: "#00000000",
+  webPreferences: { preload, contextIsolation: true, webSecurity: false, offscreen: !real } }));
 function watch(win) {
   win.webContents.on("console-message", (_e, level, msg) => { if (level >= 2) console.log("console:", msg); });
   win.webContents.on("render-process-gone", (_e, d) => console.log("gone:", d.reason));
@@ -44,7 +45,9 @@ async function appShots(theme, accent) {
     await sleep(250);
     await shoot(`settings-${names[i]}`, w, theme);
   }
-  await w.webContents.executeJavaScript("(document.querySelector('.zs-ws-card')||{click(){}}).click()");
+  await w.webContents.executeJavaScript("document.querySelectorAll('.zs-nav button')[4].click()");
+  await sleep(450);
+  await w.webContents.executeJavaScript("(document.querySelector('.zs-ws-card:not(.is-new)')||{click(){}}).click()");
   await sleep(500);
   await shoot("settings-workspace-editor", w, theme);
   w.destroy();
@@ -73,7 +76,7 @@ app.whenReady().then(async () => {
     ]) {
       try { ipcMain.removeHandler("studio-job"); } catch { /* ignore */ }
       ipcMain.handle("studio-job", () => ({ pages: [], ...job, appearance }));
-      const s = make(size[0], size[1], path.join(backend, "studio-preload.js"));
+      const s = make(size[0], size[1], path.join(backend, "studio-preload.js"), true);
       await s.loadFile(path.join(backend, "studio.html")).catch((e) => console.log("load", e.message));
       await sleep(400);
       await shoot(name, s, theme); s.destroy();
