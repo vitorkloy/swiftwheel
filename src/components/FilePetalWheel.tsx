@@ -229,7 +229,10 @@ export function FilePetalWheel({ items, activeIndex, centerActive, formatLabel, 
         const [x, y] = labelPoint(index, count);
         const color = active ? P.onAccent : (disabled ? P.textMuted : P.text);
         const text = petalText(item.label);
-        const tooWide = text.length * labelSize * 0.6 > labelWidth * 2;
+        // Palavra longa (COMPARTILHAR, METADADOS): reduz a fonte para caber numa linha da fatia.
+        const longest = Math.max(...text.split(/\s+/).map((w) => w.length));
+        const fit = Math.min(labelSize, (labelWidth - 4) / Math.max(1, longest * 0.68));
+        const tooWide = longest * fit * 0.68 > labelWidth;
         const Icon = item.id.startsWith('conv:') ? null : getIcon(item.iconName);
         return (
           <div
@@ -244,9 +247,9 @@ export function FilePetalWheel({ items, activeIndex, centerActive, formatLabel, 
               color,
               fontFamily: 'var(--font-radial)',
               fontWeight: 700,
-              fontSize: labelSize,
+              fontSize: fit,
               lineHeight: 1.1,
-              letterSpacing: '0.045em',
+              letterSpacing: fit < labelSize ? '0.02em' : '0.045em',
               textTransform: 'uppercase',
             }}
           >

@@ -20,7 +20,7 @@ async function shoot(name, win, theme) {
   fs.writeFileSync(path.join(out, `${name}-${theme}.png`), img.toPNG());
   console.log("saved", `${name}-${theme}.png`);
 }
-const make = (w, h, preload) => watch(new BrowserWindow({ width: w, height: h, show: false, frame: false, transparent: false, backgroundColor: "#00000000",
+const make = (w, h, preload) => watch(new BrowserWindow({ width: w, height: h, show: true, x: -4000, y: 0, skipTaskbar: true, frame: false, transparent: false, backgroundColor: "#00000000",
   webPreferences: { preload, contextIsolation: true, webSecurity: false, offscreen: false } }));
 function watch(win) {
   win.webContents.on("console-message", (_e, level, msg) => { if (level >= 2) console.log("console:", msg); });

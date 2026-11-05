@@ -38,6 +38,7 @@
   .x { -webkit-app-region: no-drag; width: 28px; height: 28px; padding: 0; border-radius: 999px; background: transparent; color: var(--text-2);
     display: grid; place-items: center; font-size: 15px; line-height: 1; }
   .x:hover { background: var(--hover); color: var(--text); }
+  main.plain { background: transparent; box-shadow: none; align-items: flex-start; overflow: auto; }
   main { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; margin: 0 14px; padding: 14px;
     position: relative; border-radius: 12px; background: var(--stage); box-shadow: inset 0 0 0 1px var(--line); }
   .bar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; padding: 12px 18px 0; color: var(--text-2); font-size: 12px; }
@@ -104,6 +105,7 @@ const titles = {
   cropImage: "RECORTAR", redactImage: "OCULTAR", editImage: "EDITAR", annotateImage: "ANOTAR", frameImage: "FUNDO",
   cropVideo: "RECORTAR", redactVideo: "OCULTAR", trimVideo: "APARAR", splitVideo: "DIVIDIR", changeVideoSpeed: "VELOCIDADE", videoSnapshots: "CAPTURA",
   trimAudio: "APARAR", redactAudio: "BIPAR", audioToVideo: "FORMA DE ONDA", organizePDF: "ORGANIZAR", splitPDF: "DIVIDIR",
+  compress: "COMPRIMIR", removeMetadata: "METADADOS", audioChannels: "CANAIS",
 };
 let job = null;
 let rect = null;
@@ -376,6 +378,7 @@ async function imageTool(tool) {
     }
   }
   const fit = () => { const r = stage.getBoundingClientRect(); c.width = Math.max(1, Math.round(r.width)); c.height = Math.max(1, Math.round(r.height)); refresh(); };
+  refresh();
   requestAnimationFrame(fit);
   window.addEventListener("resize", fit);
 
@@ -491,6 +494,7 @@ function formTool(tool) {
     });
   }
   sync();
+  $("main").classList.add("plain");
   $("main").appendChild(box);
   $("ok").onclick = () => done({ opts: values, state: values });
 }
