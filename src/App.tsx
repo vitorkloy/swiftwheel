@@ -180,6 +180,8 @@ export default function App() {
     mode: string;
     format: string;
     path: string;
+    /** Vários arquivos/pastas no mesmo arrasto; `path` é o primeiro. */
+    paths?: string[];
     items: { id: string; title: string; available: boolean; reason: string | null }[];
   } | null>(null);
   const fileWheelRef = useRef(fileWheel);
@@ -2089,6 +2091,7 @@ export default function App() {
         mode: payload.mode,
         format: payload.format,
         path: payload.path,
+        paths: payload.paths,
         items: payload.items,
       });
     });
@@ -2498,7 +2501,7 @@ export default function App() {
         if (!slice || slice.available === false) {
           setExecutionError(selectedApp?.description || slice?.reason || 'Indisponível');
         } else {
-          void window.electron?.runFileSlice?.(selectedId, dragged.path);
+          void window.electron?.runFileSlice?.(selectedId, dragged.paths && dragged.paths.length > 1 ? dragged.paths : dragged.path);
         }
       }
       if (isDesktopMode && !panelSurfaceOpen) {

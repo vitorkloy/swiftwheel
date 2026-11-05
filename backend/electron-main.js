@@ -3894,6 +3894,8 @@ app.whenReady().then(async () => {
       let fileDragOrigin = null;
       let fileDragMode = null;
       let fileDragPath = "";
+      /** Todos os itens do arrasto (arquivo, pasta, vários ou mistos). `fileDragPath` é o primeiro. */
+      let fileDragPaths = [];
       let fileSourceOk = false;
       let fileButtonDown = false;
       let fileMods = { shift: false, ctrl: false, alt: false };
@@ -3975,9 +3977,11 @@ app.whenReady().then(async () => {
             try { fileDropHelper.stdin.write("hide\n"); } catch { /* ignore */ }
             continue;
           }
-          if (!line.startsWith("path ")) continue;
-          const dragged = line.slice(5).trim();
-          if (!dragged || dragged === fileDragPath || !fileDragOpen || !fileDragMode) continue;
+          let dragged = [];
+          if (line.startsWith("files ")) dragged = line.slice(6).split("|").map((p) => p.trim()).filter(Boolean);
+          else if (line.startsWith("path ")) dragged = [line.slice(5).trim()].filter(Boolean);
+          if (!dragged.length || !fileDragOpen || !fileDragMode) continue;
+          if (dragged.join("|") === fileDragPaths.join("|")) continue;
           const point = screen.getCursorScreenPoint();
           revealFileWheel(point.x, point.y, fileDragMode, dragged);
         }
@@ -4032,6 +4036,7 @@ app.whenReady().then(async () => {
       const releaseFileOverlay = (confirmSelection) => {
         fileDragOpen = false;
         fileDragPath = "";
+        fileDragPaths = [];
         fileGestureActive = false;
         fileDragMode = null;
         fileDragOrigin = null;
@@ -4052,18 +4057,22 @@ app.whenReady().then(async () => {
         const switching = fileDragOpen && mode !== fileDragMode;
         fileDragOpen = true;
         fileDragMode = mode;
-        if (filePath) fileDragPath = filePath;
+        const dropped = (Array.isArray(filePath) ? filePath : [filePath]).filter(Boolean);
+        if (dropped.length) {
+          fileDragPaths = dropped;
+          fileDragPath = dropped[0];
+        }
         const built = fileDragPath
-          ? shiftWheels.build(fileDragPath, mode)
+          ? shiftWheels.build(fileDragPaths.length ? fileDragPaths : [fileDragPath], mode)
           : shiftWheels.pending(mode);
         mainWindow.webContents.send("file-wheel", { ...built, x, y });
-        if (!switching && !filePath) {
+        if (!switching && !dropped.length) {
           fileGestureActive = true;
           startFileCursor();
           try { if (mainWindow.isVisible()) mainWindow.hide(); } catch { /* ignore */ }
           showFileWheelAtCursor(built, x, y);
         }
-        if (!filePath) placeFileCatcher(x, y);
+        if (!dropped.length) placeFileCatcher(x, y);
       };
       const noteFileMods = (ev) => {
         fileMods = {
@@ -4170,7 +4179,9 @@ app.whenReady().then(async () => {
           }
         });
       });
-      ipcMain.handle("run-file-slice", async (_event, id, filePath) => {
+      ipcMain.handle("run-file-slice", async (_event, id, target) => {
+        const list = (Array.isArray(target) ? target : [target]).map(String).filter(Boolean);
+        const filePath = list[0] || "";
         try {
           await shiftWheels.prepare(id, filePath, (status) => {
             try {
@@ -4246,6 +4257,7 @@ app.whenReady().then(async () => {
         fileDragOpen = false;
         fileDragMode = null;
         fileDragPath = "";
+        fileDragPaths = [];
         fileSourceOk = false;
         const token = ++fileSourceToken;
         queryFileSource(e.x, e.y).then((name) => {
@@ -4285,7 +4297,7 @@ app.whenReady().then(async () => {
           revealFileWheel(point.x, point.y, mode, "");
           return;
         }
-        if (mode !== fileDragMode) revealFileWheel(point.x, point.y, mode, fileDragPath);
+        if (mode !== fileDragMode) revealFileWheel(point.x, point.y, mode, fileDragPaths.length ? fileDragPaths : fileDragPath);
       });
       uIOhook.on("keyup", (e) => {
         const slot = modifierFromEvent(e);

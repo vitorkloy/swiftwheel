@@ -22,8 +22,6 @@ public class VorFileDrop : Form {
     [DllImport("kernel32.dll")]
     static extern bool WriteFile(IntPtr handle, byte[] bytes, int count, out int written, IntPtr overlapped);
     [DllImport("kernel32.dll")]
-    static extern bool PeekNamedPipe(IntPtr handle, byte[] buffer, int bufferSize, out int read, out int avail, out int left);
-    [DllImport("kernel32.dll")]
     static extern bool ReadFile(IntPtr handle, byte[] buffer, int count, out int read, IntPtr overlapped);
 
     static readonly IntPtr Topmost = new IntPtr(-1);
@@ -42,22 +40,29 @@ public class VorFileDrop : Form {
         stdin = GetStdHandle(-10);
         var form = new VorFileDrop();
         form.CreateControl();
-        var timer = new Timer();
-        timer.Interval = 30;
-        timer.Tick += delegate { form.Poll(); };
-        timer.Start();
+        // Leitura bloqueante numa thread: sem timer, o helper fica a 0% de CPU enquanto ninguém arrasta nada.
+        var reader = new System.Threading.Thread(delegate () { form.ReadLoop(); });
+        reader.IsBackground = true;
+        reader.Start();
         Emit("ready");
         Application.Run();
-        timer.Stop();
     }
 
-    void Poll() {
-        int read, avail, left;
-        if (!PeekNamedPipe(stdin, null, 0, out read, out avail, out left) || avail <= 0) return;
-        var buf = new byte[avail];
-        int got;
-        if (!ReadFile(stdin, buf, buf.Length, out got, IntPtr.Zero) || got <= 0) return;
-        leftover += Encoding.UTF8.GetString(buf, 0, got);
+    void ReadLoop() {
+        var buf = new byte[4096];
+        while (true) {
+            int got;
+            if (!ReadFile(stdin, buf, buf.Length, out got, IntPtr.Zero) || got <= 0) {
+                try { BeginInvoke((MethodInvoker)delegate { Application.ExitThread(); }); } catch { }
+                return;
+            }
+            var text = Encoding.UTF8.GetString(buf, 0, got);
+            try { BeginInvoke((MethodInvoker)delegate { Feed(text); }); } catch { return; }
+        }
+    }
+
+    void Feed(string text) {
+        leftover += text;
         int nl;
         while ((nl = leftover.IndexOf('\n')) >= 0) {
             var line = leftover.Substring(0, nl).Trim();
@@ -123,20 +128,21 @@ public class VorFileDrop : Form {
         WriteFile(stdout, bytes, bytes.Length, out written, IntPtr.Zero);
     }
 
-    static string FirstFile(DragEventArgs e) {
-        if (e.Data == null) return null;
-        if (e.Data.GetDataPresent(DataFormats.FileDrop)) {
-            var files = e.Data.GetData(DataFormats.FileDrop) as string[];
-            if (files != null && files.Length > 0 && !string.IsNullOrEmpty(files[0])) return files[0];
-        }
-        return null;
+    /** Todos os itens arrastados (arquivos e pastas), separados por "|" — caractere proibido em caminhos do Windows. */
+    static string AllFiles(DragEventArgs e) {
+        if (e.Data == null || !e.Data.GetDataPresent(DataFormats.FileDrop)) return null;
+        var files = e.Data.GetData(DataFormats.FileDrop) as string[];
+        if (files == null || files.Length == 0) return null;
+        var list = new System.Collections.Generic.List<string>();
+        foreach (var f in files) if (!string.IsNullOrEmpty(f)) list.Add(f);
+        return list.Count > 0 ? string.Join("|", list.ToArray()) : null;
     }
 
     protected override void OnDragEnter(DragEventArgs e) {
         base.OnDragEnter(e);
-        var file = FirstFile(e);
-        if (file != null) {
-            Emit("path " + file);
+        var files = AllFiles(e);
+        if (files != null) {
+            Emit("files " + files);
             e.Effect = DragDropEffects.Copy;
         } else {
             e.Effect = DragDropEffects.None;

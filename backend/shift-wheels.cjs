@@ -802,7 +802,8 @@ function pending(mode) {
   };
 }
 
-function build(filePath, mode) {
+function build(target, mode) {
+  const filePath = Array.isArray(target) ? target[0] : target;
   const fmt = fmtOf(filePath);
   const kind = kindOf(fmt);
   let items = [];
