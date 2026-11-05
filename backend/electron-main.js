@@ -669,7 +669,7 @@ diagLog("[Perf] Background throttling dynamically controlled by window visibilit
 
 // Fix Taskbar Icon Grouping
 app.setName("VOR");
-app.setAppUserModelId("com.henry.rovyl"); // AUMID explicitly set
+app.setAppUserModelId("com.vitorkloy.vor");
 // app.setPath("userData", path.join(os.tmpdir(), "zenith-radial-menu-cache")); // REMOVED: tmpdir is not persistent
 
 // Single instance: prevents two Zenith processes when login startup is slow and the user launches manually.
@@ -4108,11 +4108,14 @@ app.whenReady().then(async () => {
         } catch (err) {
           const message = err && err.message ? err.message : String(err);
           diagLog(`[FileWheels] ${id}: ${message}`);
+          const body = /senha|otimizado|protegido|Não foi possível|não está disponível|Indisponível/i.test(message)
+            ? message.replace(/^[\w.-]+\.exe falhou \(código \d+\):\s*/i, "")
+            : "Não foi possível converter este arquivo.";
           try {
             const { Notification } = require("electron");
-            if (Notification.isSupported()) new Notification({ title: "VOR", body: message }).show();
+            if (Notification.isSupported()) new Notification({ title: "Não foi possível converter", body }).show();
           } catch { /* ignore */ }
-          return { ok: false, error: message };
+          return { ok: false, error: body };
         }
       });
       ipcMain.handle("note-file-drag-path", (_event, filePath) => {

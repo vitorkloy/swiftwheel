@@ -79,9 +79,8 @@ function labelPoint(index: number, count: number): [number, number] {
   return polar(radius, angle);
 }
 
-function shortLabel(label: string): string {
-  const head = label.split('·')[0]?.trim() || label;
-  return head.length > 14 ? `${head.slice(0, 13)}…` : head;
+function petalText(label: string): string {
+  return label.split('·')[0]?.trim() || label;
 }
 
 interface FilePetalWheelProps {
@@ -130,11 +129,13 @@ export function FilePetalWheel({ items, activeIndex, centerActive, formatLabel, 
       </div>
     );
   }
+  const labelWidth = count >= 6 ? 56 : 88;
+  const labelSize = count >= 6 ? 10 : 11;
   const hovered = activeIndex !== null ? items[activeIndex] : null;
   const pill = centerActive
     ? 'Cancelar'
     : hovered
-      ? (hovered.description || shortLabel(hovered.label))
+      ? (hovered.description || petalText(hovered.label))
       : (formatLabel || '');
 
   return (
@@ -169,6 +170,8 @@ export function FilePetalWheel({ items, activeIndex, centerActive, formatLabel, 
         const disabled = item.fileDisabled === true;
         const [x, y] = labelPoint(index, count);
         const color = active ? (disabled ? '#151515' : '#0a0a0b') : (disabled ? 'rgba(255,255,255,0.45)' : '#f4f4f5');
+        const text = petalText(item.label);
+        const tooWide = text.length * labelSize * 0.55 > labelWidth * 2;
         return (
           <div
             key={`${item.id}-label-${index}`}
@@ -176,18 +179,23 @@ export function FilePetalWheel({ items, activeIndex, centerActive, formatLabel, 
             style={{
               left: size / 2 + x * scale,
               top: size / 2 + y * scale,
-              width: 72,
+              width: labelWidth,
               transform: 'translate(-50%, -50%)',
               color,
               fontFamily: 'var(--font-radial)',
               fontWeight: 600,
-              fontSize: 12,
-              lineHeight: 1.15,
+              fontSize: labelSize,
+              lineHeight: 1.1,
               letterSpacing: '0.01em',
               textShadow: active ? 'none' : '0 1px 2px rgba(0,0,0,0.85)',
+              display: '-webkit-box',
+              WebkitLineClamp: 2,
+              WebkitBoxOrient: 'vertical',
+              overflow: 'hidden',
+              overflowWrap: tooWide ? 'anywhere' : 'normal',
             }}
           >
-            {shortLabel(item.label)}
+            {text}
           </div>
         );
       })}

@@ -112,6 +112,9 @@ const PT: Record<string, string> = {
   'English, Português (Brasil), or the Windows language.': 'English, Português (Brasil) ou o idioma do Windows.',
   Search: 'Procurar',
   General: 'Geral',
+  About: 'Sobre',
+  Version: 'Versão',
+  VOR: 'VOR',
   'Core VOR behavior.': 'Comportamento central do VOR.',
   Activation: 'Ativação',
   'How and where the wheel appears.': 'Como e onde a roda aparece.',
@@ -544,6 +547,11 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
     return {
       general: [
         {
+          key: 'version', group: 'About', title: 'Version',
+          description: appVersion ? `VOR ${appVersion}` : 'VOR',
+          kind: 'note',
+        },
+        {
           key: 'language', group: 'Language', title: 'Language',
           description: 'English, Português (Brasil), or the Windows language.',
           kind: 'segmented',
@@ -875,7 +883,7 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
         },
       ],
     };
-  }, [config, gameMode, theme, apps, update, updateShot, updateInfo, updateBusy, updateNote, isStoreBuild, runUpdateCheck, onReset, onClose, deleteWorkspace, reorderWorkspaces, assignFileWheelKey]);
+  }, [config, gameMode, theme, apps, appVersion, update, updateShot, updateInfo, updateBusy, updateNote, isStoreBuild, runUpdateCheck, onReset, onClose, deleteWorkspace, reorderWorkspaces, assignFileWheelKey]);
 
   const tr = (text?: string) => {
     if (!text) return '';
