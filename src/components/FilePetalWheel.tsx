@@ -170,7 +170,7 @@ export function FilePetalWheel({ items, activeIndex, centerActive, formatLabel, 
       </div>
     );
   }
-  const labelWidth = count >= 6 ? 58 : 88;
+  const labelWidth = count >= 8 ? 60 : count >= 6 ? 70 : 88;
   const labelSize = count >= 8 ? 9 : count >= 6 ? 9.5 : 10.5;
   const hovered = activeIndex !== null ? items[activeIndex] : null;
   const pill = centerActive
@@ -231,8 +231,8 @@ export function FilePetalWheel({ items, activeIndex, centerActive, formatLabel, 
         const text = petalText(item.label);
         // Palavra longa (COMPARTILHAR, METADADOS): reduz a fonte para caber numa linha da fatia.
         const longest = Math.max(...text.split(/\s+/).map((w) => w.length));
-        const fit = Math.min(labelSize, (labelWidth - 4) / Math.max(1, longest * 0.68));
-        const tooWide = longest * fit * 0.68 > labelWidth;
+        const fit = Math.max(8, Math.min(labelSize, (labelWidth - 2) / Math.max(1, longest * 0.66)));
+        const tooWide = longest * fit * 0.66 > labelWidth;
         const Icon = item.id.startsWith('conv:') ? null : getIcon(item.iconName);
         return (
           <div

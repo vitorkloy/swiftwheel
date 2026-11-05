@@ -31,8 +31,35 @@ function watch(win) {
 
 app.on("window-all-closed", () => { /* fecha só no fim */ });
 process.on("unhandledRejection", (e) => console.log("rejection:", e && e.message));
+async function appShots(theme, accent) {
+  // Definições: uma captura por página (clica na navegação), mais o editor de workspace.
+  const w = make(1100, 760);
+  await w.loadFile(path.join(__dirname, "app.html"), { query: { theme, accent, view: "settings" } });
+  await sleep(700);
+  const names = ["geral", "ativacao", "aparencia", "capturas", "workspaces", "avancado"];
+  for (let i = 0; i < names.length; i += 1) {
+    await w.webContents.executeJavaScript(`document.querySelectorAll('.zs-nav button')[${i}].click()`);
+    await sleep(450);
+    if (names[i] === "aparencia") await w.webContents.executeJavaScript("(document.querySelector('.zs-fold')||{click(){}}).click()");
+    await sleep(250);
+    await shoot(`settings-${names[i]}`, w, theme);
+  }
+  await w.webContents.executeJavaScript("(document.querySelector('.zs-ws-card')||{click(){}}).click()");
+  await sleep(500);
+  await shoot("settings-workspace-editor", w, theme);
+  w.destroy();
+  for (const view of ["radial", "toast"]) {
+    const v = make(view === "radial" ? 720 : 620, view === "radial" ? 620 : 220);
+    await v.loadFile(path.join(__dirname, "app.html"), { query: { theme, accent, view } });
+    await sleep(900);
+    await shoot(view === "radial" ? "app-wheel" : "error-toast", v, theme);
+    v.destroy();
+  }
+}
+
 app.whenReady().then(async () => {
   const accent = process.env.VOR_ACCENT || "#FFFFFF";
+  if (process.env.VOR_ONLY !== "shiftdrop") for (const theme of ["black", "white"]) await appShots(theme, accent);
   for (const theme of ["black", "white"]) {
     const appearance = { theme, accent, glass: true, opacity: 0.8 };
     const w = make(820, 330);
