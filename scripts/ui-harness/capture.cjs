@@ -29,6 +29,7 @@ function watch(win) {
   return win;
 }
 
+app.on("window-all-closed", () => { /* fecha só no fim */ });
 process.on("unhandledRejection", (e) => console.log("rejection:", e && e.message));
 app.whenReady().then(async () => {
   const accent = process.env.VOR_ACCENT || "#FFFFFF";
