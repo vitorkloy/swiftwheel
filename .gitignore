@@ -54,3 +54,4 @@ backend/debug_*.json
 # Local build verification runs
 build-out-update-validation/
 build/appx/
+scripts/ui-harness/wheel.js
