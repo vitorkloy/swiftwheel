@@ -207,7 +207,7 @@ function downloadFile(url, dest) {
  * perfil bloqueado, ffmpeg à espera de stdin) nunca devolvia erro.
  */
 function spawnWait(cmd, args, options = {}) {
-  const { timeout = 120000, verbatim = false, env, cwd, onStdout } = options;
+  const { timeout = 120000, verbatim = false, env, cwd, onStdout, onStderr } = options;
   return new Promise((resolve, reject) => {
     let child;
     try {
@@ -237,6 +237,7 @@ function spawnWait(cmd, args, options = {}) {
     }, timeout);
     if (onStdout) child.stdout.on("data", (chunk) => { try { onStdout(chunk.toString("utf8")); } catch { /* ignore */ } });
     child.stderr.on("data", (chunk) => {
+      if (onStderr) { try { onStderr(chunk.toString("utf8")); } catch { /* ignore */ } }
       if (stderr.length < 4000) stderr += chunk.toString("utf8");
     });
     child.on("error", (err) => finish(err.code === "ENOENT" ? new Error(`${path.basename(cmd)} não encontrado`) : err));
@@ -1141,14 +1142,55 @@ function convertSubtitle(filePath, dest, to) {
   return dest;
 }
 
+/** Conta arquivos (para a barra de progresso), sem passar de um teto para não travar em pastas enormes. */
+function countFiles(paths, cap = 200000) {
+  let n = 0;
+  const stack = [...paths];
+  while (stack.length && n < cap) {
+    const p = stack.pop();
+    let st;
+    try { st = fs.statSync(p); } catch { continue; }
+    n += 1;
+    if (st.isDirectory()) {
+      try { fs.readdirSync(p).forEach((name) => stack.push(path.join(p, name))); } catch { /* ignore */ }
+    }
+  }
+  return n;
+}
+
+/** Quantas entradas um arquivo compactado tem (`tar -tf`). */
+function archiveEntries(file) {
+  return new Promise((resolve) => {
+    let n = 0;
+    spawnWait("tar", ["-tf", file], { timeout: 120000, onStdout: (t) => { n += (t.match(/\n/g) || []).length; } })
+      .then(() => resolve(n), () => resolve(0));
+  });
+}
+
+/** tar com `-v`: cada linha listada no stderr avança o progresso. */
+function tarRun(args, total, options = {}) {
+  const sink = jobProgress;
+  let seen = 0;
+  const onStderr = sink && total > 0 ? (t) => {
+    seen += (t.match(/\n/g) || []).length;
+    sink(Math.min(0.99, seen / total));
+  } : undefined;
+  return spawnWait("tar", onStderr ? ["-v", ...args] : args, { timeout: 30 * 60 * 1000, ...options, onStderr });
+}
+
 async function convertArchive(filePath, dest, to) {
   const tmp = scratch();
   try {
     const content = path.join(tmp, "x");
     fs.mkdirSync(content);
-    await spawnWait("tar", ["-xf", filePath, "-C", content], { timeout: 10 * 60 * 1000 });
+    const sink = jobProgress;
+    const total = sink ? await archiveEntries(filePath) : 0;
+    jobProgress = sink ? (f) => sink(f / 2) : null;
+    await tarRun(["-xf", filePath, "-C", content], total);
     const args = to === "zip" ? ["-a", "-cf", dest] : to === "gz" ? ["-czf", dest] : ["-cf", dest];
-    await spawnWait("tar", [...args, "-C", content, "."], { timeout: 10 * 60 * 1000 });
+    jobProgress = sink ? (f) => sink(0.5 + f / 2) : null;
+    await tarRun([...args, "-C", content, "."], total + 1);
+    jobProgress = sink;
     return exists(dest);
   } finally {
     fs.rmSync(tmp, { recursive: true, force: true });
@@ -1343,15 +1385,16 @@ async function runTool(tool, filePath, opts = {}) {
   if (tool === "extractArchive") {
     const destDir = uniqueDir(dir, stem);
     fs.mkdirSync(destDir, { recursive: true });
-    if (from === "rar" || from === "7z") {
-      const seven = which("7z") || which("7za");
+    // O tar.exe do Windows (bsdtar/libarchive) já lê ZIP, TAR, GZ, RAR e 7z; o 7-Zip é só reserva.
+    try {
+      await tarRun(["-xf", filePath, "-C", destDir], await archiveEntries(filePath));
+    } catch (err) {
+      const seven = (from === "rar" || from === "7z") && (which("7z") || which("7za"));
       if (!seven) {
         fs.rmSync(destDir, { recursive: true, force: true });
-        throw new Error("Para abrir RAR ou 7z, instala o 7-Zip");
+        throw from === "rar" || from === "7z" ? new Error("Não foi possível abrir este arquivo compactado (instale o 7-Zip para RAR5/7z protegidos)") : err;
       }
       await spawnWait(seven, ["x", "-y", `-o${destDir}`, filePath], { timeout: 10 * 60 * 1000 });
-    } else {
-      await spawnWait("tar", ["-xf", filePath, "-C", destDir], { timeout: 10 * 60 * 1000 });
     }
     return destDir;
   }
@@ -1470,7 +1513,12 @@ async function runTool(tool, filePath, opts = {}) {
 }
 
 /** Ferramentas de lote: um único resultado ao lado do primeiro item. */
-async function runMany(id, paths) {
+async function runMany(id, paths, { onProgress } = {}) {
+  jobProgress = onProgress || null;
+  try { return await runManyNow(id, paths); } finally { jobProgress = null; }
+}
+
+async function runManyNow(id, paths) {
   const tool = String(id).slice(5);
   const first = paths[0];
   const dir = path.dirname(first);
@@ -1479,7 +1527,7 @@ async function runMany(id, paths) {
     const dest = uniquePath(dir, paths.length === 1 ? stem : `${stem} e mais ${paths.length - 1}`, "zip");
     const args = ["-a", "-cf", dest];
     for (const p of paths) args.push("-C", path.dirname(p), path.basename(p));
-    await spawnWait("tar", args, { timeout: 30 * 60 * 1000 });
+    await tarRun(args, jobProgress ? countFiles(paths) : 0);
     return exists(dest);
   }
   if (tool === "mergePDF") {

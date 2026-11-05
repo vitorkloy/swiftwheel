@@ -4401,7 +4401,7 @@ app.whenReady().then(async () => {
           if (id === "act:openTerminal") return { ok: true, out: await shiftWheels.run(id, filePath) };
           if (shiftWheels.isBatch(id)) {
             showShiftToast(`${shiftVerb(id)}…`, -1);
-            const out = await shiftWheels.runMany(id, list);
+            const out = await shiftWheels.runMany(id, list, { onProgress: (f) => showShiftToast(`${shiftVerb(id)}…`, f) });
             showShiftToast(`Pronto: ${path.basename(String(out))}`, 1);
             hideShiftToast(1400);
             return { ok: true, out };
