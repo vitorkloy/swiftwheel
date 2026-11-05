@@ -106,8 +106,8 @@ function tools() {
     ffmpeg: ffmpegPath(),
     soffice: sofficePath(),
     pandoc: pandocPath(),
+    mutool: mutoolPath(),
     tar: which("tar"),
-    gs: which("gswin64c") || which("gswin32c"),
   };
   return toolsCache;
 }
@@ -157,6 +157,9 @@ function readText(url, headers) {
 }
 
 /** Baixa para `.part` e só renomeia no fim: um download interrompido nunca passa por completo. */
+/** Callback de progresso do `prepare` em curso (notificações a cada 25%). */
+let progressSink = null;
+
 function downloadFile(url, dest) {
   const part = `${dest}.part`;
   return request(url).then((res) => new Promise((resolve, reject) => {
@@ -169,7 +172,16 @@ function downloadFile(url, dest) {
       fs.rm(part, { force: true }, () => reject(err));
     };
     res.setTimeout?.(NET_IDLE_MS, () => fail(new Error("download parado")));
-    res.on("data", (chunk) => { got += chunk.length; });
+    let step = 0;
+    res.on("data", (chunk) => {
+      got += chunk.length;
+      if (!expected || !progressSink) return;
+      const now = Math.floor((got / expected) * 4);
+      if (now > step && now < 4) {
+        step = now;
+        progressSink(`Baixando ${path.basename(dest).replace(/\.part$/, "")}… ${now * 25}% de ${Math.round(expected / 1048576)} MB`);
+      }
+    });
     res.pipe(file);
     file.on("finish", () => file.close(() => {
       if (expected && got !== expected) {
@@ -195,7 +207,7 @@ function downloadFile(url, dest) {
  * perfil bloqueado, ffmpeg à espera de stdin) nunca devolvia erro.
  */
 function spawnWait(cmd, args, options = {}) {
-  const { timeout = 120000, verbatim = false, env } = options;
+  const { timeout = 120000, verbatim = false, env, cwd } = options;
   return new Promise((resolve, reject) => {
     let child;
     try {
@@ -204,6 +216,7 @@ function spawnWait(cmd, args, options = {}) {
         stdio: ["ignore", "ignore", "pipe"],
         windowsVerbatimArguments: verbatim,
         env: env || process.env,
+        cwd,
       });
     } catch (err) {
       reject(err);
@@ -229,7 +242,9 @@ function spawnWait(cmd, args, options = {}) {
     child.on("exit", (code) => {
       if (code === 0) finish();
       else {
-        const tail = stderr.trim().split(/\r?\n/).filter(Boolean).pop();
+        const lines = stderr.trim().split(/\r?\n/).filter(Boolean);
+        // PowerShell põe a causa na primeira linha; os outros conversores, na última.
+        const tail = /powershell/i.test(cmd) ? lines[0] : lines.pop();
         finish(new Error(`${path.basename(cmd)} falhou (código ${code})${tail ? `: ${tail.slice(0, 160)}` : ""}`));
       }
     });
@@ -304,18 +319,6 @@ function installLibreOffice(onStatus) {
   return sofficeInstall;
 }
 
-function actionNeedsSoffice(id, filePath) {
-  if (!id.startsWith("conv:")) return false;
-  const to = id.slice(5);
-  const from = fmtOf(filePath);
-  const kind = kindOf(from);
-  if (to === "pages") return false;
-  if (kind === "image" || kind === "audio" || kind === "video" || kind === "gif" || kind === "subtitle" || kind === "archive") return false;
-  if (to === "md" || from === "md" || kind === "epub") return false;
-  if (kind === "pdf" && (to === "jpg" || to === "png")) return false;
-  return kind === "pdf" || kind === "doc" || kind === "txt" || kind === "slides" || kind === "sheet";
-}
-
 /** Baixa o conversor na primeira vez. A roda já mostra a opção, como no ShiftDrop. */
 const EXCEL_FORMAT = { csv: 6, tsv: 42, xlsx: 51, ods: 60, pdf: 0 };
 
@@ -351,6 +354,14 @@ function hasWord() {
     }
   });
   return hasWord.cached;
+}
+
+/**
+ * Excel só para planilha binária → PDF (layout de impressão fiel). CSV/TSV ficam com o LibreOffice:
+ * o Excel segue a região do Windows (";" no pt-BR) ao ler e ao gravar CSV.
+ */
+function excelHandles(from, to) {
+  return (from === "xlsx" || from === "xls" || from === "ods") && to === "pdf" && hasExcel();
 }
 
 async function convertWithExcel(filePath, dest, to) {
@@ -463,57 +474,54 @@ async function installPandoc(onStatus) {
   return pandocInstall;
 }
 
-function needsPandoc(id, filePath) {
-  if (!id.startsWith("conv:")) return false;
-  const to = id.slice(5);
-  const from = fmtOf(filePath);
-  if (to === "pages" || to === "png" || to === "jpg") return false;
-  if (from === "md" || to === "md") return true;
-  return kindOf(from) === "epub" && to !== "pdf";
+let mutoolInstall = null;
+
+/** MuPDF `mutool`: PDF → imagem/texto/HTML e compressão de PDF. Substitui o Ghostscript (sem instalador, um único .exe). */
+function mutoolPath() {
+  const onPath = which("mutool");
+  if (onPath && fs.existsSync(onPath)) return onPath;
+  return findExe(path.join(dataRoot(), "MuPDF"), "mutool.exe") || path.join(dataRoot(), "MuPDF", "mutool.exe");
 }
 
-async function prepare(id, filePath, onStatus) {
-  if (id.startsWith("conv:")) {
-    const to = id.slice(5);
-    const from = fmtOf(filePath);
-    if (kindOf(from) === "image" && !nativeConvertible(from, to) && !fs.existsSync(magickPath())) {
-      try {
-        await installMagick(onStatus);
-      } catch (err) {
-        throw new Error(`Não consegui preparar o conversor de imagens (${err.message})`);
-      }
-      forgetTools();
-    }
-    if (needsPandoc(id, filePath) && !fs.existsSync(pandocPath())) {
-      try {
-        await installPandoc(onStatus);
-      } catch (err) {
-        throw new Error(`Não consegui preparar o conversor de texto (${err.message})`);
-      }
-      forgetTools();
-    }
-    const media = kindOf(from);
-    if ((media === "audio" || media === "video" || media === "gif") && !fs.existsSync(ffmpegPath())) {
-      try {
-        await installFfmpeg(onStatus);
-      } catch (err) {
-        throw new Error(`Não consegui preparar o conversor de áudio e vídeo (${err.message})`);
-      }
-      forgetTools();
-    }
-  }
-  if (!actionNeedsSoffice(id, filePath)) return;
-  const to = id.slice(5);
-  if (kindOf(fmtOf(filePath)) === "sheet" && EXCEL_FORMAT[to] !== undefined && hasExcel()) return;
-  const current = sofficePath();
-  if (current && fs.existsSync(current)) return;
-  try {
-    await installLibreOffice(onStatus);
-  } catch (err) {
-    throw new Error(`Não consegui preparar o conversor de documentos (${err.message})`);
-  }
-  forgetTools();
+function installMutool(onStatus) {
+  if (fs.existsSync(mutoolPath())) return Promise.resolve();
+  if (mutoolInstall) return mutoolInstall;
+  mutoolInstall = (async () => {
+    if (onStatus) onStatus("Baixando o conversor de PDF…");
+    let version = "1.28.5";
+    try {
+      const html = await readText("https://mupdf.com/releases");
+      const found = [...html.matchAll(/mupdf-(\d+\.\d+\.\d+)-windows\.zip/g)].map((m) => m[1].split(".").map(Number));
+      found.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2] - b[2]);
+      if (found.length) version = found[found.length - 1].join(".");
+    } catch { /* versão conhecida */ }
+    const root = path.join(dataRoot(), "MuPDF");
+    const work = path.join(dataRoot(), ".mupdf-tmp");
+    fs.rmSync(work, { recursive: true, force: true });
+    fs.mkdirSync(work, { recursive: true });
+    fs.mkdirSync(root, { recursive: true });
+    const archive = path.join(work, "mupdf.zip");
+    await downloadFile(`https://mupdf.com/downloads/archive/mupdf-${version}-windows.zip`, archive);
+    if (onStatus) onStatus("Preparando o conversor de PDF…");
+    // Só o mutool.exe: os visualizadores (mupdf.exe, mupdf-gl.exe) não são usados.
+    await spawnWait("tar", ["-xf", archive, "-C", root, `mupdf-${version}-windows/mutool.exe`], { timeout: 5 * 60 * 1000 });
+    fs.rmSync(work, { recursive: true, force: true });
+    forgetTools();
+    if (!fs.existsSync(mutoolPath())) throw new Error("Não consegui preparar o conversor de PDF");
+  })().catch((err) => {
+    mutoolInstall = null;
+    throw err;
+  });
+  return mutoolInstall;
 }
+
+const INSTALLERS = {
+  magick: { path: () => magickPath(), install: (s) => installMagick(s), label: "imagens" },
+  ffmpeg: { path: () => ffmpegPath(), install: (s) => installFfmpeg(s), label: "áudio e vídeo" },
+  soffice: { path: () => sofficePath(), install: (s) => installLibreOffice(s), label: "documentos" },
+  pandoc: { path: () => pandocPath(), install: (s) => installPandoc(s), label: "texto" },
+  mutool: { path: () => mutoolPath(), install: (s) => installMutool(s), label: "PDF" },
+};
 
 function fmtOf(file) {
   let e = path.extname(file).slice(1).toLowerCase();
@@ -521,6 +529,7 @@ function fmtOf(file) {
   if (e === "tif") e = "tiff";
   if (e === "htm") e = "html";
   if (e === "markdown") e = "md";
+  if (e === "tgz") e = "gz";
   return e;
 }
 
@@ -540,18 +549,23 @@ function kindOf(fmt) {
   return "other";
 }
 
+/**
+ * Destinos por tipo. Só entra o que o VOR consegue gerar de verdade; formatos que não se
+ * podem escrever (PAGES/KEY são da Apple) ou que não fazem sentido (PDF → XLSX) ficam fora da
+ * roda em vez de aparecerem como "em breve".
+ */
 function targets(kind, fmt) {
   const table = {
     image: ["jpg", "png", "webp", "heic", "tiff", "avif", "bmp", "pdf"],
     audio: ["mp3", "m4a", "wav", "flac", "ogg", "opus", "aiff", "wma"],
     video: ["mp4", "mov", "mkv", "webm", "avi", "wmv", "gif", "mp3"],
     gif: ["mp4", "mov", "mkv", "webm", "avi", "wmv"],
-    pdf: ["docx", "pages", "pptx", "xlsx", "jpg", "png", "epub", "txt", "md"],
-    slides: ["pdf", "jpg", "png"],
+    pdf: ["docx", "pptx", "jpg", "png", "epub", "txt", "md", "html"],
+    slides: ["pdf", "pptx", "jpg", "png"],
     sheet: ["xlsx", "ods", "csv", "tsv", "pdf"],
-    doc: ["docx", "pages", "pdf", "txt", "md", "html", "epub", "png", "jpg"],
-    epub: ["pdf", "docx", "pages", "txt", "md", "html"],
-    txt: ["docx", "pages", "pdf", "md", "html", "epub", "jpg", "png"],
+    doc: ["docx", "pdf", "txt", "md", "html", "epub", "png", "jpg"],
+    epub: ["pdf", "docx", "txt", "md", "html"],
+    txt: ["docx", "pdf", "md", "html", "epub", "jpg", "png"],
     subtitle: ["srt", "vtt", "txt"],
     archive: ["zip", "tar", "gz"],
   };
@@ -564,64 +578,82 @@ function titleOf(fmt) {
 
 function ok() { return { available: true, reason: null }; }
 function no(msg) { return { available: false, reason: msg }; }
-function need(tool, msg) { return tool ? ok() : no(msg); }
 
-function convGate(kind, from, to, t) {
-  if (to === "pages") return no("pages");
-  if (kind === "image") {
-    if (nativeConvertible(from, to)) return ok();
-    return need(t.magick, "imagemagick");
-  }
-  if (kind === "audio" || kind === "video" || kind === "gif") return need(t.ffmpeg, "ffmpeg");
-  if (kind === "pdf") {
-    if (to === "jpg" || to === "png") return need(t.gs, "ghostscript");
-    if (to === "docx" || to === "txt") return need(t.soffice, "libreoffice");
-    return no(SOON);
-  }
-  if (kind === "doc" || kind === "txt" || kind === "slides" || kind === "sheet") {
-    if (to === "md" || from === "md") {
-      if (from === "md" && (to === "png" || to === "jpg")) return no(SOON);
-      return need(t.pandoc, "pandoc");
+/** Ferramentas necessárias para uma ação. Todas são baixadas sozinhas em `prepare`. */
+function toolsFor(id, filePath) {
+  const from = fmtOf(filePath);
+  const kind = kindOf(from);
+  const need = new Set();
+  if (id.startsWith("conv:")) {
+    const to = id.slice(5);
+    if (kind === "image") {
+      if (!nativeConvertible(from, to)) need.add("magick");
+    } else if (kind === "audio" || kind === "video" || kind === "gif") {
+      need.add("ffmpeg");
+    } else if (kind === "pdf") {
+      if (to === "docx" || to === "pptx") need.add("soffice");
+      else need.add("mutool");
+      if (to === "epub" || to === "md") need.add("pandoc");
+    } else if (kind === "doc" || kind === "txt" || kind === "slides" || kind === "sheet" || kind === "epub") {
+      const viaPandoc = kind === "epub" || from === "md" || to === "md" || to === "epub";
+      if (viaPandoc) need.add("pandoc");
+      if (!viaPandoc || to === "pdf" || to === "png" || to === "jpg" || (from === "doc" || from === "pages" || from === "rtf")) need.add("soffice");
+      if (excelHandles(from, to)) need.delete("soffice");
+      if (to === "png" || to === "jpg") need.add("mutool");
     }
-    return need(t.soffice, "libreoffice");
+  } else if (id.startsWith("tool:")) {
+    const tool = id.slice(5);
+    if (kind === "pdf") need.add("mutool");
+    else if (kind === "image" && tool !== "compress") need.add("magick");
+    else if (kind === "audio" || kind === "video" || kind === "gif") need.add("ffmpeg");
   }
-  if (kind === "epub") return to === "pdf" ? no(SOON) : need(t.pandoc, "pandoc");
-  if (kind === "subtitle") return ok();
-  if (kind === "archive") return need(t.tar, "tar");
-  return no("unsupported");
+  return [...need];
+}
+
+async function prepare(id, filePath, onStatus) {
+  for (const name of toolsFor(id, filePath)) {
+    const entry = INSTALLERS[name];
+    if (fs.existsSync(entry.path())) continue;
+    progressSink = onStatus || null;
+    try {
+      await entry.install(onStatus);
+      if (onStatus) onStatus(`Conversor de ${entry.label} pronto — convertendo…`);
+    } catch (err) {
+      throw new Error(`Não consegui preparar o conversor de ${entry.label} (${err.message})`);
+    } finally {
+      progressSink = null;
+    }
+    forgetTools();
+  }
 }
 
 function toolTitle(id) {
   const map = {
-    compress: "COMPRESS", removeMetadata: "METADATA", editImage: "EDIT", annotateImage: "ANNOTATE",
-    frameImage: "ADD BG", cropImage: "CROP", cropVideo: "CROP", redactImage: "REDACT", redactVideo: "REDACT",
-    normalizeAudio: "NORMALIZE", muteVideo: "MUTE", trimVideo: "TRIM", trimAudio: "TRIM",
-    splitPDF: "SPLIT", splitVideo: "SPLIT", organizePDF: "ORGANIZE", extractArchive: "EXTRACT",
-    createPDF: "CREATE PDF", mergePDF: "MERGE PDF", changeVideoSpeed: "SPEED", joinVideos: "JOIN",
-    videoSnapshots: "SNAPSHOT", audioToVideo: "VISUALIZE", audioChannels: "CHANNELS", createCollage: "COLLAGE",
-    redactAudio: "BLEEP", airDrop: "SHARE", float: "FLOAT", copy: "COPY", move: "MOVE",
-    copyPath: "COPY PATH", openTerminal: "TERMINAL",
+    compress: "COMPRESS", removeMetadata: "METADATA", normalizeAudio: "NORMALIZE", muteVideo: "MUTE",
+    splitPDF: "SPLIT", extractArchive: "EXTRACT", videoSnapshots: "SNAPSHOT", audioChannels: "MONO",
+    airDrop: "SHARE", float: "FLOAT", copy: "COPY", move: "MOVE", copyPath: "COPY PATH", openTerminal: "TERMINAL",
   };
   return map[id] || "?";
 }
 
+/**
+ * Só ferramentas que rodam sem interface extra. Recortar, aparar, anotar, tarjar etc. precisam
+ * de um editor que o VOR ainda não tem — ficam fora da roda em vez de "em breve".
+ */
 function toolIds(kind, fmt) {
   if (kind === "image" && fmt === "svg") return [];
-  if (kind === "image") return ["compress", "removeMetadata", "editImage", "annotateImage", "frameImage", "cropImage", "redactImage"];
-  if (kind === "audio") return ["compress", "removeMetadata", "normalizeAudio", "audioToVideo", "trimAudio", "audioChannels", "redactAudio"];
-  if (kind === "video") return ["compress", "removeMetadata", "muteVideo", "trimVideo", "cropVideo", "changeVideoSpeed", "videoSnapshots", "splitVideo", "redactVideo"];
+  if (kind === "image") return ["compress", "removeMetadata"];
+  if (kind === "audio") return ["compress", "removeMetadata", "normalizeAudio", "audioChannels"];
+  if (kind === "video") return ["compress", "removeMetadata", "muteVideo", "videoSnapshots"];
   if (kind === "gif") return ["removeMetadata"];
-  if (kind === "pdf") return ["compress", "removeMetadata", "splitPDF", "organizePDF"];
+  if (kind === "pdf") return ["compress", "removeMetadata", "splitPDF"];
   if (kind === "archive") return ["extractArchive"];
   return [];
 }
 
-function toolGate(id, kind, t) {
-  /** Só o que `run` implementa aparece disponível; o resto era anunciado e depois falhava. */
-  if (id === "compress") return kind === "image" ? ok() : no(SOON);
-  if (id === "createPDF" || ["copy", "move", "copyPath", "openTerminal"].includes(id)) return ok();
-  if (id === "extractArchive") return need(t.tar, "tar");
-  return no(SOON);
+function toolGate(id) {
+  if (id === "airDrop" || id === "float") return no(SOON);
+  return ok();
 }
 
 function item(id, title, gate) {
@@ -644,17 +676,16 @@ function pending(mode) {
 }
 
 function build(filePath, mode) {
-  const t = tools();
   const fmt = fmtOf(filePath);
   const kind = kindOf(fmt);
   let items = [];
   if (mode === "convert") {
-    items = targets(kind, fmt).map((to) => item(`conv:${to}`, titleOf(to), convGate(kind, fmt, to, t)));
+    items = targets(kind, fmt).map((to) => item(`conv:${to}`, titleOf(to), ok()));
   } else if (mode === "tools") {
-    items = toolIds(kind, fmt).map((id) => item(`tool:${id}`, toolTitle(id), toolGate(id, kind, t)));
+    items = toolIds(kind, fmt).map((id) => item(`tool:${id}`, toolTitle(id), toolGate(id)));
   } else {
     items = ["airDrop", "float", "copy", "move", "copyPath", "openTerminal"].map((id) =>
-      item(`act:${id}`, toolTitle(id), toolGate(id, kind, t)),
+      item(`act:${id}`, toolTitle(id), toolGate(id)),
     );
   }
   return { mode, format: titleOf(fmt), kind, path: filePath, items };
@@ -670,106 +701,329 @@ function uniquePath(dir, stem, ext) {
   return candidate;
 }
 
-const PANDOC_WRITER = { txt: "plain", html: "html", docx: "docx", epub: "epub", pdf: "pdf", md: "markdown", odt: "odt", rtf: "rtf" };
+function uniqueDir(dir, name) {
+  let candidate = path.join(dir, name);
+  let n = 1;
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(dir, `${name} (${n})`);
+    n += 1;
+  }
+  return candidate;
+}
 
-async function convertWithPandoc(filePath, dest, to, pandoc) {
-  const writer = PANDOC_WRITER[to];
-  if (!writer) throw new Error("Esse formato ainda não sai deste arquivo");
-  if (to === "pdf" && hasWord()) {
-    const tmp = path.join(os.tmpdir(), `vor-${Date.now()}.docx`);
-    try {
-      await spawnWait(pandoc, [filePath, "-t", "docx", "-o", tmp]);
-      await spawnWait("powershell", ["-NoProfile", "-STA", "-Command", `$word = New-Object -ComObject Word.Application
-$word.Visible = $false
-$word.DisplayAlerts = 0
-$doc = $word.Documents.Open($env:VOR_SRC)
-$doc.ExportAsFixedFormat($env:VOR_DEST, 17)
-$doc.Close($false)
-$word.Quit()`], {
-        env: { ...process.env, VOR_SRC: tmp, VOR_DEST: dest },
-      });
-    } finally {
-      fs.rmSync(tmp, { force: true });
-    }
-    if (!fs.existsSync(dest)) throw new Error("Não consegui gerar o PDF");
-    return dest;
+function scratch() {
+  // realpath: o TEMP pode vir em 8.3 (GLOBAL~1) e o GDI+ não abre esses caminhos.
+  return fs.realpathSync.native(fs.mkdtempSync(path.join(os.tmpdir(), "vor-conv-")));
+}
+
+function exists(file, what = "A conversão não gerou o arquivo") {
+  if (!fs.existsSync(file) || fs.statSync(file).size === 0) throw new Error(what);
+  return file;
+}
+
+function need(name) {
+  const p = INSTALLERS[name].path();
+  if (!fs.existsSync(p)) throw new Error(`Conversor de ${INSTALLERS[name].label} indisponível`);
+  return p;
+}
+
+/** Filtros explícitos onde o padrão do LibreOffice erra (CSV UTF-8, TSV, texto UTF-8, PDF → slides). */
+const SOFFICE_FILTER = {
+  csv: 'csv:Text - txt - csv (StarCalc):44,34,76,1',
+  tsv: 'csv:Text - txt - csv (StarCalc):9,34,76,1',
+  txt: "txt:Text (encoded):UTF8",
+  html: "html:XHTML Writer File:UTF8",
+};
+
+/** LibreOffice headless com perfil próprio; devolve o arquivo gerado em `outDir`. */
+async function soffice(input, to, outDir, { infilter } = {}) {
+  const bin = need("soffice");
+  const profile = require("url").pathToFileURL(path.join(dataRoot(), "soffice-profile")).href;
+  const args = ["--headless", "--norestore", `-env:UserInstallation=${profile}`];
+  if (infilter) args.push(`--infilter=${infilter}`);
+  // CSV/TSV de entrada: separador explícito, UTF-8, independente da região do Windows.
+  const src = fmtOf(input);
+  if (!infilter && (src === "csv" || src === "tsv")) args.push(`--infilter=CSV:${src === "tsv" ? 9 : 44},34,76,1`);
+  args.push("--convert-to", SOFFICE_FILTER[to] || to, "--outdir", outDir, input);
+  await spawnWait(bin, args, { timeout: 180000 });
+  const ext = to === "tsv" ? "csv" : to;
+  return exists(path.join(outDir, `${path.parse(input).name}.${ext}`));
+}
+
+async function pandoc(input, to, out, from) {
+  const writer = { txt: "plain", html: "html", docx: "docx", epub: "epub", md: "gfm", odt: "odt", rtf: "rtf" }[to];
+  if (!writer) throw new Error("Formato de saída não suportado");
+  const args = [input];
+  if (from) args.push("-f", from);
+  args.push("-t", writer, "-s", "-o", out);
+  await spawnWait(need("pandoc"), args, { cwd: path.dirname(input) });
+  return exists(out);
+}
+
+/** Leitores do pandoc por extensão. Os que ele não lê passam antes pelo LibreOffice (→ DOCX). */
+const PANDOC_READER = { md: "markdown", txt: "markdown", html: "html", docx: "docx", odt: "odt", epub: "epub", rtf: "rtf" };
+
+async function toPandocSource(filePath, tmp) {
+  const from = fmtOf(filePath);
+  if (PANDOC_READER[from]) return { file: filePath, reader: PANDOC_READER[from] };
+  return { file: await soffice(filePath, "docx", tmp), reader: "docx" };
+}
+
+/** Qualquer documento → PDF. Markdown/EPUB vão por DOCX (pandoc) e depois LibreOffice; sem Word nem LaTeX. */
+async function toPdf(filePath, tmp) {
+  const from = fmtOf(filePath);
+  if (from === "pdf") return filePath;
+  if (from === "md" || from === "epub") {
+    const docx = await pandoc(filePath, "docx", path.join(tmp, "doc.docx"), PANDOC_READER[from]);
+    return soffice(docx, "pdf", tmp);
   }
+  return soffice(filePath, "pdf", tmp);
+}
+
+/** PDF → PNG/JPG: uma página vira um arquivo; várias páginas viram uma pasta com uma imagem por página. */
+async function pdfToImages(pdf, to, dir, stem) {
+  const tmp = scratch();
   try {
-    await spawnWait(pandoc, [filePath, "-t", writer, "-o", dest]);
-  } catch (err) {
-    if (to === "pdf") throw new Error(`Não consegui gerar o PDF (${err.message})`);
-    throw new Error(`A conversão não gerou o arquivo (${err.message})`);
+    await spawnWait(need("mutool"), ["draw", "-r", "150", "-o", path.join(tmp, "p-%d.png"), pdf], { timeout: 300000 });
+    const pages = fs.readdirSync(tmp).filter((f) => /^p-\d+\.png$/.test(f))
+      .sort((a, b) => Number(a.match(/\d+/)[0]) - Number(b.match(/\d+/)[0]));
+    if (!pages.length) throw new Error("O PDF não tem páginas");
+    const convertOne = async (src, dest) => {
+      if (to === "png") fs.copyFileSync(src, dest);
+      else await nativeImage(src, dest, "jpg");
+      return dest;
+    };
+    if (pages.length === 1) return await convertOne(path.join(tmp, pages[0]), uniquePath(dir, stem, to));
+    const outDir = uniqueDir(dir, `${stem} (${to.toUpperCase()})`);
+    fs.mkdirSync(outDir, { recursive: true });
+    for (let i = 0; i < pages.length; i += 1) {
+      await convertOne(path.join(tmp, pages[i]), path.join(outDir, `${stem}-${String(i + 1).padStart(3, "0")}.${to}`));
+    }
+    return outDir;
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
-  if (!fs.existsSync(dest)) throw new Error("A conversão não gerou o arquivo");
+}
+
+/** PNG/JPG/BMP/GIF/TIFF entre si com o System.Drawing do próprio Windows (sem download). */
+async function nativeImage(src, dest, to) {
+  const fmt = { jpg: "Jpeg", png: "Png", bmp: "Bmp", gif: "Gif", tiff: "Tiff" }[to];
+  await spawnWait("powershell", ["-NoProfile", "-Command", `
+    $ErrorActionPreference = 'Stop'
+    Add-Type -AssemblyName System.Drawing
+    $img = [System.Drawing.Image]::FromFile($env:VOR_SRC)
+    try {
+      if ('${fmt}' -eq 'Jpeg') {
+        $bmp = New-Object System.Drawing.Bitmap $img.Width, $img.Height
+        $g = [System.Drawing.Graphics]::FromImage($bmp)
+        $g.Clear([System.Drawing.Color]::White)
+        $g.DrawImage($img, 0, 0, $img.Width, $img.Height)
+        $g.Dispose()
+        $codec = [System.Drawing.Imaging.ImageCodecInfo]::GetImageEncoders() | Where-Object { $_.MimeType -eq 'image/jpeg' }
+        $p = New-Object System.Drawing.Imaging.EncoderParameters 1
+        $p.Param[0] = New-Object System.Drawing.Imaging.EncoderParameter ([System.Drawing.Imaging.Encoder]::Quality), ([long]90)
+        $bmp.Save($env:VOR_DEST, $codec, $p)
+        $bmp.Dispose()
+      } else {
+        $img.Save($env:VOR_DEST, [System.Drawing.Imaging.ImageFormat]::${fmt})
+      }
+    } finally { $img.Dispose() }
+  `], { env: { ...process.env, VOR_SRC: src, VOR_DEST: dest } });
+  return exists(dest);
+}
+
+function srtTime(t) { return t.replace(".", ","); }
+function vttTime(t) { return t.replace(",", "."); }
+
+function convertSubtitle(filePath, dest, to) {
+  const text = fs.readFileSync(filePath, "utf8").replace(/^\uFEFF/, "").replace(/\r\n/g, "\n");
+  const blocks = text.split(/\n{2,}/).map((b) => b.trim()).filter(Boolean)
+    .filter((b) => !/^WEBVTT/.test(b) && !/^(NOTE|STYLE|REGION)\b/.test(b));
+  const cues = [];
+  for (const block of blocks) {
+    const lines = block.split("\n");
+    const at = lines.findIndex((l) => l.includes("-->"));
+    if (at < 0) continue;
+    const [start, end] = lines[at].split("-->").map((s) => s.trim().split(/\s+/)[0]);
+    cues.push({ start, end, body: lines.slice(at + 1).join("\n") });
+  }
+  if (!cues.length) throw new Error("Nenhuma legenda encontrada no arquivo");
+  let out;
+  if (to === "vtt") out = `WEBVTT\n\n${cues.map((c) => `${vttTime(c.start)} --> ${vttTime(c.end)}\n${c.body}`).join("\n\n")}\n`;
+  else if (to === "srt") out = `${cues.map((c, i) => `${i + 1}\n${srtTime(c.start)} --> ${srtTime(c.end)}\n${c.body}`).join("\n\n")}\n`;
+  else out = `${cues.map((c) => c.body.replace(/<[^>]+>/g, "")).join("\n")}\n`;
+  fs.writeFileSync(dest, out, "utf8");
   return dest;
 }
 
-async function run(id, filePath) {
-  const built = build(filePath, id.startsWith("conv:") ? "convert" : id.startsWith("tool:") ? "tools" : "actions");
-  const found = built.items.find((i) => i.id === id);
-  if (found && !found.available) throw new Error(found.reason || "Indisponível");
+async function convertArchive(filePath, dest, to) {
+  const tmp = scratch();
+  try {
+    const content = path.join(tmp, "x");
+    fs.mkdirSync(content);
+    await spawnWait("tar", ["-xf", filePath, "-C", content], { timeout: 10 * 60 * 1000 });
+    const args = to === "zip" ? ["-a", "-cf", dest] : to === "gz" ? ["-czf", dest] : ["-cf", dest];
+    await spawnWait("tar", [...args, "-C", content, "."], { timeout: 10 * 60 * 1000 });
+    return exists(dest);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
+}
+
+async function convert(filePath, to) {
   const dir = path.dirname(filePath);
   const stem = path.parse(filePath).name;
-  const t = tools();
-  if (id.startsWith("conv:")) {
-    const to = id.slice(5);
-    const dest = uniquePath(dir, stem, to);
-    const from = fmtOf(filePath);
-    if (nativeConvertible(from, to)) {
-      const fmt = { jpg: "Jpeg", png: "Png", bmp: "Bmp", gif: "Gif", tiff: "Tiff" }[to === "tif" ? "tiff" : to];
-      await spawnWait("powershell", ["-NoProfile", "-Command", `
-        Add-Type -AssemblyName System.Drawing
-        $img = [System.Drawing.Image]::FromFile($env:VOR_SRC)
-        $img.Save($env:VOR_DEST, [System.Drawing.Imaging.ImageFormat]::${fmt})
-        $img.Dispose()
-      `], { env: { ...process.env, VOR_SRC: filePath, VOR_DEST: dest } });
-      if (!fs.existsSync(dest)) throw new Error("A conversão não gerou o arquivo");
-      return dest;
+  const from = fmtOf(filePath);
+  const kind = kindOf(from);
+  const dest = uniquePath(dir, stem, to === "gz" ? "tar.gz" : to);
+
+  if (kind === "image") {
+    if (nativeConvertible(from, to)) return nativeImage(filePath, dest, to === "tif" ? "tiff" : to);
+    // [0]: primeira camada/quadro (PSD, ICO, GIF animado) — evita vários arquivos de saída.
+    await spawnWait(need("magick"), [`${filePath}[0]`, ...(to === "jpg" ? ["-background", "white", "-flatten", "-quality", "90"] : []), dest]);
+    return exists(dest);
+  }
+  if (kind === "audio" || kind === "video" || kind === "gif") {
+    const args = ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", filePath];
+    if (to === "mp3") args.push("-vn", "-b:a", "192k");
+    if (to === "gif") args.push("-vf", "fps=12,scale='min(640,iw)':-2:flags=lanczos");
+    if (kind === "gif" || to === "mp4" || to === "mov") args.push("-pix_fmt", "yuv420p", "-vf", "scale=trunc(iw/2)*2:trunc(ih/2)*2");
+    await spawnWait(need("ffmpeg"), [...args, dest], { timeout: 30 * 60 * 1000 });
+    return exists(dest);
+  }
+  if (kind === "subtitle") return convertSubtitle(filePath, dest, to);
+  if (kind === "archive") return convertArchive(filePath, dest, to);
+
+  const tmp = scratch();
+  try {
+    const finish = (produced) => {
+      if (fs.statSync(produced).isDirectory()) return produced;
+      fs.copyFileSync(produced, dest);
+      return exists(dest);
+    };
+    if (kind === "pdf") {
+      if (to === "png" || to === "jpg") return await pdfToImages(filePath, to, dir, stem);
+      if (to === "docx") return finish(await soffice(filePath, "docx", tmp, { infilter: "writer_pdf_import" }));
+      if (to === "pptx") return finish(await soffice(filePath, "pptx", tmp, { infilter: "impress_pdf_import" }));
+      // Texto real do PDF; um PDF que é só imagem (cartaz escaneado/exportado) não tem nada a extrair.
+      const text = path.join(tmp, "doc.txt");
+      await spawnWait(need("mutool"), ["convert", "-F", "text", "-o", text, filePath], { timeout: 300000 });
+      if (!fs.existsSync(text) || !fs.readFileSync(text, "utf8").trim()) {
+        throw new Error("Este PDF não tem texto (é só imagem). Use PNG/JPG ou DOCX/PPTX");
+      }
+      if (to === "txt") return finish(text);
+      const html = path.join(tmp, "doc.html");
+      await spawnWait(need("mutool"), ["convert", "-F", "html", "-o", html, filePath], { timeout: 300000 });
+      exists(html);
+      if (to === "html") return finish(html);
+      return await pandoc(html, to, dest, "html");
     }
-    if (needsPandoc(id, filePath)) {
-      if (!(t.pandoc && fs.existsSync(t.pandoc))) throw new Error("Não consegui preparar o conversor de texto");
-      return convertWithPandoc(filePath, dest, to, t.pandoc);
-    }
-    if (kindOf(from) === "image") {
-      if (!(t.magick && fs.existsSync(t.magick))) throw new Error("Conversor de imagens indisponível");
-      await spawnWait(t.magick, [filePath, dest]);
-      if (!fs.existsSync(dest)) throw new Error("A conversão não gerou o arquivo");
-      return dest;
-    }
-    if (kindOf(from) === "audio" || kindOf(from) === "video" || kindOf(from) === "gif") {
-      if (!(t.ffmpeg && fs.existsSync(t.ffmpeg))) throw new Error("Conversor de áudio e vídeo indisponível");
-      // -nostdin: sem isto o ffmpeg pode ficar à espera do terminal e nunca terminar.
-      await spawnWait(t.ffmpeg, ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", filePath, dest], {
-        timeout: 30 * 60 * 1000,
-      });
-      if (!fs.existsSync(dest)) throw new Error("A conversão não gerou o arquivo");
-      return dest;
-    }
-    if (kindOf(from) === "sheet" && EXCEL_FORMAT[to] !== undefined && hasExcel()) {
+    if (excelHandles(from, to)) {
       try {
         return await convertWithExcel(filePath, dest, to);
       } catch (err) {
-        if (!(t.soffice && fs.existsSync(t.soffice))) throw err;
+        if (!fs.existsSync(sofficePath())) throw err;
       }
     }
-    if (t.soffice && fs.existsSync(t.soffice)) {
-      /**
-       * Perfil próprio: com o perfil padrão, um LibreOffice aberto (ou um lock órfão) faz o
-       * `--convert-to` sair sem fazer nada ou ficar pendurado.
-       */
-      const profile = require("url").pathToFileURL(path.join(dataRoot(), "soffice-profile")).href;
-      const args = ["--headless", "--norestore", `-env:UserInstallation=${profile}`];
-      if (from === "pdf") args.push("--infilter=writer_pdf_import");
-      args.push("--convert-to", to, "--outdir", dir, filePath);
-      await spawnWait(t.soffice, args, { timeout: 180000 });
-      const produced = path.join(dir, `${stem}.${to}`);
-      if (fs.existsSync(dest)) return dest;
-      if (fs.existsSync(produced)) return produced;
-      throw new Error("A conversão não gerou o arquivo");
+    if (to === "png" || to === "jpg") return await pdfToImages(await toPdf(filePath, tmp), to, dir, stem);
+    if (to === "pdf") return finish(await toPdf(filePath, tmp));
+    if (kind === "epub" || from === "md" || to === "md" || to === "epub") {
+      const source = await toPandocSource(filePath, tmp);
+      return await pandoc(source.file, to, dest, source.reader);
     }
-    throw new Error("Essa conversão ainda não está disponível");
+    return finish(await soffice(filePath, to, tmp));
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
   }
-  if (id === "act:copy" || id === "tool:copy") {
+}
+
+async function runTool(tool, filePath) {
+  const dir = path.dirname(filePath);
+  const stem = path.parse(filePath).name;
+  const from = fmtOf(filePath);
+  const kind = kindOf(from);
+  const ext = path.extname(filePath).slice(1) || "bin";
+  const ff = (args, dest) => spawnWait(need("ffmpeg"), ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", filePath, ...args, dest], { timeout: 30 * 60 * 1000 }).then(() => exists(dest));
+  if (tool === "extractArchive") {
+    const destDir = uniqueDir(dir, `${stem}-extract`);
+    fs.mkdirSync(destDir, { recursive: true });
+    await spawnWait("tar", ["-xf", filePath, "-C", destDir], { timeout: 10 * 60 * 1000 });
+    return destDir;
+  }
+  if (kind === "pdf") {
+    const mutool = need("mutool");
+    if (tool === "compress" || tool === "removeMetadata") {
+      const dest = uniquePath(dir, `${stem}-${tool === "compress" ? "compressed" : "clean"}`, "pdf");
+      // compress: reamostra imagens acima de 150 dpi para 150 dpi e recomprime em JPEG (q75), só se ficar menor.
+      const args = tool === "compress"
+        ? ["clean", "-gggg", "-z", "-f", "-i", "-Z", "-m",
+          "--color-image-subsample-dpi", "200,150", "--gray-image-subsample-dpi", "200,150",
+          "--color-image-recompress-method", "jpeg:75", "--gray-image-recompress-method", "jpeg:75"]
+        : ["clean", "-gg", "-z"];
+      await spawnWait(mutool, [...args, filePath, dest], { timeout: 300000 });
+      exists(dest);
+      if (tool === "compress" && fs.statSync(dest).size >= fs.statSync(filePath).size) {
+        fs.rmSync(dest, { force: true });
+        throw new Error("Este PDF já está otimizado — não deu para reduzir mais");
+      }
+      return dest;
+    }
+    if (tool === "splitPDF") {
+      const outDir = uniqueDir(dir, `${stem} (páginas)`);
+      fs.mkdirSync(outDir, { recursive: true });
+      const tmp = scratch();
+      try {
+        await spawnWait(mutool, ["draw", "-F", "txt", "-o", path.join(tmp, "p-%d.txt"), filePath], { timeout: 300000 });
+        const count = fs.readdirSync(tmp).length;
+        for (let i = 1; i <= count; i += 1) {
+          await spawnWait(mutool, ["merge", "-o", path.join(outDir, `${stem}-${String(i).padStart(3, "0")}.pdf`), filePath, String(i)]);
+        }
+      } finally {
+        fs.rmSync(tmp, { recursive: true, force: true });
+      }
+      return outDir;
+    }
+  }
+  if (kind === "image") {
+    if (tool === "compress") {
+      const dest = uniquePath(dir, `${stem}-compressed`, "jpg");
+      return nativeConvertible(from, "jpg")
+        ? nativeImage(filePath, dest, "jpg")
+        : spawnWait(need("magick"), [`${filePath}[0]`, "-background", "white", "-flatten", "-quality", "80", dest]).then(() => exists(dest));
+    }
+    if (tool === "removeMetadata") {
+      const dest = uniquePath(dir, `${stem}-clean`, ext);
+      await spawnWait(need("magick"), [filePath, "-strip", dest]);
+      return exists(dest);
+    }
+  }
+  if (kind === "audio" || kind === "video" || kind === "gif") {
+    if (tool === "removeMetadata") return ff(["-map_metadata", "-1", "-c", "copy"], uniquePath(dir, `${stem}-clean`, ext));
+    if (tool === "compress" && kind === "audio") return ff(["-vn", "-b:a", "128k"], uniquePath(dir, `${stem}-compressed`, "mp3"));
+    if (tool === "compress") return ff(["-c:v", "libx264", "-crf", "28", "-preset", "veryfast", "-c:a", "aac", "-b:a", "128k", "-pix_fmt", "yuv420p"], uniquePath(dir, `${stem}-compressed`, "mp4"));
+    if (tool === "normalizeAudio") return ff(["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"], uniquePath(dir, `${stem}-normalized`, ext));
+    if (tool === "audioChannels") return ff(["-ac", "1"], uniquePath(dir, `${stem}-mono`, ext));
+    if (tool === "muteVideo") return ff(["-c:v", "copy", "-an"], uniquePath(dir, `${stem}-mute`, ext));
+    if (tool === "videoSnapshots") {
+      const outDir = uniqueDir(dir, `${stem} (snapshots)`);
+      fs.mkdirSync(outDir, { recursive: true });
+      await spawnWait(need("ffmpeg"), ["-nostdin", "-hide_banner", "-loglevel", "error", "-i", filePath, "-vf", "fps=1/5", path.join(outDir, `${stem}-%03d.png`)], { timeout: 30 * 60 * 1000 });
+      return outDir;
+    }
+  }
+  throw new Error("Essa ferramenta ainda não está disponível para este arquivo");
+}
+
+async function run(id, filePath) {
+  const dir = path.dirname(filePath);
+  const stem = path.parse(filePath).name;
+  if (id.startsWith("conv:")) return convert(filePath, id.slice(5));
+  if (id.startsWith("tool:")) {
+    const tool = id.slice(5);
+    if (tool === "copy") return run("act:copy", filePath);
+    return runTool(tool, filePath);
+  }
+  if (id === "act:copy") {
     const dest = uniquePath(dir, stem, path.extname(filePath).slice(1) || "bin");
     fs.copyFileSync(filePath, dest);
     return dest;
@@ -779,30 +1033,12 @@ async function run(id, filePath) {
     fs.renameSync(filePath, dest);
     return dest;
   }
-  if (id === "act:copyPath") {
-    return filePath;
-  }
+  if (id === "act:copyPath") return filePath;
   if (id === "act:openTerminal") {
-    spawn("cmd", ["/C", "start", "cmd", "/K", `cd /d ${dir}`], { detached: true, stdio: "ignore" }).unref();
+    spawn("cmd", ["/C", "start", "cmd", "/K", `cd /d "${dir}"`], { detached: true, stdio: "ignore", windowsVerbatimArguments: true }).unref();
     return dir;
   }
-  if (id === "tool:compress" && kindOf(fmtOf(filePath)) === "image") {
-    const dest = uniquePath(dir, `${stem}-compressed`, "jpg");
-    await spawnWait("powershell", ["-NoProfile", "-Command", `
-      Add-Type -AssemblyName System.Drawing
-      $img = [System.Drawing.Image]::FromFile($env:VOR_SRC)
-      $img.Save($env:VOR_DEST, [System.Drawing.Imaging.ImageFormat]::Jpeg)
-      $img.Dispose()
-    `], { env: { ...process.env, VOR_SRC: filePath, VOR_DEST: dest } });
-    return dest;
-  }
-  if (id === "tool:extractArchive" && t.tar) {
-    const destDir = uniquePath(dir, `${stem}-extract`, "dir").replace(/\.dir$/, "");
-    fs.mkdirSync(destDir, { recursive: true });
-    await spawnWait(t.tar, ["-xf", filePath, "-C", destDir], { timeout: 10 * 60 * 1000 });
-    return destDir;
-  }
-  throw new Error(SOON);
+  throw new Error("Essa ação ainda não está disponível");
 }
 
-module.exports = { build, pending, run, tools, prepare };
+module.exports = { build, pending, run, tools, prepare, targets, toolsFor, kindOf, fmtOf };

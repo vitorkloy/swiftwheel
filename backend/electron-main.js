@@ -4096,7 +4096,7 @@ app.whenReady().then(async () => {
           const out = await shiftWheels.run(id, filePath);
           try {
             const { Notification } = require("electron");
-            if (Notification.isSupported() && id.startsWith("conv:")) {
+            if (Notification.isSupported() && !id.startsWith("act:")) {
               new Notification({ title: "VOR", body: `Pronto: ${path.basename(String(out))}` }).show();
             }
           } catch { /* ignore */ }
