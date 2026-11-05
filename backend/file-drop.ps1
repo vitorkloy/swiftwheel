@@ -40,6 +40,8 @@ public class VorFileDrop : Form {
         stdin = GetStdHandle(-10);
         var form = new VorFileDrop();
         form.CreateControl();
+        // Força o HWND agora: BeginInvoke da thread de leitura precisa dele (CreateControl não cria em janela oculta).
+        var hwnd = form.Handle;
         // Leitura bloqueante numa thread: sem timer, o helper fica a 0% de CPU enquanto ninguém arrasta nada.
         var reader = new System.Threading.Thread(delegate () { form.ReadLoop(); });
         reader.IsBackground = true;
