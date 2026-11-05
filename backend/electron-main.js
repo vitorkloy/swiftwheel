@@ -12,6 +12,9 @@ const {
   session,
   protocol,
 } = require("electron");
+/** Aparência atual (Definições → Aparência), espelhada do renderer para as janelas do ShiftDrop. */
+let vorAppearance = { theme: "black", accent: "#FFFFFF", glass: true, opacity: 0.8 };
+const vorAppearanceHooks = new Set();
 const { autoUpdater } = require("electron-updater");
 const { Notification: UpdateNotification } = require("electron");
 const path = require("path");
@@ -4109,6 +4112,9 @@ app.whenReady().then(async () => {
        * Fechar destrói a janela — nada fica em memória.
        */
       let floatShelf = null;
+      const pushShelfTheme = () => {
+        if (floatShelf && !floatShelf.isDestroyed()) floatShelf.webContents.send("shelf-theme", vorAppearance);
+      };
       let floatItems = [];
       const shelfIcons = new Map();
       const pushShelf = async () => {
@@ -4124,8 +4130,9 @@ app.whenReady().then(async () => {
           items.push({ path: p, name: path.basename(p), icon });
         }
         if (!floatShelf || floatShelf.isDestroyed()) return;
+        floatShelf.webContents.send("shelf-theme", vorAppearance);
         floatShelf.webContents.send("shelf-items", items);
-        const height = Math.min(420, 44 + Math.max(1, items.length) * 36 + (items.length > 1 ? 40 : 0) + 12);
+        const height = Math.min(440, 54 + Math.max(1, items.length) * 41 + (items.length > 1 ? 42 : 0) + 16);
         const [w] = floatShelf.getSize();
         floatShelf.setSize(w, height);
         snapShelf();
@@ -4144,6 +4151,7 @@ app.whenReady().then(async () => {
         y = Math.min(Math.max(y, area.y), area.y + area.height - b.height);
         if (x !== b.x || y !== b.y) floatShelf.setPosition(x, y);
       };
+      vorAppearanceHooks.add(pushShelfTheme);
       const openFloatShelf = (targets) => {
         const { BrowserWindow } = require("electron");
         const list = (Array.isArray(targets) ? targets : [targets]).map(String).filter(Boolean);
@@ -4223,11 +4231,22 @@ app.whenReady().then(async () => {
       });
       const openFileStudio = (sliceId, target, batch = {}) => new Promise((resolve, reject) => {
         const { BrowserWindow, ipcMain: bus } = require("electron");
+        const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+        const formOnly = !!shiftWheels.studioForm(sliceId, target);
+        const width = Math.min(area.width, formOnly ? 640 : 1000);
+        const height = Math.min(area.height, formOnly ? 560 : 720);
+        // Sem moldura do Windows: o cartão arredondado de vidro é desenhado no HTML (margem de 14px para a sombra).
         const win = new BrowserWindow({
-          width: 960,
-          height: 680,
+          width,
+          height,
+          x: Math.round(area.x + (area.width - width) / 2),
+          y: Math.round(area.y + (area.height - height) / 2),
+          frame: false,
+          transparent: true,
+          hasShadow: false,
+          backgroundColor: "#00000000",
           autoHideMenuBar: true,
-          backgroundColor: "#111111",
+          resizable: true,
           alwaysOnTop: true,
           webPreferences: {
             preload: path.join(__dirname, "studio-preload.js"),
@@ -4265,7 +4284,7 @@ app.whenReady().then(async () => {
           }
           try { bus.removeHandler("studio-job"); } catch { /* ignore */ }
           const form = shiftWheels.studioForm(sliceId, target);
-          bus.handle("studio-job", () => ({ id: sliceId, filePath: target, pages, form, ...batch }));
+          bus.handle("studio-job", () => ({ id: sliceId, filePath: target, pages, form, appearance: vorAppearance, ...batch }));
           await win.loadFile(path.join(__dirname, "studio.html"));
         })().catch((err) => {
           if (!settled) {
@@ -4283,19 +4302,25 @@ app.whenReady().then(async () => {
       let shiftToast = null;
       let shiftToastHide = null;
       let shiftToastKill = null;
+      /** Toast no estilo Tangerine: cartão de vidro pequeno, ação + arquivo + "N de M" e barra fina no acento. */
       const SHIFT_TOAST_HTML = `<!doctype html><meta charset="utf-8"><style>
-        html,body{margin:0;background:transparent;overflow:hidden;font:12.5px "Segoe UI",sans-serif;color:#f4f4f5}
-        .t{margin:6px;padding:10px 14px 12px;border-radius:12px;background:rgba(24,24,27,.92);border:1px solid rgba(255,255,255,.14);
-           box-shadow:0 8px 24px rgba(0,0,0,.35);opacity:0;transform:translateY(6px) scale(.98);transition:opacity .14s,transform .18s cubic-bezier(.2,.9,.2,1)}
+        :root{--bg:rgba(24,24,26,.9);--line:rgba(255,255,255,.12);--text:rgba(255,255,255,.94);--text2:rgba(255,255,255,.55);--track:rgba(255,255,255,.12);--accent:#fff;--elev:0 14px 34px rgba(0,0,0,.45)}
+        [data-theme=white]{--bg:rgba(250,250,251,.94);--line:rgba(0,0,0,.09);--text:rgba(0,0,0,.88);--text2:rgba(0,0,0,.52);--track:rgba(0,0,0,.08);--elev:0 14px 34px rgba(0,0,0,.16)}
+        html,body{margin:0;background:transparent;overflow:hidden;font:12.5px/1.3 "Segoe UI Variable Text","Segoe UI",sans-serif;color:var(--text);-webkit-font-smoothing:antialiased}
+        .t{margin:10px;padding:11px 14px 12px;border-radius:14px;background:var(--bg);background-image:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,0));
+           box-shadow:inset 0 0 0 1px var(--line),var(--elev);opacity:0;transform:translateY(8px) scale(.97);transition:opacity .14s,transform .22s cubic-bezier(.2,1.3,.35,1)}
         .t.on{opacity:1;transform:none}
-        .l{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .b{margin-top:8px;height:3px;border-radius:2px;background:rgba(255,255,255,.14);overflow:hidden}
-        .f{height:100%;width:0;background:#fff;transition:width .2s}
-        .f.i{width:30%;animation:k 1s ease-in-out infinite}
-        @keyframes k{0%{margin-left:-30%}100%{margin-left:100%}}
-      </style><div class="t" id="t"><div class="l" id="l"></div><div class="b"><div class="f" id="f"></div></div></div>
-      <script>window.set=function(text,pct,on){document.getElementById('l').textContent=text;var f=document.getElementById('f');
-      if(pct<0){f.className='f i';f.style.width='';}else{f.className='f';f.style.width=Math.round(pct*100)+'%';}
+        .r{display:flex;align-items:baseline;gap:8px}
+        .l{flex:1;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .n{color:var(--text2);font-variant-numeric:tabular-nums;font-size:11.5px;white-space:nowrap}
+        .b{margin-top:9px;height:3px;border-radius:2px;background:var(--track);overflow:hidden}
+        .f{height:100%;width:100%;background:var(--accent);border-radius:2px;transform-origin:0 50%;transform:scaleX(0);transition:transform .2s cubic-bezier(.22,1,.36,1)}
+        .f.i{width:30%;transform:none;animation:k 1.1s cubic-bezier(.45,0,.55,1) infinite}
+        @keyframes k{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}
+      </style><div class="t" id="t"><div class="r"><div class="l" id="l"></div><div class="n" id="n"></div></div><div class="b"><div class="f" id="f"></div></div></div>
+      <script>window.theme=function(a){document.documentElement.dataset.theme=a.theme==='white'?'white':'black';var c=/^#ffffff$/i.test(a.accent||'#ffffff')?(a.theme==='white'?'#101012':'#ffffff'):a.accent;document.documentElement.style.setProperty('--accent',c);};
+      window.set=function(text,pct,on){var m=String(text).match(/^(.*?)\s(\d+ de \d+)$/);document.getElementById('l').textContent=m?m[1]:text;document.getElementById('n').textContent=m?m[2]:'';var f=document.getElementById('f');
+      if(pct<0){f.className='f i';f.style.transform='';}else{f.className='f';f.style.transform='scaleX('+Math.max(0,Math.min(1,pct))+')';}
       document.getElementById('t').className=on?'t on':'t';};</script>`;
       const showShiftToast = (text, pct) => {
         try {
@@ -4304,13 +4329,13 @@ app.whenReady().then(async () => {
           if (shiftToastKill) { clearTimeout(shiftToastKill); shiftToastKill = null; }
           const push = () => {
             if (!shiftToast || shiftToast.isDestroyed()) return;
-            shiftToast.webContents.executeJavaScript(`window.set && window.set(${JSON.stringify(text)}, ${Number(pct)}, true)`).catch(() => {});
+            shiftToast.webContents.executeJavaScript(`window.theme && window.theme(${JSON.stringify(vorAppearance)}); window.set && window.set(${JSON.stringify(text)}, ${Number(pct)}, true)`).catch(() => {});
             if (!shiftToast.isVisible()) shiftToast.showInactive();
           };
           if (!shiftToast || shiftToast.isDestroyed()) {
             const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
-            const w = 300;
-            const h = 64;
+            const w = 320;
+            const h = 80;
             shiftToast = new BrowserWindow({
               width: w, height: h, x: area.x + area.width - w - 12, y: area.y + area.height - h - 12,
               frame: false, transparent: true, resizable: false, movable: false, focusable: false,
@@ -6087,6 +6112,17 @@ const notifyErrorOs = (message) => {
     if (Notification.isSupported()) new Notification({ title: "VOR", body: body.slice(0, 240) }).show();
   } catch { /* ignore */ }
 };
+  /** Tema/acento/vidro vindos da Aparência (renderer). As janelas HTML do ShiftDrop leem daqui, ao vivo. */
+  ipcMain.on("vor-appearance", (_event, next) => {
+    const a = next && typeof next === "object" ? next : {};
+    vorAppearance = {
+      theme: a.theme === "white" ? "white" : "black",
+      accent: /^#[0-9a-f]{6}$/i.test(String(a.accent || "")) ? String(a.accent) : "#FFFFFF",
+      glass: a.glass !== false,
+      opacity: Math.min(1, Math.max(0.35, Number(a.opacity) || 0.8)),
+    };
+    for (const hook of vorAppearanceHooks) { try { hook(); } catch { /* ignore */ } }
+  });
 ipcMain.on("vor-notify-error", (_event, message) => notifyErrorOs(message));
 
 // IPC: Recebe comando do React para executar app

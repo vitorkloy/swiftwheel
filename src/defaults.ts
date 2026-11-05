@@ -245,6 +245,7 @@ export const DEFAULT_UI_CONFIG: UIConfig = {
   fixedPosition: true,
   backdropOpacity: 1,
   menuOpacity: 0.8,
+  glassEffect: true,
   menuBackgroundStyle: "circle",
   appSpacing: 10, // Default spacing between apps
   activationThreshold: 60,

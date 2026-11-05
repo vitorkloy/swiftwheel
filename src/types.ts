@@ -119,6 +119,8 @@ export interface UIConfig {
   fixedPosition: boolean;
   backdropOpacity: number;
   menuOpacity: number;
+  /** Vidro: superfícies da roda translúcidas (alfa = menuOpacity) com brilho superior. Desligado = sólido. */
+  glassEffect?: boolean;
   menuBackgroundStyle: "circle" | "fullscreen";
   appSpacing: number; // New: spacing between apps in radial menu
   activationThreshold: number;
@@ -227,6 +229,8 @@ export interface ElectronAPI {
   noteFileDragPath?: (filePath: string) => Promise<{ ok: boolean }>;
   /** Mostra um erro só como notificação do sistema (PT-BR, título VOR). */
   notifyError?: (message: string) => void;
+  /** Tema/acento/vidro para as janelas do ShiftDrop (estúdio, toast, prateleira), que não são React. */
+  setAppearance?: (appearance: { theme: 'black' | 'white'; accent: string; glass: boolean; opacity: number }) => void;
   shiftToolStatus?: () => Promise<Record<string, string | null>>;
   filePath?: (file: File) => string;
   onOpenMenu: (

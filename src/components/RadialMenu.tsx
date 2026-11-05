@@ -223,6 +223,8 @@ interface RadialMenuItemProps {
   totalApps: number;
   /** Narrow style props so parent config identity does not bust memo for every App re-render. */
   backdropOpacity: number;
+  /** Alfa da superfície do tile: 1 = sólido; < 1 = vidro (Aparência → Efeito vidro + Opacidade). */
+  surfaceAlpha: number;
   hoverColor: string;
   showLabels: boolean;
   alwaysShowAppLabels: boolean;
@@ -301,6 +303,7 @@ const RadialMenuItem = React.memo(({
   actualIconSize,
   totalApps,
   backdropOpacity,
+  surfaceAlpha,
   hoverColor,
   showLabels,
   alwaysShowAppLabels,
@@ -427,7 +430,11 @@ const RadialMenuItem = React.memo(({
                */
               backgroundColor: isActive
                 ? hoverColor
-                : `rgb(${12 + Math.round(backdropOpacity * 10)}, ${12 + Math.round(backdropOpacity * 10)}, ${12 + Math.round(backdropOpacity * 10)})`,
+                : `rgba(${12 + Math.round(backdropOpacity * 10)}, ${12 + Math.round(backdropOpacity * 10)}, ${14 + Math.round(backdropOpacity * 10)}, ${surfaceAlpha})`,
+              /* Vidro: brilho de cima para baixo por cima do fundo translúcido (só com alfa < 1). */
+              backgroundImage: !isActive && surfaceAlpha < 1
+                ? 'linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.02) 55%, rgba(255,255,255,0))'
+                : undefined,
               border: isActive ? `1px solid ${hoverColor}` : `1px solid rgba(255,255,255,${0.28 + backdropOpacity * 0.08})`,
               color: isActive ? activeForeground : '#fff',
               /**
@@ -593,6 +600,8 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
   const configRef = useRef(config);
   configRef.current = config;
   const radialHoverColor = normalizeHoverColor(config.radialHoverColor);
+  /** Antes `menuOpacity` não era lido por ninguém e o "vidro" não existia: os tiles eram sempre opacos. */
+  const surfaceAlpha = config.glassEffect === false ? 1 : Math.min(1, Math.max(0.35, config.menuOpacity ?? 0.8));
   const radialHoverForeground = getReadableForeground(radialHoverColor);
   const iconSizePx = config.iconSize || 64;
   const minGap = config.appSpacing || 0;
@@ -1647,6 +1656,9 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
 
             {fileMode && (
               <FilePetalWheel
+                accent={radialHoverColor}
+                theme={config.appearanceTheme === 'white' ? 'white' : 'black'}
+                surfaceAlpha={surfaceAlpha}
                 items={currentLevelApps}
                 activeIndex={activeIndex}
                 centerActive={isCenterActive}
@@ -1677,7 +1689,7 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
                  * que não têm aresta para serrilhar. O fundo sobe de .78 para .90 porque deixou
                  * de haver anel a segurar o contorno sobre um wallpaper claro.
                  */
-                backgroundColor: isCenterActive ? radialHoverColor : 'rgba(6,7,9,0.90)',
+                backgroundColor: isCenterActive ? radialHoverColor : `rgba(6,7,9,${Math.min(0.9, surfaceAlpha)})`,
                 /** A borda não é CSS — é um `<circle>` SVG lá dentro. Ver o comentário do anel. */
                 border: 'none',
                 color: isCenterActive ? radialHoverForeground : undefined,
@@ -1862,6 +1874,7 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
                     actualIconSize={actualIconSize}
                     totalApps={currentLevelApps.length}
                     backdropOpacity={config.backdropOpacity}
+                    surfaceAlpha={surfaceAlpha}
                     hoverColor={radialHoverColor}
                     showLabels={config.showLabels}
                     alwaysShowAppLabels={config.alwaysShowAppLabels ?? false}

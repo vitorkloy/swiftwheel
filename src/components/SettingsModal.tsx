@@ -1272,8 +1272,23 @@ const VisualsTab = React.memo(({ config, setConfig }: { config: UIConfig; setCon
                             title={t('visuals.section_appearance')}
                             description={t('visuals.section_appearance_desc')}
                         >
+                            <SettingsToggleRow
+                                label={t('visuals.glass_effect')}
+                                description={t('visuals.glass_hint')}
+                                enabled={config.glassEffect !== false}
+                                onToggle={() => setConfig({ ...config, glassEffect: config.glassEffect === false })}
+                            />
                             <SettingsSliderField
                                 label={t('visuals.opacity')}
+                                valueLabel={`${Math.round((config.menuOpacity ?? 0.8) * 100)}%`}
+                                value={config.menuOpacity ?? 0.8}
+                                min={0.35}
+                                max={1}
+                                step={0.05}
+                                onChange={(menuOpacity) => setConfig({ ...config, menuOpacity })}
+                            />
+                            <SettingsSliderField
+                                label={t('visuals.dim_background')}
                                 valueLabel={`${Math.round(config.backdropOpacity * 100)}%`}
                                 value={config.backdropOpacity}
                                 min={0}
@@ -1290,15 +1305,15 @@ const VisualsTab = React.memo(({ config, setConfig }: { config: UIConfig; setCon
                                     <div className="relative shrink-0 rounded-xl border border-white/[0.1] bg-black/30 p-1.5">
                                         <input
                                             type="color"
-                                            value={config.accentColor}
-                                            onChange={(e) => setConfig({ ...config, accentColor: e.target.value })}
+                                            value={/^#[0-9a-f]{6}$/i.test(config.accentColor) ? config.accentColor : '#ffffff'}
+                                            onChange={(e) => setConfig({ ...config, accentColor: e.target.value, radialHoverColor: e.target.value })}
                                             className="h-10 w-10 cursor-pointer rounded-lg border-none bg-transparent outline-none"
                                         />
                                     </div>
                                     <input
                                         type="text"
                                         value={config.accentColor}
-                                        onChange={(e) => setConfig({ ...config, accentColor: e.target.value })}
+                                        onChange={(e) => setConfig({ ...config, accentColor: e.target.value, ...(/^#[0-9a-f]{6}$/i.test(e.target.value) ? { radialHoverColor: e.target.value } : {}) })}
                                         className="min-w-0 flex-1 rounded-lg border border-white/[0.08] bg-white/[0.03] px-3 py-2.5 font-mono text-[13px] text-white/88 outline-none transition-colors focus:border-white/20 focus:bg-white/[0.05]"
                                         placeholder="#FFFFFF"
                                         spellCheck={false}

@@ -4,25 +4,34 @@
 <meta charset="utf-8" />
 <title>VOR · Prateleira</title>
 <style>
-  :root { color-scheme: dark; }
+  :root { color-scheme: dark; --bg: rgba(22,22,24,.9); --line: rgba(255,255,255,.12); --hover: rgba(255,255,255,.07); --text: rgba(255,255,255,.93);
+    --text-2: rgba(255,255,255,.55); --text-3: rgba(255,255,255,.34); --accent: #fff; --on-accent: #0a0a0b; --elev: 0 18px 44px rgba(0,0,0,.5);
+    --spring: cubic-bezier(.2,1.3,.35,1); }
+  [data-theme="white"] { color-scheme: light; --bg: rgba(250,250,251,.93); --line: rgba(0,0,0,.09); --hover: rgba(0,0,0,.05); --text: rgba(0,0,0,.88);
+    --text-2: rgba(0,0,0,.52); --text-3: rgba(0,0,0,.34); --elev: 0 18px 44px rgba(0,0,0,.16); }
   * { box-sizing: border-box; }
-  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; font: 12.5px/1.3 "Segoe UI", sans-serif; color: #f4f4f5; user-select: none; }
-  .shelf { margin: 6px; height: calc(100% - 12px); display: flex; flex-direction: column; border-radius: 14px; background: rgba(21,21,23,.94); border: 1px solid rgba(255,255,255,.14); box-shadow: 0 10px 28px rgba(0,0,0,.4); animation: pop .2s cubic-bezier(.2,1.2,.3,1); }
-  .shelf.over { border-color: #fff; }
-  @keyframes pop { from { transform: scale(.94); opacity: 0; } }
-  header { display: flex; align-items: center; gap: 6px; padding: 8px 10px 6px; -webkit-app-region: drag; }
-  header b { flex: 1; font-size: 11px; letter-spacing: .06em; color: #a1a1aa; }
-  header button { -webkit-app-region: no-drag; background: transparent; color: #d4d4d8; border: 0; border-radius: 6px; padding: 2px 6px; cursor: pointer; font-size: 12px; }
-  header button:hover { background: rgba(255,255,255,.1); }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; font: 12.5px/1.3 "Segoe UI Variable Text", "Segoe UI", sans-serif; color: var(--text); user-select: none; -webkit-font-smoothing: antialiased; }
+  .shelf { margin: 8px; height: calc(100% - 16px); display: flex; flex-direction: column; border-radius: 18px; background: var(--bg);
+    background-image: linear-gradient(180deg, rgba(255,255,255,.06), rgba(255,255,255,0) 90px);
+    box-shadow: inset 0 0 0 1px var(--line), var(--elev); animation: pop .22s var(--spring) both; transition: box-shadow .12s; }
+  .shelf.over { box-shadow: inset 0 0 0 2px var(--accent), var(--elev); }
+  @keyframes pop { from { transform: scale(.92); opacity: 0; } }
+  header { display: flex; align-items: center; gap: 4px; height: 38px; padding: 0 6px 0 14px; -webkit-app-region: drag; }
+  header b { flex: 1; font-size: 10.5px; font-weight: 700; letter-spacing: .08em; color: var(--text-2); }
+  header button { -webkit-app-region: no-drag; height: 24px; background: transparent; color: var(--text-2); border: 0; border-radius: 999px; padding: 0 9px; cursor: pointer; font: 600 11px inherit; }
+  header button:hover { background: var(--hover); color: var(--text); }
   ul { list-style: none; margin: 0; padding: 0 6px 6px; overflow: auto; flex: 1; }
-  li { display: flex; align-items: center; gap: 8px; padding: 6px; border-radius: 8px; cursor: grab; }
-  li:hover { background: rgba(255,255,255,.07); }
-  li img { width: 24px; height: 24px; flex: none; }
-  li span { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
-  li button { visibility: hidden; background: transparent; border: 0; color: #a1a1aa; cursor: pointer; }
-  li:hover button { visibility: visible; }
-  .all { margin: 0 6px 6px; padding: 7px; text-align: center; border-radius: 8px; background: rgba(255,255,255,.08); cursor: grab; }
-  .empty { color: #71717a; text-align: center; padding: 14px 8px; }
+  li { display: flex; align-items: center; gap: 10px; padding: 5px 6px; border-radius: 10px; cursor: grab; transition: background-color .1s, transform .14s var(--spring); }
+  li:hover { background: var(--hover); }
+  li:active { transform: scale(.98); cursor: grabbing; }
+  li img { width: 30px; height: 30px; flex: none; border-radius: 7px; object-fit: cover; }
+  li img.thumb { box-shadow: inset 0 0 0 1px var(--line), 0 2px 6px rgba(0,0,0,.2); }
+  li span { flex: 1; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-weight: 500; }
+  li button { opacity: 0; width: 22px; height: 22px; border-radius: 999px; background: transparent; border: 0; color: var(--text-2); cursor: pointer; transition: opacity .1s; }
+  li:hover button { opacity: 1; }
+  li button:hover { background: var(--hover); color: var(--text); }
+  .all { margin: 0 8px 8px; height: 32px; display: grid; place-items: center; border-radius: 999px; background: var(--accent); color: var(--on-accent); font-weight: 600; cursor: grab; }
+  .empty { color: var(--text-3); justify-content: center; padding: 16px 8px; cursor: default; }
 </style>
 </head>
 <body>
@@ -43,7 +52,9 @@ function draw() {
     li.draggable = true;
     li.title = it.path;
     const img = document.createElement("img");
-    if (it.icon) img.src = it.icon;
+    const isImg = /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(it.path);
+    img.src = isImg ? "file:///" + it.path.replace(/\\/g, "/") : (it.icon || "");
+    if (isImg) { img.className = "thumb"; img.onerror = () => { img.className = ""; img.src = it.icon || ""; }; }
     const name = document.createElement("span");
     name.textContent = it.name;
     const x = document.createElement("button");
@@ -57,6 +68,16 @@ function draw() {
   $("all").hidden = items.length < 2;
 }
 window.shelf.onItems((next) => { items = next; draw(); });
+window.shelf.onTheme((a) => {
+  const root = document.documentElement;
+  root.dataset.theme = a && a.theme === "white" ? "white" : "black";
+  const white = /^#ffffff$/i.test((a && a.accent) || "#ffffff");
+  const accent = white ? (root.dataset.theme === "white" ? "#101012" : "#ffffff") : a.accent;
+  const h = accent.replace("#", "");
+  const lum = (0.2126 * parseInt(h.slice(0, 2), 16) + 0.7152 * parseInt(h.slice(2, 4), 16) + 0.0722 * parseInt(h.slice(4, 6), 16)) / 255;
+  root.style.setProperty("--accent", accent);
+  root.style.setProperty("--on-accent", lum > 0.56 ? "#0a0a0b" : "#ffffff");
+});
 $("all").addEventListener("dragstart", (ev) => { ev.preventDefault(); window.shelf.drag(items.map((i) => i.path)); });
 $("clear").onclick = () => window.shelf.clear();
 $("close").onclick = () => window.shelf.close();

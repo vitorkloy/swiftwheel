@@ -2691,6 +2691,15 @@ export default function App() {
 
   /** Tema das superfícies opacas (titlebar + painéis). O radial nunca é temado: é overlay do ambiente de trabalho. */
   const panelTheme = config.appearanceTheme === 'white' ? 'white' : 'black';
+  /** As janelas do ShiftDrop (HTML puro no main) seguem o mesmo tema/acento/vidro, ao vivo. */
+  useEffect(() => {
+    window.electron?.setAppearance?.({
+      theme: panelTheme,
+      accent: /^#[0-9a-f]{6}$/i.test(config.radialHoverColor ?? '') ? config.radialHoverColor! : '#FFFFFF',
+      glass: config.glassEffect !== false,
+      opacity: config.menuOpacity ?? 0.8,
+    });
+  }, [panelTheme, config.radialHoverColor, config.glassEffect, config.menuOpacity]);
 
   return (
     <div
