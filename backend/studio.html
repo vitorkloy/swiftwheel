@@ -1,0 +1,291 @@
+<!DOCTYPE html>
+<html lang="pt">
+<head>
+<meta charset="utf-8" />
+<title>VOR</title>
+<style>
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: #111; color: #f4f4f5; font: 13px/1.4 "Segoe UI", sans-serif; height: 100vh; display: flex; flex-direction: column; }
+  header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,.12); }
+  header strong { letter-spacing: .04em; font-size: 12px; }
+  main { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 16px; position: relative; }
+  footer { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 16px; border-top: 1px solid rgba(255,255,255,.12); }
+  button { background: #fff; color: #111; border: 0; border-radius: 8px; padding: 8px 14px; font-weight: 600; cursor: pointer; }
+  button.ghost { background: transparent; color: #f4f4f5; border: 1px solid rgba(255,255,255,.2); }
+  .stage { position: relative; max-width: 100%; max-height: 100%; }
+  canvas, img, video { max-width: 100%; max-height: calc(100vh - 160px); display: block; }
+  canvas.draw { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; }
+  .bar { display: flex; gap: 12px; align-items: center; padding: 0 16px 8px; }
+  input[type="range"] { flex: 1; }
+  .pages { display: flex; gap: 8px; overflow: auto; width: 100%; height: 100%; align-items: flex-start; padding: 8px; }
+  .page { width: 120px; flex: none; background: #1b1b1b; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; padding: 6px; }
+  .page img { width: 100%; height: auto; }
+  .page .row { display: flex; gap: 4px; margin-top: 6px; }
+  .page button { padding: 4px 6px; font-size: 11px; }
+  label { display: flex; gap: 8px; align-items: center; }
+</style>
+</head>
+<body>
+<header><strong id="title">VOR</strong><span id="hint"></span></header>
+<div class="bar" id="bar" hidden></div>
+<main id="main"></main>
+<footer>
+  <button class="ghost" id="cancel" type="button">Cancelar</button>
+  <button id="ok" type="button">Aplicar</button>
+</footer>
+<script>
+const $ = (id) => document.getElementById(id);
+const titles = {
+  cropImage: "CROP", redactImage: "REDACT", editImage: "EDIT", annotateImage: "ANNOTATE", frameImage: "ADD BG",
+  cropVideo: "CROP", redactVideo: "REDACT", trimVideo: "TRIM", splitVideo: "SPLIT", changeVideoSpeed: "SPEED", videoSnapshots: "SNAPSHOT",
+  trimAudio: "TRIM", redactAudio: "BLEEP", audioToVideo: "VISUALIZE", organizePDF: "ORGANIZE", splitPDF: "SPLIT",
+};
+let job = null;
+let rect = null;
+let strokes = [];
+let drawing = false;
+let pages = [];
+
+function fileUrl(p) {
+  return "file:///" + String(p).replace(/\\/g, "/");
+}
+
+function mediaBox(el) {
+  const stage = document.createElement("div");
+  stage.className = "stage";
+  stage.appendChild(el);
+  $("main").appendChild(stage);
+  return stage;
+}
+
+function overlay(stage) {
+  const c = document.createElement("canvas");
+  c.className = "draw";
+  stage.appendChild(c);
+  const fit = () => {
+    const r = stage.getBoundingClientRect();
+    c.width = Math.max(1, Math.round(r.width));
+    c.height = Math.max(1, Math.round(r.height));
+    paint(c);
+  };
+  requestAnimationFrame(fit);
+  return c;
+}
+
+function paint(c) {
+  const ctx = c.getContext("2d");
+  ctx.clearRect(0, 0, c.width, c.height);
+  ctx.strokeStyle = "#fff";
+  ctx.lineWidth = 2;
+  if (rect) {
+    ctx.strokeRect(rect.x, rect.y, rect.w, rect.h);
+    ctx.fillStyle = "rgba(0,0,0,.35)";
+    ctx.fillRect(rect.x, rect.y, rect.w, rect.h);
+  }
+  ctx.strokeStyle = "#fff";
+  strokes.forEach((line) => {
+    ctx.beginPath();
+    line.forEach((p, i) => i ? ctx.lineTo(p.x, p.y) : ctx.moveTo(p.x, p.y));
+    ctx.stroke();
+  });
+}
+
+function bindDrag(c, mode) {
+  const pt = (ev) => {
+    const r = c.getBoundingClientRect();
+    return { x: ev.clientX - r.left, y: ev.clientY - r.top };
+  };
+  c.addEventListener("pointerdown", (ev) => {
+    drawing = true;
+    const p = pt(ev);
+    if (mode === "draw") strokes.push([p]);
+    else rect = { x: p.x, y: p.y, w: 0, h: 0, ox: p.x, oy: p.y };
+    paint(c);
+  });
+  window.addEventListener("pointermove", (ev) => {
+    if (!drawing) return;
+    const p = pt(ev);
+    if (mode === "draw") strokes[strokes.length - 1].push(p);
+    else rect = { x: Math.min(rect.ox, p.x), y: Math.min(rect.oy, p.y), w: Math.abs(p.x - rect.ox), h: Math.abs(p.y - rect.oy), ox: rect.ox, oy: rect.oy };
+    paint(c);
+  });
+  window.addEventListener("pointerup", () => { drawing = false; });
+}
+
+function imageTool(tool) {
+  const img = new Image();
+  img.src = fileUrl(job.filePath);
+  const stage = mediaBox(img);
+  const c = overlay(stage);
+  if (tool === "cropImage" || tool === "redactImage") bindDrag(c, "rect");
+  if (tool === "editImage" || tool === "annotateImage") bindDrag(c, "draw");
+  if (tool === "frameImage") {
+    $("bar").hidden = false;
+    $("bar").innerHTML = '<label>Fundo <input id="color" type="color" value="#111111"></label><label>Margem <input id="pad" type="range" min="0" max="160" value="32"></label>';
+  }
+  $("ok").onclick = () => {
+    const out = document.createElement("canvas");
+    const natW = img.naturalWidth || img.width;
+    const natH = img.naturalHeight || img.height;
+    const box = stage.getBoundingClientRect();
+    const sx = natW / box.width;
+    const sy = natH / box.height;
+    const ctx = out.getContext("2d");
+    if (tool === "cropImage" && rect && rect.w > 4) {
+      const x = Math.round(rect.x * sx), y = Math.round(rect.y * sy), w = Math.round(rect.w * sx), h = Math.round(rect.h * sy);
+      out.width = Math.max(1, w); out.height = Math.max(1, h);
+      ctx.drawImage(img, x, y, w, h, 0, 0, w, h);
+    } else if (tool === "frameImage") {
+      const pad = Number(document.getElementById("pad").value) || 0;
+      out.width = natW + pad * 2; out.height = natH + pad * 2;
+      ctx.fillStyle = document.getElementById("color").value || "#111";
+      ctx.fillRect(0, 0, out.width, out.height);
+      ctx.drawImage(img, pad, pad);
+    } else {
+      out.width = natW; out.height = natH;
+      ctx.drawImage(img, 0, 0);
+      if (tool === "redactImage" && rect && rect.w > 4) {
+        const x = Math.round(rect.x * sx), y = Math.round(rect.y * sy), w = Math.round(rect.w * sx), h = Math.round(rect.h * sy);
+        ctx.filter = "blur(16px)";
+        ctx.drawImage(img, x, y, w, h, x, y, w, h);
+        ctx.filter = "none";
+      }
+      if (tool === "editImage" || tool === "annotateImage") {
+        ctx.drawImage(c, 0, 0, natW, natH);
+      }
+    }
+    window.studio.finish({ png: out.toDataURL("image/png") });
+  };
+}
+
+function timeBar(kind) {
+  $("bar").hidden = false;
+  const extra = kind === "speed" ? '<label>Velocidade <input id="rate" type="range" min="0.5" max="2" step="0.1" value="1.5"></label>'
+    : kind === "split" ? '<label>Corte <input id="at" type="range" min="0" max="10" step="0.1" value="1"></label>'
+    : '<label>Início <input id="start" type="range" min="0" max="10" step="0.1" value="0"></label><label>Fim <input id="end" type="range" min="0" max="10" step="0.1" value="1"></label>';
+  $("bar").innerHTML = extra;
+}
+
+function armRange(el) {
+  const set = () => {
+    const dur = el.duration || 1;
+    ["start", "end", "at"].forEach((id) => {
+      const node = document.getElementById(id);
+      if (!node) return;
+      node.max = String(dur);
+      if (id === "end") node.value = String(dur);
+      if (id === "at") node.value = String(Math.min(dur / 2, dur));
+    });
+  };
+  el.addEventListener("loadedmetadata", set);
+}
+
+function videoTool(tool) {
+  const video = document.createElement("video");
+  video.src = fileUrl(job.filePath);
+  video.controls = true;
+  const stage = mediaBox(video);
+  armRange(video);
+  if (tool === "trimVideo") timeBar("trim");
+  if (tool === "changeVideoSpeed") timeBar("speed");
+  if (tool === "splitVideo" || tool === "videoSnapshots") timeBar("split");
+  let c = null;
+  if (tool === "cropVideo" || tool === "redactVideo") {
+    c = overlay(stage);
+    bindDrag(c, "rect");
+  }
+  $("ok").onclick = () => {
+    const spec = {
+      start: Number((document.getElementById("start") || {}).value || document.getElementById("at") && document.getElementById("at").value || 0),
+      end: Number((document.getElementById("end") || {}).value || 0),
+      at: Number((document.getElementById("at") || {}).value || 0),
+      rate: Number((document.getElementById("rate") || {}).value || 1),
+    };
+    if ((tool === "cropVideo" || tool === "redactVideo") && rect && video.videoWidth) {
+      const box = stage.getBoundingClientRect();
+      spec.x = rect.x / box.width * video.videoWidth;
+      spec.y = rect.y / box.height * video.videoHeight;
+      spec.w = rect.w / box.width * video.videoWidth;
+      spec.h = rect.h / box.height * video.videoHeight;
+    }
+    window.studio.finish(spec);
+  };
+}
+
+function audioTool(tool) {
+  const audio = document.createElement("audio");
+  audio.src = fileUrl(job.filePath);
+  audio.controls = true;
+  $("main").appendChild(audio);
+  armRange(audio);
+  if (tool !== "audioToVideo") timeBar("trim");
+  else $("hint").textContent = "Exporta a forma de onda";
+  $("ok").onclick = () => window.studio.finish({
+    start: Number((document.getElementById("start") || {}).value || 0),
+    end: Number((document.getElementById("end") || {}).value || 0),
+  });
+}
+
+function pdfTool(tool) {
+  if (tool === "splitPDF") {
+    $("bar").hidden = false;
+    $("bar").innerHTML = `<label>Páginas <input id="range" value="1-${job.pages.length || "N"}" style="background:#1b1b1b;color:#fff;border:1px solid rgba(255,255,255,.2);border-radius:6px;padding:6px 8px"></label>`;
+    $("hint").textContent = `${job.pages.length} páginas · 1-3,5`;
+    $("ok").onclick = () => window.studio.finish({ range: document.getElementById("range").value });
+  }
+  pages = job.pages.map((file, index) => ({ file, index: index + 1, rotate: 0, drop: false }));
+  const box = document.createElement("div");
+  box.className = "pages";
+  const draw = () => {
+    box.innerHTML = "";
+    pages.filter((p) => !p.drop).forEach((page, order) => {
+      const card = document.createElement("div");
+      card.className = "page";
+      const img = document.createElement("img");
+      img.src = fileUrl(page.file);
+      img.style.transform = `rotate(${page.rotate}deg)`;
+      card.appendChild(img);
+      const row = document.createElement("div");
+      row.className = "row";
+      const btn = (text, fn) => { const b = document.createElement("button"); b.type = "button"; b.textContent = text; b.onclick = fn; row.appendChild(b); };
+      btn("←", () => { if (order <= 0) return; const vis = pages.filter((p) => !p.drop); const a = pages.indexOf(vis[order]); const b = pages.indexOf(vis[order - 1]); [pages[a], pages[b]] = [pages[b], pages[a]]; draw(); });
+      btn("→", () => { const vis = pages.filter((p) => !p.drop); if (order >= vis.length - 1) return; const a = pages.indexOf(vis[order]); const b = pages.indexOf(vis[order + 1]); [pages[a], pages[b]] = [pages[b], pages[a]]; draw(); });
+      btn("↻", () => { page.rotate = (page.rotate + 90) % 360; draw(); });
+      btn("✕", () => { page.drop = true; draw(); });
+      card.appendChild(row);
+      box.appendChild(card);
+    });
+  };
+  if (tool === "organizePDF") {
+    $("main").appendChild(box);
+    draw();
+    $("ok").onclick = () => window.studio.finish({
+      pages: pages.filter((p) => !p.drop).map((p) => ({ index: p.index, rotate: p.rotate })),
+    });
+  } else {
+    const strip = document.createElement("div");
+    strip.className = "pages";
+    job.pages.forEach((file) => {
+      const img = document.createElement("img");
+      img.src = fileUrl(file);
+      img.style.width = "88px";
+      strip.appendChild(img);
+    });
+    $("main").appendChild(strip);
+  }
+}
+
+window.studio.job().then((data) => {
+  job = data;
+  const tool = String(job.id || "").slice(5);
+  $("title").textContent = titles[tool] || "VOR";
+  if (tool.endsWith("Image") || ["cropImage", "redactImage", "editImage", "annotateImage", "frameImage"].includes(tool)) imageTool(tool);
+  else if (["cropVideo", "redactVideo", "trimVideo", "splitVideo", "changeVideoSpeed", "videoSnapshots"].includes(tool)) videoTool(tool);
+  else if (["trimAudio", "redactAudio", "audioToVideo"].includes(tool)) audioTool(tool);
+  else pdfTool(tool);
+});
+$("cancel").onclick = () => window.studio.cancel();
+</script>
+</body>
+</html>

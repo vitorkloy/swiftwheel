@@ -2627,6 +2627,9 @@ export default function App() {
         const key = item.id.split(':')[1] || item.title;
         const title = names[key] || item.title;
         const reason = item.reason ? (reasons[item.reason] || item.reason) : '';
+        const short: Record<string, string> = {
+          resize50: '50%', resize1080: '1080P', rotate90: pt ? 'GIRAR' : 'ROTATE',
+        };
         const icons: Record<string, string> = {
           compress: 'Minimize2', removeMetadata: 'Eraser', editImage: 'PenLine', annotateImage: 'MessageSquare',
           frameImage: 'Frame', cropImage: 'Crop', cropVideo: 'Crop', redactImage: 'EyeOff', redactVideo: 'EyeOff',
@@ -2636,11 +2639,12 @@ export default function App() {
           joinVideos: 'Link', videoSnapshots: 'Camera', audioToVideo: 'Clapperboard', audioChannels: 'Headphones',
           createCollage: 'LayoutGrid', redactAudio: 'AudioLines', airDrop: 'Share2', float: 'PictureInPicture2',
           copy: 'Copy', move: 'FolderInput', copyPath: 'Clipboard', openTerminal: 'Terminal',
+          resize50: 'Scaling', resize1080: 'Monitor', rotate90: 'RotateCw',
         };
         return {
           id: item.id,
           type: 'app' as const,
-          label: item.available ? title : `${title} · ${reason || (pt ? 'Indisponível' : 'Unavailable')}`,
+          label: item.available ? (short[key] || title) : `${short[key] || title} · ${reason || (pt ? 'Indisponível' : 'Unavailable')}`,
           iconName: item.id.startsWith('conv:') ? 'FileOutput' : (icons[key] || 'File'),
           command: item.id,
           commandType: 'app' as const,

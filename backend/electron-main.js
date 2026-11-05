@@ -4085,6 +4085,91 @@ app.whenReady().then(async () => {
         if (!mode) return;
         revealFileWheel(point.x, point.y, mode, "");
       };
+      const copyFileToClipboard = (target) => {
+        const { execFileSync } = require("child_process");
+        const escaped = String(target).replace(/'/g, "''");
+        execFileSync("powershell.exe", ["-NoProfile", "-STA", "-Command",
+          "Add-Type -AssemblyName System.Windows.Forms; $c = New-Object System.Collections.Specialized.StringCollection; " +
+          `$c.Add('${escaped}'); [System.Windows.Forms.Clipboard]::SetFileDropList($c)`],
+          { windowsHide: true });
+      };
+      const openFloatShelf = (target) => {
+        const { BrowserWindow } = require("electron");
+        const shelf = new BrowserWindow({
+          width: 280,
+          height: 64,
+          frame: false,
+          transparent: true,
+          alwaysOnTop: true,
+          skipTaskbar: true,
+          resizable: false,
+          webPreferences: { preload: path.join(__dirname, "studio-preload.js"), contextIsolation: true },
+        });
+        const name = path.basename(target).replace(/[&<>]/g, "");
+        const html = `<!doctype html><meta charset="utf-8"><body draggable="true" style="margin:8px;background:#151515;color:#f4f4f5;font:13px Segoe UI;border:1px solid rgba(255,255,255,.16);border-radius:12px;height:48px;display:flex;align-items:center;padding:0 14px;cursor:grab">${name}<script>document.body.addEventListener('dragstart',(e)=>{e.preventDefault();window.studio.drag(${JSON.stringify(target)});});</script></body>`;
+        shelf.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+      };
+      ipcMain.on("studio-drag", (event, target) => {
+        try {
+          const { nativeImage } = require("electron");
+          const icon = nativeImage.createFromPath(path.join(__dirname, "..", "build", "icon.ico"));
+          event.sender.startDrag({ file: String(target), icon: icon.isEmpty() ? nativeImage.createEmpty() : icon });
+        } catch { /* o arrasto nativo falhou */ }
+      });
+      const openFileStudio = (sliceId, target) => new Promise((resolve, reject) => {
+        const { BrowserWindow, ipcMain: bus } = require("electron");
+        const win = new BrowserWindow({
+          width: 960,
+          height: 680,
+          autoHideMenuBar: true,
+          backgroundColor: "#111111",
+          alwaysOnTop: true,
+          webPreferences: {
+            preload: path.join(__dirname, "studio-preload.js"),
+            contextIsolation: true,
+            webSecurity: false,
+          },
+        });
+        let tmp = null;
+        let settled = false;
+        const onFinish = (event, spec) => { if (event.sender === win.webContents) settle(spec); };
+        const onCancel = (event) => { if (event.sender === win.webContents) settle(null); };
+        const detach = () => {
+          bus.removeListener("studio-finish", onFinish);
+          bus.removeListener("studio-cancel", onCancel);
+          try { bus.removeHandler("studio-job"); } catch { /* ignore */ }
+          if (tmp) { try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* ignore */ } }
+        };
+        const settle = (spec) => {
+          if (settled) return;
+          settled = true;
+          detach();
+          if (!win.isDestroyed()) win.close();
+          if (!spec) reject(new Error("Cancelado"));
+          else resolve(spec);
+        };
+        bus.on("studio-finish", onFinish);
+        bus.on("studio-cancel", onCancel);
+        win.on("closed", () => settle(null));
+        (async () => {
+          let pages = [];
+          if (sliceId === "tool:organizePDF" || sliceId === "tool:splitPDF") {
+            const prep = await shiftWheels.studioPages(target);
+            tmp = prep.tmp;
+            pages = prep.pages;
+          }
+          try { bus.removeHandler("studio-job"); } catch { /* ignore */ }
+          bus.handle("studio-job", () => ({ id: sliceId, filePath: target, pages }));
+          await win.loadFile(path.join(__dirname, "studio.html"));
+        })().catch((err) => {
+          if (!settled) {
+            settled = true;
+            detach();
+            if (!win.isDestroyed()) win.close();
+            reject(err);
+          }
+        });
+      });
       ipcMain.handle("run-file-slice", async (_event, id, filePath) => {
         try {
           await shiftWheels.prepare(id, filePath, (status) => {
@@ -4093,7 +4178,27 @@ app.whenReady().then(async () => {
               if (Notification.isSupported()) new Notification({ title: "VOR", body: status }).show();
             } catch { /* ignore */ }
           });
-          const out = await shiftWheels.run(id, filePath);
+          if (id === "act:airDrop") {
+            copyFileToClipboard(filePath);
+            const { Notification } = require("electron");
+            if (Notification.isSupported()) new Notification({ title: "VOR", body: "Arquivo pronto para colar." }).show();
+            return { ok: true, out: filePath };
+          }
+          if (id === "act:float") {
+            openFloatShelf(filePath);
+            return { ok: true, out: filePath };
+          }
+          if (id === "act:move") {
+            const { dialog } = require("electron");
+            const picked = await dialog.showOpenDialog({ properties: ["openDirectory"], title: "Mover para" });
+            if (picked.canceled || !picked.filePaths[0]) throw new Error("Cancelado");
+            const dest = path.join(picked.filePaths[0], path.basename(filePath));
+            fs.renameSync(filePath, dest);
+            return { ok: true, out: dest };
+          }
+          const out = shiftWheels.needsStudio(id)
+            ? await shiftWheels.applyStudio(id, filePath, await openFileStudio(id, filePath))
+            : await shiftWheels.run(id, filePath);
           try {
             const { Notification } = require("electron");
             if (Notification.isSupported() && !id.startsWith("act:")) {
@@ -4108,6 +4213,8 @@ app.whenReady().then(async () => {
         } catch (err) {
           const message = err && err.message ? err.message : String(err);
           diagLog(`[FileWheels] ${id}: ${message}`);
+          // Cancelar (fechar o estúdio, a senha ou a escolha de pasta) não é erro: nada de aviso.
+          if (/^(Cancelado|Senha cancelada)$/i.test(message.trim())) return { ok: false, canceled: true };
           const body = /senha|otimizado|protegido|Não foi possível|não está disponível|Indisponível/i.test(message)
             ? message.replace(/^[\w.-]+\.exe falhou \(código \d+\):\s*/i, "")
             : "Não foi possível converter este arquivo.";

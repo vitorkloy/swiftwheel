@@ -1,5 +1,6 @@
 import React from 'react';
 import type { AppItem } from '../types';
+import { getIcon } from '../iconMap';
 
 /** Medidas do ShiftDrop (anel, pétalas, vão). O viewBox é −126…126. */
 const M = {
@@ -172,6 +173,7 @@ export function FilePetalWheel({ items, activeIndex, centerActive, formatLabel, 
         const color = active ? (disabled ? '#151515' : '#0a0a0b') : (disabled ? 'rgba(255,255,255,0.45)' : '#f4f4f5');
         const text = petalText(item.label);
         const tooWide = text.length * labelSize * 0.55 > labelWidth * 2;
+        const Icon = item.id.startsWith('conv:') ? null : getIcon(item.iconName);
         return (
           <div
             key={`${item.id}-label-${index}`}
@@ -188,14 +190,19 @@ export function FilePetalWheel({ items, activeIndex, centerActive, formatLabel, 
               lineHeight: 1.1,
               letterSpacing: '0.01em',
               textShadow: active ? 'none' : '0 1px 2px rgba(0,0,0,0.85)',
+            }}
+          >
+            {Icon ? <Icon size={count >= 8 ? 12 : 14} strokeWidth={1.75} style={{ margin: '0 auto 2px', display: 'block' }} /> : null}
+            <div style={{
               display: '-webkit-box',
               WebkitLineClamp: 2,
               WebkitBoxOrient: 'vertical',
               overflow: 'hidden',
               overflowWrap: tooWide ? 'anywhere' : 'normal',
             }}
-          >
-            {text}
+            >
+              {text}
+            </div>
           </div>
         );
       })}
