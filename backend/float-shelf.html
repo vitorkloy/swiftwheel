@@ -18,7 +18,7 @@
   @keyframes pop { from { transform: scale(.92); opacity: 0; } }
   header { display: flex; align-items: center; gap: 4px; height: 38px; padding: 0 6px 0 14px; -webkit-app-region: drag; }
   header b { flex: 1; font-size: 10.5px; font-weight: 700; letter-spacing: .08em; color: var(--text-2); }
-  header button { -webkit-app-region: no-drag; height: 24px; background: transparent; color: var(--text-2); border: 0; border-radius: 999px; padding: 0 9px; cursor: pointer; font: 600 11px inherit; }
+  header button { -webkit-app-region: no-drag; height: 24px; background: transparent; color: var(--text-2); border: 0; border-radius: 999px; padding: 0 9px; cursor: pointer; font: 600 11px/1 "Segoe UI Variable Text", "Segoe UI", sans-serif; }
   header button:hover { background: var(--hover); color: var(--text); }
   ul { list-style: none; margin: 0; padding: 0 6px 6px; overflow: auto; flex: 1; }
   li { display: flex; align-items: center; gap: 10px; padding: 5px 6px; border-radius: 10px; cursor: grab; transition: background-color .1s, transform .14s var(--spring); }
@@ -54,6 +54,7 @@ function draw() {
     const img = document.createElement("img");
     const isImg = /\.(png|jpe?g|webp|gif|bmp|avif)$/i.test(it.path);
     img.src = isImg ? "file:///" + it.path.replace(/\\/g, "/") : (it.icon || "");
+    if (!img.src || img.src === location.href) img.style.visibility = "hidden";
     if (isImg) { img.className = "thumb"; img.onerror = () => { img.className = ""; img.src = it.icon || ""; }; }
     const name = document.createElement("span");
     name.textContent = it.name;
