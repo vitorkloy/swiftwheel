@@ -55,3 +55,5 @@ backend/debug_*.json
 build-out-update-validation/
 build/appx/
 scripts/ui-harness/wheel.js
+scripts/ui-harness/app.js
+scripts/ui-harness/app.css
