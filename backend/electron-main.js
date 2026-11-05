@@ -4094,13 +4094,14 @@ app.whenReady().then(async () => {
         if (!mode) return;
         revealFileWheel(point.x, point.y, mode, "");
       };
+      /** Copia como arquivos (CF_HDROP): colar no Explorer/WhatsApp/e-mail cola os próprios arquivos. */
       const copyFileToClipboard = (target) => {
         const { execFileSync } = require("child_process");
-        const escaped = String(target).replace(/'/g, "''");
+        const list = (Array.isArray(target) ? target : [target]).map(String).filter(Boolean);
         execFileSync("powershell.exe", ["-NoProfile", "-STA", "-Command",
           "Add-Type -AssemblyName System.Windows.Forms; $c = New-Object System.Collections.Specialized.StringCollection; " +
-          `$c.Add('${escaped}'); [System.Windows.Forms.Clipboard]::SetFileDropList($c)`],
-          { windowsHide: true });
+          "foreach ($p in ($env:VOR_FILES -split '\\|')) { if ($p) { [void]$c.Add($p) } }; [System.Windows.Forms.Clipboard]::SetFileDropList($c)"],
+          { windowsHide: true, env: { ...process.env, VOR_FILES: list.join("|") } });
       };
       const openFloatShelf = (target) => {
         const { BrowserWindow } = require("electron");
@@ -4179,62 +4180,172 @@ app.whenReady().then(async () => {
           }
         });
       });
-      ipcMain.handle("run-file-slice", async (_event, id, target) => {
-        const list = (Array.isArray(target) ? target : [target]).map(String).filter(Boolean);
+      /**
+       * Toast de progresso do ShiftDrop ("Convertendo 2 de 3"), numa janela leve reaproveitada.
+       * Criada só no primeiro uso e destruída após 60 s sem trabalho, para não ficar com RAM parada.
+       */
+      let shiftToast = null;
+      let shiftToastHide = null;
+      let shiftToastKill = null;
+      const SHIFT_TOAST_HTML = `<!doctype html><meta charset="utf-8"><style>
+        html,body{margin:0;background:transparent;overflow:hidden;font:12.5px "Segoe UI",sans-serif;color:#f4f4f5}
+        .t{margin:6px;padding:10px 14px 12px;border-radius:12px;background:rgba(24,24,27,.92);border:1px solid rgba(255,255,255,.14);
+           box-shadow:0 8px 24px rgba(0,0,0,.35);opacity:0;transform:translateY(6px) scale(.98);transition:opacity .14s,transform .18s cubic-bezier(.2,.9,.2,1)}
+        .t.on{opacity:1;transform:none}
+        .l{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .b{margin-top:8px;height:3px;border-radius:2px;background:rgba(255,255,255,.14);overflow:hidden}
+        .f{height:100%;width:0;background:#fff;transition:width .2s}
+        .f.i{width:30%;animation:k 1s ease-in-out infinite}
+        @keyframes k{0%{margin-left:-30%}100%{margin-left:100%}}
+      </style><div class="t" id="t"><div class="l" id="l"></div><div class="b"><div class="f" id="f"></div></div></div>
+      <script>window.set=function(text,pct,on){document.getElementById('l').textContent=text;var f=document.getElementById('f');
+      if(pct<0){f.className='f i';f.style.width='';}else{f.className='f';f.style.width=Math.round(pct*100)+'%';}
+      document.getElementById('t').className=on?'t on':'t';};</script>`;
+      const showShiftToast = (text, pct) => {
+        try {
+          const { BrowserWindow } = require("electron");
+          if (shiftToastHide) { clearTimeout(shiftToastHide); shiftToastHide = null; }
+          if (shiftToastKill) { clearTimeout(shiftToastKill); shiftToastKill = null; }
+          const push = () => {
+            if (!shiftToast || shiftToast.isDestroyed()) return;
+            shiftToast.webContents.executeJavaScript(`window.set && window.set(${JSON.stringify(text)}, ${Number(pct)}, true)`).catch(() => {});
+            if (!shiftToast.isVisible()) shiftToast.showInactive();
+          };
+          if (!shiftToast || shiftToast.isDestroyed()) {
+            const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+            const w = 300;
+            const h = 64;
+            shiftToast = new BrowserWindow({
+              width: w, height: h, x: area.x + area.width - w - 12, y: area.y + area.height - h - 12,
+              frame: false, transparent: true, resizable: false, movable: false, focusable: false,
+              alwaysOnTop: true, skipTaskbar: true, show: false, hasShadow: false,
+              webPreferences: { contextIsolation: true, sandbox: true },
+            });
+            shiftToast.setIgnoreMouseEvents(true);
+            shiftToast.setAlwaysOnTop(true, "screen-saver");
+            shiftToast.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(SHIFT_TOAST_HTML)}`).then(push).catch(() => {});
+          } else push();
+        } catch { /* toast é só cosmético */ }
+      };
+      const hideShiftToast = (delay = 0) => {
+        if (shiftToastHide) clearTimeout(shiftToastHide);
+        shiftToastHide = setTimeout(() => {
+          shiftToastHide = null;
+          if (!shiftToast || shiftToast.isDestroyed()) return;
+          shiftToast.webContents.executeJavaScript("window.set && window.set(document.getElementById('l').textContent, 1, false)").catch(() => {});
+          setTimeout(() => { try { if (shiftToast && !shiftToast.isDestroyed()) shiftToast.hide(); } catch { /* ignore */ } }, 180);
+          if (shiftToastKill) clearTimeout(shiftToastKill);
+          shiftToastKill = setTimeout(() => {
+            shiftToastKill = null;
+            try { if (shiftToast && !shiftToast.isDestroyed()) shiftToast.destroy(); } catch { /* ignore */ }
+            shiftToast = null;
+          }, 60000);
+        }, delay);
+      };
+      const SHIFT_VERB = {
+        compress: "Comprimindo", removeMetadata: "Limpando metadados", normalizeAudio: "Normalizando", audioChannels: "Ajustando canais",
+        muteVideo: "Silenciando", videoSnapshots: "Capturando quadros", resize50: "Redimensionando", resize1080: "Redimensionando",
+        rotate90: "Girando", extractArchive: "Extraindo", splitPDF: "Dividindo", organizePDF: "Organizando", createPDF: "Criando PDF",
+        createCollage: "Montando colagem", mergePDF: "Juntando PDFs", zipFiles: "Compactando", cropImage: "Recortando",
+        redactImage: "Ocultando", editImage: "Salvando", annotateImage: "Salvando", frameImage: "Adicionando fundo",
+        cropVideo: "Recortando", redactVideo: "Ocultando", trimVideo: "Aparando", trimAudio: "Aparando", splitVideo: "Dividindo",
+        changeVideoSpeed: "Mudando velocidade", redactAudio: "Bipando", audioToVideo: "Gerando forma de onda",
+      };
+      const shiftVerb = (id) => (id.startsWith("conv:") ? `Convertendo para ${id.slice(5).toUpperCase()}` : (SHIFT_VERB[id.slice(5)] || "Processando"));
+      /** Fila única: um gesto por vez, para não disputar CPU entre ffmpeg/LibreOffice. */
+      let shiftQueue = Promise.resolve();
+      const notifyShiftError = (message) => {
+        const body = /senha|otimizado|protegido|Não foi possível|não está disponível|Indisponível|instala|não tem/i.test(message)
+          ? message.replace(/^[\w.-]+\.exe falhou \(código \d+\):\s*/i, "")
+          : "Não foi possível processar este arquivo.";
+        try {
+          const { Notification } = require("electron");
+          if (Notification.isSupported()) new Notification({ title: "VOR", body }).show();
+        } catch { /* ignore */ }
+        return body;
+      };
+      const runFileSliceNow = async (id, list) => {
         const filePath = list[0] || "";
         try {
-          await shiftWheels.prepare(id, filePath, (status) => {
-            try {
-              const { Notification } = require("electron");
-              if (Notification.isSupported()) new Notification({ title: "VOR", body: status }).show();
-            } catch { /* ignore */ }
-          });
-          if (id === "act:airDrop") {
-            copyFileToClipboard(filePath);
-            const { Notification } = require("electron");
-            if (Notification.isSupported()) new Notification({ title: "VOR", body: "Arquivo pronto para colar." }).show();
+          for (const p of shiftWheels.isBatch(id) ? list.slice(0, 1) : list) {
+            await shiftWheels.prepare(id, p, (status) => showShiftToast(status, -1));
+          }
+          if (id === "act:airDrop" || id === "act:copy") {
+            copyFileToClipboard(list);
             return { ok: true, out: filePath };
           }
           if (id === "act:float") {
-            openFloatShelf(filePath);
+            openFloatShelf(list[0]);
+            return { ok: true, out: filePath };
+          }
+          if (id === "act:copyPath") {
+            const { clipboard } = require("electron");
+            clipboard.writeText(list.join("\r\n"));
             return { ok: true, out: filePath };
           }
           if (id === "act:move") {
             const { dialog } = require("electron");
-            const picked = await dialog.showOpenDialog({ properties: ["openDirectory"], title: "Mover para" });
+            const picked = await dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"], title: "Mover para" });
             if (picked.canceled || !picked.filePaths[0]) throw new Error("Cancelado");
-            const dest = path.join(picked.filePaths[0], path.basename(filePath));
-            fs.renameSync(filePath, dest);
-            return { ok: true, out: dest };
-          }
-          const out = shiftWheels.needsStudio(id)
-            ? await shiftWheels.applyStudio(id, filePath, await openFileStudio(id, filePath))
-            : await shiftWheels.run(id, filePath);
-          try {
-            const { Notification } = require("electron");
-            if (Notification.isSupported() && !id.startsWith("act:")) {
-              new Notification({ title: "VOR", body: `Pronto: ${path.basename(String(out))}` }).show();
+            let last = "";
+            for (const p of list) {
+              last = shiftWheels.uniqueTarget(picked.filePaths[0], path.basename(p));
+              try { fs.renameSync(p, last); } catch (err) {
+                if (err && err.code !== "EXDEV") throw err;
+                fs.cpSync(p, last, { recursive: true });
+                fs.rmSync(p, { recursive: true, force: true });
+              }
             }
-          } catch { /* ignore */ }
-          if (id === "act:copyPath") {
-            const { clipboard } = require("electron");
-            clipboard.writeText(String(filePath));
+            return { ok: true, out: last };
           }
-          return { ok: true, out };
+          if (id === "act:openTerminal") return { ok: true, out: await shiftWheels.run(id, filePath) };
+          if (shiftWheels.isBatch(id)) {
+            showShiftToast(`${shiftVerb(id)}…`, -1);
+            const out = await shiftWheels.runMany(id, list);
+            showShiftToast(`Pronto: ${path.basename(String(out))}`, 1);
+            hideShiftToast(1400);
+            return { ok: true, out };
+          }
+          let out = "";
+          let failed = 0;
+          let lastError = "";
+          for (let i = 0; i < list.length; i += 1) {
+            const p = list[i];
+            const label = list.length > 1 ? `${shiftVerb(id)} ${i + 1} de ${list.length}` : `${shiftVerb(id)}…`;
+            if (shiftWheels.needsStudio(id)) {
+              const spec = await openFileStudio(id, p);
+              showShiftToast(label, list.length > 1 ? i / list.length : -1);
+              out = await shiftWheels.applyStudio(id, p, spec);
+              continue;
+            }
+            showShiftToast(label, list.length > 1 ? i / list.length : -1);
+            try {
+              out = await shiftWheels.run(id, p);
+            } catch (err) {
+              if (list.length === 1) throw err;
+              failed += 1;
+              lastError = err && err.message ? err.message : String(err);
+              diagLog(`[FileWheels] ${id} ${p}: ${lastError}`);
+            }
+          }
+          if (failed) notifyShiftError(failed === list.length ? lastError : `${failed} de ${list.length} itens falharam: ${lastError}`);
+          showShiftToast(list.length > 1 ? `Pronto: ${list.length - failed} de ${list.length}` : `Pronto: ${path.basename(String(out))}`, 1);
+          hideShiftToast(1400);
+          return { ok: failed < list.length, out };
         } catch (err) {
+          hideShiftToast(0);
           const message = err && err.message ? err.message : String(err);
           diagLog(`[FileWheels] ${id}: ${message}`);
           // Cancelar (fechar o estúdio, a senha ou a escolha de pasta) não é erro: nada de aviso.
           if (/^(Cancelado|Senha cancelada)$/i.test(message.trim())) return { ok: false, canceled: true };
-          const body = /senha|otimizado|protegido|Não foi possível|não está disponível|Indisponível/i.test(message)
-            ? message.replace(/^[\w.-]+\.exe falhou \(código \d+\):\s*/i, "")
-            : "Não foi possível converter este arquivo.";
-          try {
-            const { Notification } = require("electron");
-            if (Notification.isSupported()) new Notification({ title: "Não foi possível converter", body }).show();
-          } catch { /* ignore */ }
-          return { ok: false, error: body };
+          return { ok: false, error: notifyShiftError(message) };
         }
+      };
+      ipcMain.handle("run-file-slice", (_event, id, target) => {
+        const list = (Array.isArray(target) ? target : [target]).map(String).filter(Boolean);
+        const job = shiftQueue.then(() => runFileSliceNow(String(id), list));
+        shiftQueue = job.catch(() => {});
+        return job;
       });
       ipcMain.handle("note-file-drag-path", (_event, filePath) => {
         if (!fileDragOpen || !filePath || !fileDragMode) return { ok: false };

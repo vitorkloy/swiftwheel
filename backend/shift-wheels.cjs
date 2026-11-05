@@ -717,7 +717,9 @@ function toolsFor(id, filePath) {
     }
   } else if (id.startsWith("tool:")) {
     const tool = id.slice(5);
-    if (kind === "pdf") need.add("mutool");
+    if (tool === "createPDF" || tool === "mergePDF") need.add("mutool");
+    else if (tool === "createCollage" || tool === "zipFiles") { /* sharp/tar embutidos */ }
+    else if (kind === "pdf") need.add("mutool");
     else if (kind === "image" && !["compress", "resize50", "resize1080", "rotate90", "cropImage", "redactImage", "editImage", "annotateImage", "frameImage"].includes(tool)) need.add("magick");
     else if (kind === "audio" || kind === "video" || kind === "gif") need.add("ffmpeg");
   }
@@ -883,9 +885,22 @@ function build(target, mode) {
 
 function uniquePath(dir, stem, ext) {
   let candidate = path.join(dir, `${stem}.${ext}`);
-  let n = 1;
+  let n = 2;
   while (fs.existsSync(candidate)) {
-    candidate = path.join(dir, `${stem} (${n}).${ext}`);
+    candidate = path.join(dir, `${stem} ${n}.${ext}`);
+    n += 1;
+  }
+  return candidate;
+}
+
+/** Caminho livre para `name` dentro de `dir` ("X 2.ext", "Pasta 2"), para mover sem sobrescrever. */
+function uniqueTarget(dir, name) {
+  const ext = path.extname(name);
+  const stem = ext ? name.slice(0, -ext.length) : name;
+  let candidate = path.join(dir, name);
+  let n = 2;
+  while (fs.existsSync(candidate)) {
+    candidate = path.join(dir, `${stem} ${n}${ext}`);
     n += 1;
   }
   return candidate;
@@ -893,9 +908,9 @@ function uniquePath(dir, stem, ext) {
 
 function uniqueDir(dir, name) {
   let candidate = path.join(dir, name);
-  let n = 1;
+  let n = 2;
   while (fs.existsSync(candidate)) {
-    candidate = path.join(dir, `${name} (${n})`);
+    candidate = path.join(dir, `${name} ${n}`);
     n += 1;
   }
   return candidate;
@@ -1135,7 +1150,7 @@ async function runTool(tool, filePath) {
   const ext = path.extname(filePath).slice(1) || "bin";
   const ff = (args, dest) => spawnWait(need("ffmpeg"), ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", filePath, ...args, dest], { timeout: 30 * 60 * 1000 }).then(() => exists(dest));
   if (tool === "extractArchive") {
-    const destDir = uniqueDir(dir, `${stem}-extract`);
+    const destDir = uniqueDir(dir, stem);
     fs.mkdirSync(destDir, { recursive: true });
     if (from === "rar" || from === "7z") {
       const seven = which("7z") || which("7za");
@@ -1151,7 +1166,7 @@ async function runTool(tool, filePath) {
   }
   if (kind === "pdf") {
     if (tool === "compress" || tool === "removeMetadata") {
-      const dest = uniquePath(dir, `${stem}-${tool === "compress" ? "compressed" : "clean"}`, "pdf");
+      const dest = uniquePath(dir, `${stem} ${tool === "compress" ? "Comprimido" : "Sem Metadados"}`, "pdf");
       // compress: reamostra imagens acima de 150 dpi para 150 dpi e recomprime em JPEG (q75), só se ficar menor.
       const args = tool === "compress"
         ? ["clean", "-gggg", "-z", "-f", "-i", "-Z", "-m",
@@ -1167,7 +1182,7 @@ async function runTool(tool, filePath) {
       return dest;
     }
     if (tool === "splitPDF") {
-      const outDir = uniqueDir(dir, `${stem} (páginas)`);
+      const outDir = uniqueDir(dir, `${stem} Páginas`);
       fs.mkdirSync(outDir, { recursive: true });
       const tmp = scratch();
       try {
@@ -1188,18 +1203,18 @@ async function runTool(tool, filePath) {
   }
   if (kind === "image") {
     if (tool === "compress") {
-      const dest = uniquePath(dir, `${stem}-compressed`, "jpg");
+      const dest = uniquePath(dir, `${stem} Comprimido`, "jpg");
       return nativeConvertible(from, "jpg")
         ? nativeImage(filePath, dest, "jpg")
         : spawnWait(need("magick"), [`${filePath}[0]`, "-background", "white", "-flatten", "-quality", "80", dest]).then(() => exists(dest));
     }
     if (tool === "removeMetadata") {
-      const dest = uniquePath(dir, `${stem}-clean`, ext);
+      const dest = uniquePath(dir, `${stem} Sem Metadados`, ext);
       await spawnWait(need("magick"), [filePath, "-strip", dest]);
       return exists(dest);
     }
     if (tool === "resize50" || tool === "resize1080" || tool === "rotate90") {
-      const dest = uniquePath(dir, `${stem}-${tool === "rotate90" ? "rotated" : tool}`, "png");
+      const dest = uniquePath(dir, `${stem} ${{ rotate90: "Girado", resize50: "50%", resize1080: "1080p" }[tool]}`, "png");
       const sharp = require("sharp");
       const input = sharp(filePath, { failOn: "none" }).rotate();
       if (tool === "rotate90") await input.rotate(90).png().toFile(dest);
@@ -1214,18 +1229,74 @@ async function runTool(tool, filePath) {
     }
   }
   if (kind === "audio" || kind === "video" || kind === "gif") {
-    if (tool === "removeMetadata") return ff(["-map_metadata", "-1", "-c", "copy"], uniquePath(dir, `${stem}-clean`, ext));
-    if (tool === "compress" && kind === "audio") return ff(["-vn", "-b:a", "128k"], uniquePath(dir, `${stem}-compressed`, "mp3"));
-    if (tool === "compress") return ff(["-c:v", "libx264", "-crf", "28", "-preset", "veryfast", "-c:a", "aac", "-b:a", "128k", "-pix_fmt", "yuv420p"], uniquePath(dir, `${stem}-compressed`, "mp4"));
-    if (tool === "normalizeAudio") return ff(["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"], uniquePath(dir, `${stem}-normalized`, ext));
-    if (tool === "audioChannels") return ff(["-ac", "1"], uniquePath(dir, `${stem}-mono`, ext));
-    if (tool === "muteVideo") return ff(["-c:v", "copy", "-an"], uniquePath(dir, `${stem}-mute`, ext));
+    if (tool === "removeMetadata") return ff(["-map_metadata", "-1", "-c", "copy"], uniquePath(dir, `${stem} Sem Metadados`, ext));
+    if (tool === "compress" && kind === "audio") return ff(["-vn", "-b:a", "128k"], uniquePath(dir, `${stem} Comprimido`, "mp3"));
+    if (tool === "compress") return ff(["-c:v", "libx264", "-crf", "28", "-preset", "veryfast", "-c:a", "aac", "-b:a", "128k", "-pix_fmt", "yuv420p"], uniquePath(dir, `${stem} Comprimido`, "mp4"));
+    if (tool === "normalizeAudio") return ff(["-af", "loudnorm=I=-16:TP=-1.5:LRA=11"], uniquePath(dir, `${stem} Normalizado`, ext));
+    if (tool === "audioChannels") return ff(["-ac", "1"], uniquePath(dir, `${stem} Mono`, ext));
+    if (tool === "muteVideo") return ff(["-c:v", "copy", "-an"], uniquePath(dir, `${stem} Sem Som`, ext));
     if (tool === "videoSnapshots") {
-      const outDir = uniqueDir(dir, `${stem} (snapshots)`);
+      const outDir = uniqueDir(dir, `${stem} Capturas`);
       fs.mkdirSync(outDir, { recursive: true });
       await spawnWait(need("ffmpeg"), ["-nostdin", "-hide_banner", "-loglevel", "error", "-i", filePath, "-vf", "fps=1/5", path.join(outDir, `${stem}-%03d.png`)], { timeout: 30 * 60 * 1000 });
       return outDir;
     }
+  }
+  throw new Error("Essa ferramenta ainda não está disponível para este arquivo");
+}
+
+/** Ferramentas de lote: um único resultado ao lado do primeiro item. */
+async function runMany(id, paths) {
+  const tool = String(id).slice(5);
+  const first = paths[0];
+  const dir = path.dirname(first);
+  const stem = isDir(first) ? path.basename(first) : path.parse(first).name;
+  if (tool === "zipFiles") {
+    const dest = uniquePath(dir, paths.length === 1 ? stem : `${stem} e mais ${paths.length - 1}`, "zip");
+    const args = ["-a", "-cf", dest];
+    for (const p of paths) args.push("-C", path.dirname(p), path.basename(p));
+    await spawnWait("tar", args, { timeout: 30 * 60 * 1000 });
+    return exists(dest);
+  }
+  if (tool === "mergePDF") {
+    const dest = uniquePath(dir, `${stem} Combinado`, "pdf");
+    await mutoolRun(["merge", "-o", dest, ...paths], { timeout: 300000 });
+    return exists(dest);
+  }
+  if (tool === "createPDF") {
+    const dest = uniquePath(dir, `${stem} Imagens`, "pdf");
+    const tmp = scratch();
+    try {
+      // Normaliza para PNG (HEIC/WEBP/AVIF etc.) e respeita a orientação EXIF; uma página por imagem, na ordem.
+      const sharp = require("sharp");
+      const pages = [];
+      for (let i = 0; i < paths.length; i += 1) {
+        const png = path.join(tmp, `p-${String(i).padStart(4, "0")}.png`);
+        await sharp(paths[i], { failOn: "none" }).rotate().png().toFile(png);
+        pages.push(png);
+      }
+      await mutoolRun(["convert", "-o", dest, ...pages], { timeout: 300000 });
+      return exists(dest);
+    } finally {
+      fs.rmSync(tmp, { recursive: true, force: true });
+    }
+  }
+  if (tool === "createCollage") {
+    const sharp = require("sharp");
+    const cols = Math.ceil(Math.sqrt(paths.length));
+    const rows = Math.ceil(paths.length / cols);
+    const cell = 600;
+    const gap = 16;
+    const tiles = [];
+    for (let i = 0; i < paths.length; i += 1) {
+      const input = await sharp(paths[i], { failOn: "none" }).rotate()
+        .resize(cell, cell, { fit: "cover" }).png().toBuffer();
+      tiles.push({ input, left: gap + (i % cols) * (cell + gap), top: gap + Math.floor(i / cols) * (cell + gap) });
+    }
+    const dest = uniquePath(dir, `${stem} Colagem`, "png");
+    await sharp({ create: { width: gap + cols * (cell + gap), height: gap + rows * (cell + gap), channels: 4, background: "#ffffff" } })
+      .composite(tiles).png().toFile(dest);
+    return exists(dest);
   }
   throw new Error("Essa ferramenta ainda não está disponível para este arquivo");
 }
@@ -1257,6 +1328,11 @@ async function run(id, filePath) {
   throw new Error("Essa ação ainda não está disponível");
 }
 
+/** Sufixos em PT-BR dos resultados do estúdio de imagem (como o Tangerine: "X Recortado.png"). */
+const STUDIO_SUFFIX = {
+  cropImage: "Recortado", redactImage: "Ocultado", editImage: "Editado", annotateImage: "Anotado", frameImage: "Com Fundo",
+};
+
 function writePng(dataUrl, dest) {
   const body = String(dataUrl || "").replace(/^data:image\/\w+;base64,/, "");
   if (!body) throw new Error("O estúdio não devolveu a imagem");
@@ -1275,25 +1351,25 @@ async function applyStudio(id, filePath, spec) {
   const stem = path.parse(filePath).name;
   const ext = path.extname(filePath).slice(1) || "bin";
   const job = spec || {};
-  if (job.png) return writePng(job.png, uniquePath(dir, `${stem}-${tool}`, "png"));
+  if (job.png) return writePng(job.png, uniquePath(dir, `${stem} ${STUDIO_SUFFIX[tool] || "Editado"}`, "png"));
   const ff = (args, dest) => spawnWait(need("ffmpeg"), ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", ...args, dest], { timeout: 30 * 60 * 1000 }).then(() => exists(dest));
   const start = Math.max(0, Number(job.start) || 0);
   const end = Math.max(start, Number(job.end) || 0);
   if (tool === "trimVideo" || tool === "trimAudio") {
-    return ff(["-i", filePath, "-ss", String(start), "-to", String(end || start + 0.2), "-c", "copy"], uniquePath(dir, `${stem}-trim`, ext));
+    return ff(["-i", filePath, "-ss", String(start), "-to", String(end || start + 0.2), "-c", "copy"], uniquePath(dir, `${stem} Aparado`, ext));
   }
   if (tool === "changeVideoSpeed") {
     const rate = Math.min(2, Math.max(0.5, Number(job.rate) || 1));
-    return ff(["-i", filePath, "-filter:v", `setpts=PTS/${rate}`, "-filter:a", `atempo=${rate}`], uniquePath(dir, `${stem}-speed`, "mp4"));
+    return ff(["-i", filePath, "-filter:v", `setpts=PTS/${rate}`, "-filter:a", `atempo=${rate}`], uniquePath(dir, `${stem} Velocidade`, "mp4"));
   }
   if (tool === "videoSnapshots") {
-    const dest = uniquePath(dir, `${stem}-snapshot`, "png");
+    const dest = uniquePath(dir, `${stem} Captura`, "png");
     return ff(["-ss", String(start), "-i", filePath, "-frames:v", "1"], dest);
   }
   if (tool === "splitVideo") {
     const at = Math.max(0.1, Number(job.at) || 1);
-    const a = uniquePath(dir, `${stem}-part1`, ext);
-    const b = uniquePath(dir, `${stem}-part2`, ext);
+    const a = uniquePath(dir, `${stem} Parte 1`, ext);
+    const b = uniquePath(dir, `${stem} Parte 2`, ext);
     await ff(["-i", filePath, "-t", String(at), "-c", "copy"], a);
     await ff(["-ss", String(at), "-i", filePath, "-c", "copy"], b);
     return a;
@@ -1304,12 +1380,12 @@ async function applyStudio(id, filePath, spec) {
     const x = Math.max(0, Math.round(Number(job.x) || 0));
     const y = Math.max(0, Math.round(Number(job.y) || 0));
     const filter = tool === "cropVideo" ? `crop=${w}:${h}:${x}:${y}` : `delogo=x=${x}:y=${y}:w=${w}:h=${h}`;
-    return ff(["-i", filePath, "-vf", filter, "-c:a", "copy"], uniquePath(dir, `${stem}-${tool === "cropVideo" ? "crop" : "redact"}`, "mp4"));
+    return ff(["-i", filePath, "-vf", filter, "-c:a", "copy"], uniquePath(dir, `${stem} ${tool === "cropVideo" ? "Recortado" : "Ocultado"}`, "mp4"));
   }
   if (tool === "redactAudio") {
     const dur = Math.max(0.2, (end || start + 0.2) - start);
     const delay = Math.round(start * 1000);
-    const dest = uniquePath(dir, `${stem}-bleep`, ext);
+    const dest = uniquePath(dir, `${stem} Bipado`, ext);
     await spawnWait(need("ffmpeg"), [
       "-nostdin", "-hide_banner", "-loglevel", "error", "-y",
       "-i", filePath,
@@ -1320,12 +1396,12 @@ async function applyStudio(id, filePath, spec) {
     return exists(dest);
   }
   if (tool === "audioToVideo") {
-    const dest = uniquePath(dir, `${stem}-wave`, "png");
+    const dest = uniquePath(dir, `${stem} Forma de Onda`, "png");
     return ff(["-i", filePath, "-filter_complex", "showwavespic=s=1280x360:colors=white", "-frames:v", "1"], dest);
   }
   if (tool === "splitPDF") {
     const range = String(job.range || "1-N").trim();
-    const dest = uniquePath(dir, `${stem}-split`, "pdf");
+    const dest = uniquePath(dir, `${stem} Páginas`, "pdf");
     await mutoolRun(["merge", "-o", dest, filePath, range], { timeout: 300000 });
     return exists(dest);
   }
@@ -1333,7 +1409,7 @@ async function applyStudio(id, filePath, spec) {
     const pages = (Array.isArray(job.pages) ? job.pages : [])
       .map((p) => ({ index: Math.max(1, Math.round(Number(p.index) || 0)), rotate: ((Math.round((Number(p.rotate) || 0) / 90) * 90) % 360 + 360) % 360 }));
     if (!pages.length) throw new Error("Nenhuma página ficou na seleção");
-    const dest = uniquePath(dir, `${stem}-organized`, "pdf");
+    const dest = uniquePath(dir, `${stem} Organizado`, "pdf");
     const tmp = scratch();
     try {
       // Sem rasterizar: copia as páginas originais (texto, vetores, links) na nova ordem e só ajusta /Rotate.
@@ -1380,4 +1456,4 @@ async function studioPages(filePath) {
   return { tmp, pages };
 }
 
-module.exports = { build, isBatch, isDir, pending, run, tools, prepare, targets, toolsFor, kindOf, fmtOf, needsStudio, applyStudio, studioPages };
+module.exports = { build, isBatch, isDir, runMany, uniqueTarget, pending, run, tools, prepare, targets, toolsFor, kindOf, fmtOf, needsStudio, applyStudio, studioPages };
