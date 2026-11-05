@@ -4,7 +4,7 @@ import { getIcon } from '../iconMap';
 import { CornerUpLeft } from 'lucide-react';
 import { SmartIcon } from './SmartIcon';
 import { RovylLogo } from './RovylLogo';
-import { FilePetalWheel } from './FilePetalWheel';
+import { FilePetalWheel, filePetalDeadZonePx, filePetalIndexAt } from './FilePetalWheel';
 import { getTranslation } from '../translations';
 import { RadialHud } from './RadialHud';
 import {
@@ -728,10 +728,12 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
    * voltar e executar uma fatia. O `× 1.06` acompanha a escala que o hub ganha quando está ativo,
    * que é exatamente o estado em que este clique acontece.
    */
-  const deadZoneRadius = Math.max(
-    config.activationThreshold ?? 60,
-    Math.ceil((hubDiameter / 2) * 1.06 * Math.SQRT2) + 4,
-  );
+  const deadZoneRadius = fileMode
+    ? filePetalDeadZonePx()
+    : Math.max(
+      config.activationThreshold ?? 60,
+      Math.ceil((hubDiameter / 2) * 1.06 * Math.SQRT2) + 4,
+    );
 
   /**
    * Diagnóstico da confirmação. Fica no log de persistência (`rovyl-persistence.log`) e diz, para
@@ -788,6 +790,7 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
     actualMenuRadius,
     actualIconSize,
     deadZoneRadius,
+    fileMode,
   });
 
   /** Layout: pointer math uses `position` — must match props before paint or first rAF sees stale center (fullscreen vs ilha small). */
@@ -806,8 +809,9 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
       actualMenuRadius,
       actualIconSize,
       deadZoneRadius,
+      fileMode,
     };
-  }, [isOpen, position, activeIndex, onClose, currentLevelApps, config, isCenterActive, hasMoved, folderStack, apps, actualMenuRadius, actualIconSize, deadZoneRadius]);
+  }, [isOpen, position, activeIndex, onClose, currentLevelApps, config, isCenterActive, hasMoved, folderStack, apps, actualMenuRadius, actualIconSize, deadZoneRadius, fileMode]);
 
   /** Última posição REAL do ponteiro, escrita no próprio evento — sem passar por render. */
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
@@ -829,8 +833,15 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
    */
   const resolveAimAtPoint = useCallback(
     (point: { x: number; y: number } | null): { isCenter: boolean; index: number | null } => {
-      const { position, currentLevelApps, deadZoneRadius, config, actualMenuRadius, actualIconSize } =
-        stateRef.current;
+      const {
+        position,
+        currentLevelApps,
+        deadZoneRadius,
+        config,
+        actualMenuRadius,
+        actualIconSize,
+        fileMode: aimingFile,
+      } = stateRef.current;
       if (!point) return { isCenter: true, index: null };
 
       const deltaX = point.x - position.x;
@@ -839,6 +850,18 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
         return { isCenter: true, index: null };
       }
       if (currentLevelApps.length === 0) return { isCenter: false, index: null };
+
+      /**
+       * Roda de ficheiros: a mira tem de usar a mesma origem angular das pétalas
+       * (3 itens começam à esquerda; o resto no topo). A fórmula da roda de apps
+       * deslocava o destaque para a fatia vizinha.
+       */
+      if (aimingFile) {
+        return {
+          isCenter: false,
+          index: filePetalIndexAt(deltaX, deltaY, currentLevelApps.length),
+        };
+      }
 
       const sliceAngle = 360 / currentLevelApps.length;
 
@@ -1607,9 +1630,10 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
               <div
                 className="absolute top-0 left-0 z-30 pointer-events-auto cursor-pointer"
                 style={{
-                  width: `${hubHitSize}px`,
-                  height: `${hubHitSize}px`,
+                  width: `${fileMode ? deadZoneRadius * 2 : hubHitSize}px`,
+                  height: `${fileMode ? deadZoneRadius * 2 : hubHitSize}px`,
                   transform: 'translate(-50%, -50%)',
+                  borderRadius: fileMode ? '50%' : undefined,
                 }}
                 onMouseDown={(e) => e.stopPropagation()}
                 onMouseUp={(e) => e.stopPropagation()}

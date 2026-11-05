@@ -15,13 +15,36 @@ function polar(radius: number, angle: number): [number, number] {
   return [Math.cos(angle) * radius, -Math.sin(angle) * radius];
 }
 
+/** Ângulo de referência das pétalas: 3 itens começam à esquerda; o resto no topo. */
+export function filePetalStart(count: number): number {
+  return count === 3 ? Math.PI : Math.PI / 2;
+}
+
+/**
+ * Índice da fatia sob o vetor (dx, dy) a partir do centro — a mesma matemática do desenho.
+ * `dy` positivo é para baixo (ecrã).
+ */
+export function filePetalIndexAt(dx: number, dy: number, count: number): number {
+  if (count <= 0) return 0;
+  const start = filePetalStart(count);
+  const step = (Math.PI * 2) / count;
+  const theta = Math.atan2(-dy, dx);
+  const index = Math.round((start - theta) / step);
+  return ((index % count) + count) % count;
+}
+
+/** Raio do buraco central em píxeis (viewBox −126…126 desenhado a 200px). */
+export function filePetalDeadZonePx(): number {
+  return Math.ceil(M.inner * (200 / 252)) + 2;
+}
+
 function fmt(radius: number, angle: number): string {
   return polar(radius, angle).map((n) => n.toFixed(3)).join(' ');
 }
 
 /** Um setor. O ângulo 0 fica no topo, como na roda do ShiftDrop. */
 function petalPath(index: number, count: number): string {
-  const start = (count === 3 ? Math.PI : Math.PI / 2) - (Math.PI * 2 * index) / count;
+  const start = filePetalStart(count) - (Math.PI * 2 * index) / count;
   const step = (Math.PI * 2) / count;
   const left = start - step / 2;
   const right = start + step / 2;
@@ -51,7 +74,7 @@ function petalPath(index: number, count: number): string {
 }
 
 function labelPoint(index: number, count: number): [number, number] {
-  const angle = (count === 3 ? Math.PI : Math.PI / 2) - (Math.PI * 2 * index) / count;
+  const angle = filePetalStart(count) - (Math.PI * 2 * index) / count;
   const radius = M.labelInner + (M.outer - M.labelInner) * 0.56;
   return polar(radius, angle);
 }
