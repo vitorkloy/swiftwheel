@@ -33,6 +33,11 @@ const cases = [
     let ticks = 0;
     try { const out = await w.run(`conv:${to}`, f("video.mp4"), { onProgress: () => { ticks += 1; } }); console.log(`OK   conv:${to} -> ${path.basename(out)} ${Math.round(fs.statSync(out).size / 1024)} KB, ${ticks} ticks`); } catch (err) { bad += 1; console.log("FAIL gif", err.message); }
   }
+  for (const [id, file] of [["conv:xlsx", "doc.pdf"], ["tool:extractArchive", "archive.zip"], ["conv:tar", "archive.zip"]]) {
+    let ticks = 0;
+    try { await w.prepare(id, f(file)); const out = await w.run(id, f(file), { onProgress: () => { ticks += 1; } }); console.log(`OK   ${id} ${file} -> ${path.basename(out)}, ${ticks} ticks`); } catch (err) { bad += 1; console.log(`FAIL ${id} ${file}: ${err.message}`); }
+  }
+  try { let ticks = 0; const out = await w.runMany("tool:zipFiles", [f("photo.jpg"), f("doc.pdf"), f("notes.txt")], { onProgress: () => { ticks += 1; } }); console.log(`OK   zipFiles -> ${path.basename(out)}, ${ticks} ticks`); } catch (err) { bad += 1; console.log("FAIL zip", err.message); }
   console.log("forms:", ["image.png", "audio.mp3", "video.mp4", "doc.pdf"].map((n) => `${n}=${(w.studioForm("tool:removeMetadata", f(n)) || []).length}`).join(" "));
   console.log(bad ? `${bad} falhas` : "tudo ok");
 })();
