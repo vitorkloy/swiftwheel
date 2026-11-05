@@ -122,6 +122,7 @@ function extensionFor(mime, format) {
 
 function installScreenshot(ctx) {
   let overlay = null;
+  let warmShell = null;
   let busy = false;
   let frameFile = "";
   let pendingSession = null;
@@ -147,11 +148,11 @@ function installScreenshot(ctx) {
     });
   });
 
-  const publishFrame = (image) => {
+  const publishFrame = (pngBuffer) => {
     const dir = path.join(os.tmpdir(), "vor-shot-frame");
     fs.mkdirSync(dir, { recursive: true });
     frameFile = path.join(dir, "frame.png");
-    fs.writeFileSync(frameFile, image.toPNG());
+    fs.writeFileSync(frameFile, pngBuffer);
     return `vor-shot://frame/${Date.now()}`;
   };
 
@@ -198,9 +199,11 @@ function installScreenshot(ctx) {
 
   const closeOverlay = () => {
     pendingSession = null;
+    revealOverlay = () => {};
     const win = overlay;
     overlay = null;
     if (win && !win.isDestroyed()) win.close();
+    queueMicrotask(() => { void primeWarmShell(); });
   };
 
   const pinImage = (dataUrl, width, height) => {
@@ -267,6 +270,12 @@ function installScreenshot(ctx) {
     };
   };
 
+  const pickSource = (sources, display, index) => (
+    sources.find((item) => String(item.display_id) === String(display.id))
+    || sources[index]
+    || sources[0]
+  );
+
   /** Congela todos os monitores num PNG DIP alinhado ao desktop virtual. */
   const grabVirtualDesktop = async () => {
     const { displays, origin, bounds } = virtualDesktopBounds();
@@ -282,38 +291,52 @@ function installScreenshot(ctx) {
       thumbnailSize: { width: maxW, height: maxH },
       fetchWindowIcons: false,
     });
-    const sharp = require("sharp");
-    const composites = [];
-    for (let index = 0; index < displays.length; index += 1) {
-      const display = displays[index];
-      const source = sources.find((item) => String(item.display_id) === String(display.id))
-        || sources[index]
-        || sources[0];
-      if (!source || source.thumbnail.isEmpty()) continue;
-      const dipW = Math.max(1, Math.round(display.bounds.width));
-      const dipH = Math.max(1, Math.round(display.bounds.height));
-      const resized = await sharp(source.thumbnail.toPNG())
-        .resize(dipW, dipH, { fit: "fill" })
-        .png()
-        .toBuffer();
-      composites.push({
-        input: resized,
-        left: Math.round(display.bounds.x - origin.x),
-        top: Math.round(display.bounds.y - origin.y),
-      });
+
+    // Um monitor: nativeImage.resize — sem sharp nem PNG round-trip extra.
+    if (displays.length === 1) {
+      const display = displays[0];
+      const source = pickSource(sources, display, 0);
+      if (!source || source.thumbnail.isEmpty()) throw new Error("captura vazia");
+      let image = source.thumbnail;
+      const size = image.getSize();
+      if (size.width !== bounds.width || size.height !== bounds.height) {
+        image = image.resize({ width: bounds.width, height: bounds.height, quality: "better" });
+      }
+      if (image.isEmpty()) throw new Error("captura vazia");
+      return { image, png: image.toPNG(), origin, bounds };
     }
+
+    const sharp = require("sharp");
+    const pngFast = { compressionLevel: 1, adaptiveFiltering: false };
+    const composites = (
+      await Promise.all(displays.map(async (display, index) => {
+        const source = pickSource(sources, display, index);
+        if (!source || source.thumbnail.isEmpty()) return null;
+        const dipW = Math.max(1, Math.round(display.bounds.width));
+        const dipH = Math.max(1, Math.round(display.bounds.height));
+        const resized = await sharp(source.thumbnail.toPNG())
+          .resize(dipW, dipH, { fit: "fill" })
+          .png(pngFast)
+          .toBuffer();
+        return {
+          input: resized,
+          left: Math.round(display.bounds.x - origin.x),
+          top: Math.round(display.bounds.y - origin.y),
+        };
+      }))
+    ).filter(Boolean);
     if (!composites.length) throw new Error("captura vazia");
-    const buffer = await sharp({
+    const png = await sharp({
       create: {
         width: bounds.width,
         height: bounds.height,
         channels: 3,
         background: { r: 0, g: 0, b: 0 },
       },
-    }).composite(composites).png().toBuffer();
-    const image = nativeImage.createFromBuffer(buffer);
+    }).composite(composites).png(pngFast).toBuffer();
+    const image = nativeImage.createFromBuffer(png);
     if (image.isEmpty()) throw new Error("captura vazia");
-    return { image, origin, bounds };
+    return { image, png, origin, bounds };
   };
 
   const activeWindowRect = async (origin, virtual) => {
@@ -349,8 +372,16 @@ function installScreenshot(ctx) {
     };
   };
 
-  const createOverlayShell = async (bounds) => {
-    closeOverlay();
+  const attachShellLifecycle = (win) => {
+    win.setAlwaysOnTop(true, "screen-saver");
+    win.removeMenu();
+    win.on("closed", () => {
+      if (overlay === win) overlay = null;
+      if (warmShell === win) warmShell = null;
+    });
+  };
+
+  const buildOverlayShell = async (bounds) => {
     const win = new BrowserWindow({
       x: bounds.x,
       y: bounds.y,
@@ -376,29 +407,63 @@ function installScreenshot(ctx) {
         backgroundThrottling: false,
       },
     });
-    overlay = win;
-    win.setAlwaysOnTop(true, "screen-saver");
-    win.removeMenu();
-    win.on("closed", () => {
-      if (overlay === win) overlay = null;
-    });
+    attachShellLifecycle(win);
     if (ctx.isDev) await win.loadURL("http://localhost:5173/capture.html");
     else await win.loadFile(ctx.captureHtmlPath);
     if (!win.isDestroyed()) win.setBounds(bounds);
     return win;
   };
 
+  const primeWarmShell = async () => {
+    if (warmShell && !warmShell.isDestroyed()) return warmShell;
+    if (overlay && !overlay.isDestroyed()) return null;
+    try {
+      const { bounds } = virtualDesktopBounds();
+      const win = await buildOverlayShell(bounds);
+      if (overlay && !overlay.isDestroyed()) {
+        if (!win.isDestroyed()) win.close();
+        return null;
+      }
+      warmShell = win;
+      return win;
+    } catch (e) {
+      ctx.diagLog(`[Screenshot] warm: ${e.message}`);
+      return null;
+    }
+  };
+
+  const takeOverlayShell = async (bounds) => {
+    const warm = warmShell && !warmShell.isDestroyed() ? warmShell : null;
+    warmShell = null;
+    if (warm) {
+      if (overlay && overlay !== warm && !overlay.isDestroyed()) {
+        try { overlay.close(); } catch { /* ignore */ }
+      }
+      overlay = warm;
+      if (!warm.isDestroyed()) warm.setBounds(bounds);
+      return warm;
+    }
+    if (overlay && !overlay.isDestroyed()) {
+      try { overlay.close(); } catch { /* ignore */ }
+      overlay = null;
+    }
+    const win = await buildOverlayShell(bounds);
+    overlay = win;
+    return win;
+  };
+
   const openOverlay = async (bounds, session, prepared) => {
     const win = prepared && !prepared.isDestroyed()
       ? prepared
-      : await createOverlayShell(bounds);
+      : await takeOverlayShell(bounds);
     if (win.isDestroyed()) return;
     overlay = win;
     let revealed = false;
+    let timer = null;
     const reveal = () => {
       if (revealed || win.isDestroyed()) return;
       revealed = true;
-      win.setOpacity(1);
+      if (timer != null) clearTimeout(timer);
       win.setBounds(bounds);
       win.showInactive();
       win.focus();
@@ -408,8 +473,11 @@ function installScreenshot(ctx) {
     revealOverlay = reveal;
     pendingSession = session;
     win.webContents.send("screenshot-session", session);
-    const timer = setTimeout(reveal, 450);
-    win.once("closed", () => clearTimeout(timer));
+    // Fallback se o frame não disparar "ready".
+    timer = setTimeout(reveal, 400);
+    win.once("closed", () => {
+      if (timer != null) clearTimeout(timer);
+    });
   };
 
   const capture = async (mode) => {
@@ -432,9 +500,9 @@ function installScreenshot(ctx) {
 
       const shellPromise = mode === "full"
         ? Promise.resolve(null)
-        : createOverlayShell(virtual.bounds);
+        : takeOverlayShell(virtual.bounds);
       hideOurWindows();
-      const { image, bounds } = await grabVirtualDesktop();
+      const { image, png, bounds } = await grabVirtualDesktop();
       shell = await shellPromise;
 
       if (mode === "full") {
@@ -445,12 +513,13 @@ function installScreenshot(ctx) {
 
       const language = ctx.language() === "pt" ? "pt" : "en";
       await openOverlay(bounds, {
-        frameUrl: publishFrame(image),
+        frameUrl: publishFrame(png),
         mode: mode === "window" ? "window" : "region",
         width: bounds.width,
         height: bounds.height,
         preset,
         cursor: cfg.includeCursor ? cursor : null,
+        hintAt: cursor,
         copyOnSelect: !!cfg.copyOnSelect,
         format: cfg.format === "jpeg" || cfg.format === "webp" ? cfg.format : "png",
         quality: Math.min(100, Math.max(50, Number(cfg.quality) || 92)),
@@ -580,6 +649,8 @@ function installScreenshot(ctx) {
     await capture(next);
     return { ok: true };
   });
+
+  queueMicrotask(() => { void primeWarmShell(); });
 
   return {
     capture,

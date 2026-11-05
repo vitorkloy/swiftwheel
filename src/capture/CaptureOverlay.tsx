@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowUpRight, Circle, CloudFog, Copy, Highlighter, Minus, Palette, Pen, Save, Square, Type, Undo2, X } from 'lucide-react';
+import { ArrowUpRight, Check, Circle, CloudFog, Copy, Highlighter, Minus, Move, Palette, Pen, Save, Square, Trash2, Type, Undo2, X } from 'lucide-react';
 
 type ShotFormat = 'png' | 'jpeg' | 'webp';
 
@@ -18,6 +18,7 @@ interface Session {
   height: number;
   preset: Rect | null;
   cursor: { x: number; y: number } | null;
+  hintAt?: { x: number; y: number } | null;
   copyOnSelect: boolean;
   format: ShotFormat;
   quality: number;
@@ -42,13 +43,17 @@ const WIDTHS = [2, 4, 8];
 const COPY: Record<Session['language'], Record<string, string>> = {
   pt: {
     pen: 'Caneta', shapes: 'Formas', arrow: 'Seta', rect: 'Retângulo', ellipse: 'Círculo', line: 'Linha', highlight: 'Marca', text: 'Texto', blur: 'Desfoque', undo: 'Desfazer',
-    copy: 'Copiar', save: 'Guardar', cancel: 'Cancelar', discardText: 'Descartar texto', color: 'Cor', custom: 'Cor personalizada',
-    copied: 'Copiado', saved: 'Guardado', select: 'Arraste para selecionar',
+    copy: 'Copiar', save: 'Guardar', cancel: 'Cancelar', discardText: 'Descartar texto',
+    deleteText: 'Apagar texto', saveText: 'Confirmar texto', textSize: 'Tamanho do texto', moveText: 'Mover texto',
+    color: 'Cor', custom: 'Cor personalizada',
+    copied: 'Copiado', saved: 'Guardado', select: 'Selecionar área',
   },
   en: {
     pen: 'Pen', shapes: 'Shapes', arrow: 'Arrow', rect: 'Rectangle', ellipse: 'Circle', line: 'Line', highlight: 'Marker', text: 'Text', blur: 'Blur', undo: 'Undo',
-    copy: 'Copy', save: 'Save', cancel: 'Cancel', discardText: 'Discard text', color: 'Color', custom: 'Custom color',
-    copied: 'Copied', saved: 'Saved', select: 'Drag to select',
+    copy: 'Copy', save: 'Save', cancel: 'Cancel', discardText: 'Discard text',
+    deleteText: 'Delete text', saveText: 'Confirm text', textSize: 'Text size', moveText: 'Move text',
+    color: 'Color', custom: 'Custom color',
+    copied: 'Copied', saved: 'Saved', select: 'Select area',
   },
 };
 
@@ -330,19 +335,25 @@ export const CaptureOverlay: React.FC = () => {
   const [draft, setDraft] = useState<Mark | null>(null);
   const [textAt, setTextAt] = useState<Point | null>(null);
   const [textValue, setTextValue] = useState('');
+  const [textSize, setTextSize] = useState(4);
+  const [textSizeOpen, setTextSizeOpen] = useState(false);
   const [textEditIndex, setTextEditIndex] = useState<number | null>(null);
   const textAtRef = useRef<Point | null>(null);
   const textValueRef = useRef('');
+  const textSizeRef = useRef(4);
   const textEditIndexRef = useRef<number | null>(null);
   const textInputRef = useRef<HTMLInputElement>(null);
   const textStampRef = useRef(0);
   textAtRef.current = textAt;
   textValueRef.current = textValue;
+  textSizeRef.current = textSize;
   textEditIndexRef.current = textEditIndex;
   const [status, setStatus] = useState('');
   const [colorsOpen, setColorsOpen] = useState(false);
   const [frameReady, setFrameReady] = useState(false);
   const [dimIn, setDimIn] = useState(false);
+  const [closing, setClosing] = useState(false);
+  const closingRef = useRef(false);
   const [imageEpoch, setImageEpoch] = useState(0);
   const colorInputRef = useRef<HTMLInputElement>(null);
   const frameReadyRef = useRef(false);
@@ -355,13 +366,18 @@ export const CaptureOverlay: React.FC = () => {
   const [hoverHandle, setHoverHandle] = useState<Handle | null>(null);
   const [resizeHandle, setResizeHandle] = useState<Handle | null>(null);
   const [hoverMove, setHoverMove] = useState(false);
+  const [hoverText, setHoverText] = useState(false);
   const [moving, setMoving] = useState(false);
+  const [movingText, setMovingText] = useState(false);
+  const [tipAt, setTipAt] = useState<Point | null>(null);
   const draftRef = useRef<Mark | null>(null);
   const dragRef = useRef<
     | { kind: 'create'; origin: Point; current: Point }
     | { kind: 'move'; origin: Point; rect: Rect }
     | { kind: 'resize'; handle: Handle; rect: Rect }
     | { kind: 'draw'; origin: Point; current: Point }
+    | { kind: 'move-text'; index: number; origin: Point; startAt: Point; moved: boolean }
+    | { kind: 'move-text-draft'; origin: Point; startAt: Point }
     | null
   >(null);
 
@@ -381,6 +397,7 @@ export const CaptureOverlay: React.FC = () => {
       setCommitted(Boolean(preset));
       setMarks([]);
       setDraft(null);
+      setTipAt(preset ? null : (next.hintAt || next.cursor || null));
     };
     if (!window.electron?.onScreenshotSession) {
       apply(demoSession());
@@ -388,7 +405,10 @@ export const CaptureOverlay: React.FC = () => {
     }
     const stop = window.electron.onScreenshotSession(apply);
     const stopVisible = window.electron.onScreenshotVisible?.(() => {
-      window.setTimeout(() => setDimIn(true), 48);
+      // Dois frames: garante que o freeze já pintou antes do esmaecer começar.
+      requestAnimationFrame(() => {
+        requestAnimationFrame(() => setDimIn(true));
+      });
     });
     void window.electron.getScreenshotSession?.().then((pending) => {
       if (pending) apply(pending);
@@ -460,8 +480,16 @@ export const CaptureOverlay: React.FC = () => {
 
   const run = useCallback(async (action: 'copy' | 'save' | 'pin' | 'wheel' | 'cancel') => {
     if (action === 'cancel') {
-      if (session?.demo) setSelection(null);
-      else void window.electron?.screenshotAction?.({ action: 'cancel' });
+      if (session?.demo) {
+        setSelection(null);
+        return;
+      }
+      if (closingRef.current) return;
+      closingRef.current = true;
+      setClosing(true);
+      window.setTimeout(() => {
+        void window.electron?.screenshotAction?.({ action: 'cancel' });
+      }, 180);
       return;
     }
     const shot = await exportShot();
@@ -497,6 +525,7 @@ export const CaptureOverlay: React.FC = () => {
     setTextAt(null);
     setTextValue('');
     setTextEditIndex(null);
+    setTextSizeOpen(false);
   }, []);
 
   const cancelText = useCallback(() => {
@@ -507,10 +536,21 @@ export const CaptureOverlay: React.FC = () => {
     window.setTimeout(() => { textCancelRef.current = false; }, 0);
   }, [clearTextDraft]);
 
+  const deleteText = useCallback(() => {
+    const editIndex = textEditIndexRef.current;
+    textCancelRef.current = true;
+    textStampRef.current = Date.now();
+    clearTextDraft();
+    setTool('select');
+    if (editIndex != null) setMarks((current) => current.filter((_, index) => index !== editIndex));
+    window.setTimeout(() => { textCancelRef.current = false; }, 0);
+  }, [clearTextDraft]);
+
   const commitText = useCallback(() => {
     const value = textValueRef.current.trim();
     const at = textAtRef.current;
     const editIndex = textEditIndexRef.current;
+    const draftSize = textSizeRef.current;
     clearTextDraft();
     setTool('select');
     if (!at) return;
@@ -518,12 +558,12 @@ export const CaptureOverlay: React.FC = () => {
       if (editIndex != null) setMarks((current) => current.filter((_, index) => index !== editIndex));
       return;
     }
-    const next: Mark = { tool: 'text', color, size, at, text: value };
+    const next: Mark = { tool: 'text', color, size: draftSize, at, text: value };
     setMarks((current) => {
       if (editIndex == null) return [...current, next];
       return current.map((mark, index) => (index === editIndex ? next : mark));
     });
-  }, [clearTextDraft, color, size]);
+  }, [clearTextDraft, color]);
 
   const beginTextEdit = useCallback((at: Point, value: string, editIndex: number | null) => {
     textStampRef.current = Date.now();
@@ -537,10 +577,14 @@ export const CaptureOverlay: React.FC = () => {
       const mark = marks[editIndex];
       if (mark?.tool === 'text') {
         setColor(mark.color);
-        setSize(mark.size);
+        textSizeRef.current = mark.size;
+        setTextSize(mark.size);
+        return;
       }
     }
-  }, [marks]);
+    textSizeRef.current = size;
+    setTextSize(size);
+  }, [marks, size]);
 
   const undo = useCallback(() => {
     setDraft(null);
@@ -594,11 +638,15 @@ export const CaptureOverlay: React.FC = () => {
     setColorsOpen(false);
     setShapesOpen(false);
     const point = pointFrom(event);
-    const textHit = selection && inside(point, selection) ? hitText(point, marks) : -1;
+    const textHit = !textAt && selection && inside(point, selection) ? hitText(point, marks) : -1;
     if (textHit >= 0) {
       event.preventDefault();
       const mark = marks[textHit];
-      if (mark?.tool === 'text') beginTextEdit(mark.at, mark.text, textHit);
+      if (mark?.tool !== 'text') return;
+      try { stageRef.current?.setPointerCapture(event.pointerId); } catch { /* o ponteiro já pode ter sido solto */ }
+      dragRef.current = { kind: 'move-text', index: textHit, origin: point, startAt: mark.at, moved: false };
+      setMovingText(true);
+      setHoverText(true);
       return;
     }
     if (tool === 'text' && selection && inside(point, selection)) {
@@ -635,16 +683,27 @@ export const CaptureOverlay: React.FC = () => {
   const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
     const drag = dragRef.current;
     const point = pointFrom(event);
+    if (!selection) setTipAt(point);
+    else setTipAt((current) => (current ? null : current));
     if (!drag) {
       if (hoverHandle) {
         setHoverMove(false);
+        setHoverText(false);
         return;
       }
+      const overText = Boolean(
+        selection
+        && !textAt
+        && inside(point, selection)
+        && hitText(point, marks) >= 0,
+      );
+      setHoverText(overText);
       const overMove = Boolean(
         committed
         && tool === 'select'
         && selection
         && !textAt
+        && !overText
         && inside(point, selection)
         && !hitHandle(point, selection),
       );
@@ -666,6 +725,22 @@ export const CaptureOverlay: React.FC = () => {
       const next = resizeRect(drag.rect, drag.handle, point, bounds);
       selectionRef.current = next;
       setSelection(next);
+    } else if (drag.kind === 'move-text') {
+      const dx = point.x - drag.origin.x;
+      const dy = point.y - drag.origin.y;
+      if (!drag.moved && Math.hypot(dx, dy) < 4) return;
+      drag.moved = true;
+      const nextAt = { x: drag.startAt.x + dx, y: drag.startAt.y + dy };
+      setMarks((current) => current.map((mark, index) => (
+        index === drag.index && mark.tool === 'text' ? { ...mark, at: nextAt } : mark
+      )));
+    } else if (drag.kind === 'move-text-draft') {
+      const nextAt = {
+        x: drag.startAt.x + (point.x - drag.origin.x),
+        y: drag.startAt.y + (point.y - drag.origin.y),
+      };
+      textAtRef.current = nextAt;
+      setTextAt(nextAt);
     } else if (drag.kind === 'draw') {
       drag.current = point;
       if (tool === 'pen' || tool === 'highlight') {
@@ -689,6 +764,7 @@ export const CaptureOverlay: React.FC = () => {
     dragRef.current = null;
     setResizeHandle(null);
     setMoving(false);
+    setMovingText(false);
     if (!drag) return;
     if (drag.kind === 'create') {
       const next = normalize(drag.origin, drag.current, bounds);
@@ -720,6 +796,18 @@ export const CaptureOverlay: React.FC = () => {
     }
     if (drag.kind === 'move' || drag.kind === 'resize') {
       remember(selectionRef.current);
+      return;
+    }
+    if (drag.kind === 'move-text') {
+      if (!drag.moved) {
+        const mark = marks[drag.index];
+        if (mark?.tool === 'text') beginTextEdit(mark.at, mark.text, drag.index);
+      }
+      return;
+    }
+    if (drag.kind === 'move-text-draft') {
+      textStampRef.current = Date.now();
+      textInputRef.current?.focus();
       return;
     }
     const drawn = draftRef.current;
@@ -773,26 +861,30 @@ export const CaptureOverlay: React.FC = () => {
     { id: 'text', label: label.text, icon: <Type size={16} strokeWidth={1.75} /> },
     { id: 'blur', label: label.blur, icon: <CloudFog size={16} strokeWidth={1.75} /> },
   ];
-  const textPx = textFontPx(size);
+  const textPx = textFontPx(textSize);
   const editingMark = textEditIndex != null ? marks[textEditIndex] : null;
   const textColor = editingMark?.tool === 'text' ? editingMark.color : color;
 
-  const stageCursor = textAt || tool === 'text'
-    ? 'text'
-    : resizeHandle
-      ? `${resizeHandle}-resize`
-      : hoverHandle
-        ? `${hoverHandle}-resize`
-        : moving
-          ? 'grabbing'
-          : hoverMove
-            ? 'grab'
-            : 'crosshair';
+  const stageCursor = movingText
+    ? 'grabbing'
+    : hoverText
+      ? 'grab'
+      : textAt || tool === 'text'
+        ? 'text'
+        : resizeHandle
+          ? `${resizeHandle}-resize`
+          : hoverHandle
+            ? `${hoverHandle}-resize`
+            : moving
+              ? 'grabbing'
+              : hoverMove
+                ? 'grab'
+                : 'crosshair';
 
   return (
     <div
       ref={stageRef}
-      className={`cap-stage${frameReady ? ' is-ready' : ''}${textAt ? ' is-text' : ''}`}
+      className={`cap-stage${frameReady ? ' is-ready' : ''}${textAt ? ' is-text' : ''}${closing ? ' is-out' : ''}`}
       style={{ cursor: stageCursor }}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
@@ -806,13 +898,20 @@ export const CaptureOverlay: React.FC = () => {
         onLoad={() => {
           setImageEpoch((epoch) => epoch + 1);
           setFrameReady(true);
-          if (session.demo) {
-            window.setTimeout(() => setDimIn(true), 48);
-            return;
-          }
-          if (frameReadyRef.current) return;
-          frameReadyRef.current = true;
-          void window.electron?.screenshotAction?.({ action: 'ready' });
+          const signalReady = () => {
+            requestAnimationFrame(() => {
+              requestAnimationFrame(() => {
+                if (session.demo) {
+                  setDimIn(true);
+                  return;
+                }
+                if (frameReadyRef.current) return;
+                frameReadyRef.current = true;
+                void window.electron?.screenshotAction?.({ action: 'ready' });
+              });
+            });
+          };
+          signalReady();
         }}
       />
       <canvas ref={canvasRef} />
@@ -827,6 +926,17 @@ export const CaptureOverlay: React.FC = () => {
           </>
         )}
       </div>
+      {!selection && !committed && tipAt && (
+        <div
+          className="cap-tip"
+          style={{
+            left: Math.min(tipAt.x + 16, Math.max(8, bounds.width - 140)),
+            top: Math.min(tipAt.y + 20, Math.max(8, bounds.height - 28)),
+          }}
+        >
+          {label.select}
+        </div>
+      )}
       {selection && (
         <>
           <div className="cap-sel" style={{ left: selection.x, top: selection.y, width: selection.width, height: selection.height }}>
@@ -969,51 +1079,123 @@ export const CaptureOverlay: React.FC = () => {
       )}
       {textAt && (
         <div
-          className="cap-text-wrap"
-          style={{ left: textAt.x, top: textAt.y, fontSize: textPx }}
+          className="cap-text-editor"
+          style={{ left: textAt.x, top: textAt.y }}
           onPointerDown={(event) => event.stopPropagation()}
         >
-          <input
-            ref={textInputRef}
-            className="cap-text"
-            style={{
-              color: textColor,
-              width: `${Math.min(28, Math.max(2, (textValue || ' ').length + 1))}ch`,
-            }}
-            value={textValue}
-            spellCheck={false}
-            onChange={(event) => {
-              textValueRef.current = event.target.value;
-              setTextValue(event.target.value);
-            }}
-            onBlur={() => {
-              window.setTimeout(() => {
-                if (textCancelRef.current) return;
-                if (Date.now() - textStampRef.current < 280) {
-                  textInputRef.current?.focus();
+          <div className="cap-text-wrap" style={{ fontSize: textPx }}>
+            <input
+              ref={textInputRef}
+              className="cap-text"
+              style={{
+                color: textColor,
+                width: `${Math.min(28, Math.max(2, (textValue || ' ').length + 1))}ch`,
+              }}
+              value={textValue}
+              spellCheck={false}
+              onChange={(event) => {
+                textValueRef.current = event.target.value;
+                setTextValue(event.target.value);
+              }}
+              onBlur={() => {
+                window.setTimeout(() => {
+                  if (textCancelRef.current) return;
+                  if (Date.now() - textStampRef.current < 280) {
+                    textInputRef.current?.focus();
+                    return;
+                  }
+                  const active = document.activeElement;
+                  if (active === textInputRef.current) return;
+                  if (active instanceof HTMLElement && active.closest('.cap-text-editor')) {
+                    textInputRef.current?.focus();
+                    return;
+                  }
+                  commitText();
+                }, 0);
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  cancelText();
                   return;
                 }
-                if (document.activeElement === textInputRef.current) return;
-                commitText();
-              }, 0);
-            }}
-            onKeyDown={(event) => {
-              if (event.key === 'Escape') {
+                if (event.key === 'Enter') {
+                  event.preventDefault();
+                  commitText();
+                }
+                event.stopPropagation();
+              }}
+            />
+            <button type="button" className="cap-text-x" aria-label={label.discardText} title={label.discardText} onClick={cancelText}>
+              <X size={10} strokeWidth={2.25} />
+            </button>
+          </div>
+          <div className="cap-text-tools">
+            <button
+              type="button"
+              className="cap-text-move"
+              aria-label={label.moveText}
+              title={label.moveText}
+              onPointerDown={(event) => {
+                if (event.button !== 0 || !textAt) return;
                 event.preventDefault();
                 event.stopPropagation();
-                cancelText();
-                return;
-              }
-              if (event.key === 'Enter') {
-                event.preventDefault();
-                commitText();
-              }
-              event.stopPropagation();
-            }}
-          />
-          <button type="button" className="cap-text-x" aria-label={label.discardText} title={label.discardText} onClick={cancelText}>
-            <X size={10} strokeWidth={2.25} />
-          </button>
+                textStampRef.current = Date.now();
+                try { stageRef.current?.setPointerCapture(event.pointerId); } catch { /* o ponteiro já pode ter sido solto */ }
+                dragRef.current = { kind: 'move-text-draft', origin: pointFrom(event), startAt: textAt };
+                setMovingText(true);
+              }}
+            >
+              <Move size={14} strokeWidth={1.75} />
+            </button>
+            <button type="button" aria-label={label.deleteText} title={label.deleteText} onClick={deleteText}>
+              <Trash2 size={14} strokeWidth={1.75} />
+            </button>
+            <button type="button" aria-label={label.saveText} title={label.saveText} onClick={commitText}>
+              <Check size={14} strokeWidth={1.75} />
+            </button>
+            <i className="cap-rule" />
+            <span className="cap-text-size">
+              <button
+                type="button"
+                className={textSizeOpen ? 'is-on' : ''}
+                aria-label={label.textSize}
+                title={label.textSize}
+                aria-expanded={textSizeOpen}
+                onClick={() => {
+                  textStampRef.current = Date.now();
+                  setTextSizeOpen((open) => !open);
+                }}
+              >
+                <span className="cap-text-size-glyph" style={{ fontSize: textFontPx(textSize) }}>A</span>
+              </button>
+              {textSizeOpen && (
+                <span className="cap-text-size-pop" role="listbox" aria-label={label.textSize}>
+                  {WIDTHS.map((width) => (
+                    <button
+                      key={width}
+                      type="button"
+                      role="option"
+                      aria-selected={textSize === width}
+                      className={textSize === width ? 'is-on' : ''}
+                      aria-label={`${label.textSize} ${width}`}
+                      title={`${label.textSize} ${width}`}
+                      onClick={() => {
+                        textStampRef.current = Date.now();
+                        textSizeRef.current = width;
+                        setTextSize(width);
+                        setTextSizeOpen(false);
+                        textInputRef.current?.focus();
+                      }}
+                    >
+                      <span className="cap-text-size-glyph" style={{ fontSize: textFontPx(width) }}>A</span>
+                    </button>
+                  ))}
+                </span>
+              )}
+            </span>
+          </div>
         </div>
       )}
     </div>
