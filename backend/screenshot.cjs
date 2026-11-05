@@ -593,8 +593,12 @@ function installScreenshot(ctx) {
       shortcutListener = new GlobalKeyboardListener();
       void shortcutListener.addListener((event, down) => {
         shortcutTracker.note(event);
-        if (shortcutsPaused) return;
         const pressed = shortcutTracker.format(event, down);
+        if (pressed && overlay && !overlay.isDestroyed() && normalizeAccelerator(pressed).toLowerCase() === "escape") {
+          closeOverlay();
+          return true;
+        }
+        if (shortcutsPaused) return;
         if (!pressed) return;
         const mode = shortcutBindings.get(normalizeAccelerator(pressed).toLowerCase());
         if (!mode) return;

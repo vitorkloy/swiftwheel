@@ -243,12 +243,126 @@ function spawnWait(cmd, args, options = {}) {
       if (code === 0) finish();
       else {
         const lines = stderr.trim().split(/\r?\n/).filter(Boolean);
-        // PowerShell põe a causa na primeira linha; os outros conversores, na última.
         const tail = /powershell/i.test(cmd) ? lines[0] : lines.pop();
         finish(new Error(`${path.basename(cmd)} falhou (código ${code})${tail ? `: ${tail.slice(0, 160)}` : ""}`));
       }
     });
   });
+}
+
+function pdfLocked(err) {
+  return /password|authenticate|encrypted|cannot draw/i.test(String(err && err.message));
+}
+
+function withPassword(args, password) {
+  const next = args.slice();
+  next.splice(1, 0, "-p", password);
+  return next;
+}
+
+/** Diálogo simples para pedir a senha do PDF. Cancela → null. */
+function askPdfPassword(filePath, attempt) {
+  const { BrowserWindow } = require("electron");
+  const name = path.basename(filePath);
+  const hint = attempt > 1 ? "Senha incorreta. Tenta outra." : "Este PDF está protegido por senha.";
+  return new Promise((resolve) => {
+    const win = new BrowserWindow({
+      width: 380,
+      height: 168,
+      frame: false,
+      resizable: false,
+      alwaysOnTop: true,
+      skipTaskbar: true,
+      show: false,
+      backgroundColor: "#151515",
+      webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
+    });
+    let settled = false;
+    const finish = (value) => {
+      if (settled) return;
+      settled = true;
+      try { if (!win.isDestroyed()) win.close(); } catch { /* ignore */ }
+      resolve(value);
+    };
+    win.once("closed", () => finish(null));
+    win.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    win.webContents.on("will-navigate", (event) => event.preventDefault());
+    win.webContents.on("ipc-message", (_event, channel, payload) => {
+      if (channel === "vor-pdf-password") finish(typeof payload === "string" ? payload : null);
+    });
+    // sandbox sem preload: usa executeJavaScript + console-message como canal simples
+    win.webContents.on("console-message", (_event, _level, message) => {
+      if (typeof message !== "string" || !message.startsWith("VOR_PDF_PW:")) return;
+      const raw = message.slice("VOR_PDF_PW:".length);
+      finish(raw === "__cancel__" ? null : raw);
+    });
+    const html = `<!doctype html><html><head><meta charset="utf-8"><style>
+      html,body{margin:0;height:100%;background:#151515;color:#eee;font:13px/1.35 "Segoe UI",sans-serif}
+      main{padding:16px 18px;display:flex;flex-direction:column;gap:10px;height:100%;box-sizing:border-box}
+      h1{margin:0;font-size:14px;font-weight:600}
+      p{margin:0;color:rgba(255,255,255,.72)}
+      strong{color:#fff;font-weight:600}
+      input{width:100%;box-sizing:border-box;height:32px;padding:0 10px;border:1px solid rgba(255,255,255,.18);
+        border-radius:8px;background:#0f0f0f;color:#fff;outline:none}
+      input:focus{border-color:rgba(255,255,255,.4)}
+      .row{display:flex;gap:8px;justify-content:flex-end;margin-top:auto}
+      button{height:30px;padding:0 14px;border:0;border-radius:8px;cursor:pointer;font:inherit}
+      .cancel{background:transparent;color:rgba(255,255,255,.8)}
+      .ok{background:#fff;color:#111;font-weight:600}
+    </style></head><body><main>
+      <h1>PDF protegido</h1>
+      <p>${hint.replace(/</g, "")} <strong>${name.replace(/[<>&"]/g, "")}</strong></p>
+      <input id="pw" type="password" autofocus placeholder="Senha" />
+      <div class="row">
+        <button class="cancel" type="button" id="cancel">Cancelar</button>
+        <button class="ok" type="button" id="ok">Desbloquear</button>
+      </div>
+    </main><script>
+      const send = (v) => console.log("VOR_PDF_PW:" + (v == null ? "__cancel__" : v));
+      const input = document.getElementById("pw");
+      document.getElementById("cancel").onclick = () => send(null);
+      document.getElementById("ok").onclick = () => send(input.value);
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") send(input.value);
+        if (e.key === "Escape") send(null);
+      });
+    </script></body></html>`;
+    void win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`).then(() => {
+      if (!win.isDestroyed()) {
+        win.show();
+        win.focus();
+      }
+    }).catch(() => finish(null));
+  });
+}
+
+/** Tenta sem senha, depois senha vazia (faturas), depois pede a senha ao utilizador. */
+async function mutoolRun(args, options) {
+  const bin = need("mutool");
+  const fileHint = args.find((part) => typeof part === "string" && /\.pdf$/i.test(part)) || "";
+  try {
+    await spawnWait(bin, args, options);
+    return;
+  } catch (err) {
+    if (!pdfLocked(err)) throw err;
+  }
+  try {
+    await spawnWait(bin, withPassword(args, ""), options);
+    return;
+  } catch (err) {
+    if (!pdfLocked(err)) throw err;
+  }
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const password = await askPdfPassword(fileHint || "documento.pdf", attempt);
+    if (password == null) throw new Error("Senha cancelada");
+    try {
+      await spawnWait(bin, withPassword(args, password), options);
+      return;
+    } catch (err) {
+      if (!pdfLocked(err)) throw err;
+      if (attempt === 3) throw new Error("Este PDF está protegido por senha");
+    }
+  }
 }
 
 function latestLibreOfficeVersion(html) {
@@ -784,7 +898,7 @@ async function toPdf(filePath, tmp) {
 async function pdfToImages(pdf, to, dir, stem) {
   const tmp = scratch();
   try {
-    await spawnWait(need("mutool"), ["draw", "-r", "150", "-o", path.join(tmp, "p-%d.png"), pdf], { timeout: 300000 });
+    await mutoolRun(["draw", "-r", "150", "-o", path.join(tmp, "p-%d.png"), pdf], { timeout: 300000 });
     const pages = fs.readdirSync(tmp).filter((f) => /^p-\d+\.png$/.test(f))
       .sort((a, b) => Number(a.match(/\d+/)[0]) - Number(b.match(/\d+/)[0]));
     if (!pages.length) throw new Error("O PDF não tem páginas");
@@ -907,13 +1021,13 @@ async function convert(filePath, to) {
       if (to === "pptx") return finish(await soffice(filePath, "pptx", tmp, { infilter: "impress_pdf_import" }));
       // Texto real do PDF; um PDF que é só imagem (cartaz escaneado/exportado) não tem nada a extrair.
       const text = path.join(tmp, "doc.txt");
-      await spawnWait(need("mutool"), ["convert", "-F", "text", "-o", text, filePath], { timeout: 300000 });
+      await mutoolRun(["convert", "-F", "text", "-o", text, filePath], { timeout: 300000 });
       if (!fs.existsSync(text) || !fs.readFileSync(text, "utf8").trim()) {
         throw new Error("Este PDF não tem texto (é só imagem). Use PNG/JPG ou DOCX/PPTX");
       }
       if (to === "txt") return finish(text);
       const html = path.join(tmp, "doc.html");
-      await spawnWait(need("mutool"), ["convert", "-F", "html", "-o", html, filePath], { timeout: 300000 });
+      await mutoolRun(["convert", "-F", "html", "-o", html, filePath], { timeout: 300000 });
       exists(html);
       if (to === "html") return finish(html);
       return await pandoc(html, to, dest, "html");
@@ -951,7 +1065,6 @@ async function runTool(tool, filePath) {
     return destDir;
   }
   if (kind === "pdf") {
-    const mutool = need("mutool");
     if (tool === "compress" || tool === "removeMetadata") {
       const dest = uniquePath(dir, `${stem}-${tool === "compress" ? "compressed" : "clean"}`, "pdf");
       // compress: reamostra imagens acima de 150 dpi para 150 dpi e recomprime em JPEG (q75), só se ficar menor.
@@ -960,7 +1073,7 @@ async function runTool(tool, filePath) {
           "--color-image-subsample-dpi", "200,150", "--gray-image-subsample-dpi", "200,150",
           "--color-image-recompress-method", "jpeg:75", "--gray-image-recompress-method", "jpeg:75"]
         : ["clean", "-gg", "-z"];
-      await spawnWait(mutool, [...args, filePath, dest], { timeout: 300000 });
+      await mutoolRun([...args, filePath, dest], { timeout: 300000 });
       exists(dest);
       if (tool === "compress" && fs.statSync(dest).size >= fs.statSync(filePath).size) {
         fs.rmSync(dest, { force: true });
@@ -973,11 +1086,15 @@ async function runTool(tool, filePath) {
       fs.mkdirSync(outDir, { recursive: true });
       const tmp = scratch();
       try {
-        await spawnWait(mutool, ["draw", "-F", "txt", "-o", path.join(tmp, "p-%d.txt"), filePath], { timeout: 300000 });
+        await mutoolRun(["draw", "-F", "txt", "-o", path.join(tmp, "p-%d.txt"), filePath], { timeout: 300000 });
         const count = fs.readdirSync(tmp).length;
         for (let i = 1; i <= count; i += 1) {
-          await spawnWait(mutool, ["merge", "-o", path.join(outDir, `${stem}-${String(i).padStart(3, "0")}.pdf`), filePath, String(i)]);
+          await mutoolRun(["merge", "-o", path.join(outDir, `${stem}-${String(i).padStart(3, "0")}.pdf`), filePath, String(i)]);
         }
+        if (!fs.readdirSync(outDir).length) throw new Error("O PDF não tem páginas");
+      } catch (err) {
+        fs.rmSync(outDir, { recursive: true, force: true });
+        throw err;
       } finally {
         fs.rmSync(tmp, { recursive: true, force: true });
       }
