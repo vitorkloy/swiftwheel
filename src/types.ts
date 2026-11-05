@@ -225,6 +225,8 @@ export interface ElectronAPI {
   ) => () => void;
   runFileSlice?: (id: string, filePath: string | string[]) => Promise<{ ok: boolean; out?: string; error?: string; canceled?: boolean }>;
   noteFileDragPath?: (filePath: string) => Promise<{ ok: boolean }>;
+  /** Mostra um erro só como notificação do sistema (PT-BR, título VOR). */
+  notifyError?: (message: string) => void;
   shiftToolStatus?: () => Promise<Record<string, string | null>>;
   filePath?: (file: File) => string;
   onOpenMenu: (

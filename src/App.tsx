@@ -12,7 +12,7 @@ import {
   withScreenshotWheel,
   workspaceContainsBundledDemoApp,
 } from './defaults';
-import { Minus, X, Maximize, Square, AlertTriangle, ArrowLeft, ArrowRight, PanelLeftClose } from 'lucide-react';
+import { Minus, X, Maximize, Square, ArrowLeft, ArrowRight, PanelLeftClose } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { isLikelyWebUrl, resolveWebsiteIconFields } from './siteFavicon';
 
@@ -630,10 +630,11 @@ export default function App() {
     // console.log('[Icons] Cache-busted: re-fetching icons with new normalization.');
   }, [isLoaded]);
 
+  /** Erros só pela notificação do sistema (#17): nada de toast vermelho dentro do VOR. */
   useEffect(() => {
     if (!executionError) return;
-    const timer = window.setTimeout(() => setExecutionError(null), 4000);
-    return () => window.clearTimeout(timer);
+    window.electron?.notifyError?.(executionError);
+    setExecutionError(null);
   }, [executionError]);
 
   // Listen for execution errors from backend
@@ -954,7 +955,7 @@ export default function App() {
           `Hydration: no payload but disk has data (primary=${persistenceMeta.primaryBytes} bak=${persistenceMeta.backupBytes} quarantine=${quarantineBytes}) — blocking saves`,
         );
         setExecutionError(
-          'VOR could not read the configuration stored in AppData. Saving is blocked to protect your data. Check rovyl-persistence.log in the app data folder, look for config-v2.json.broken-* files, or restore config-v2.json / .bak.',
+          'O VOR não conseguiu ler a configuração salva. Para proteger seus dados, salvar está bloqueado até restaurar config-v2.json (ou .bak) na pasta de dados do app.',
         );
       } else {
         persistenceSaveBlockedRef.current = false;
@@ -2211,16 +2212,7 @@ export default function App() {
         window.electron?.savePersistenceLog?.(`suppressed global shortcut toast: ${errorMsg}`);
         return;
       }
-      const isShortcutError = errorMsg.toLowerCase().includes('shortcut');
-
-      setLastLaunched({
-        id: 'error',
-        label: isShortcutError ? 'Shortcut Error' : 'Execution Error',
-        command: '',
-        iconName: 'AlertTriangle',
-        description: errorMsg
-      });
-      setTimeout(() => setLastLaunched(null), 6000);
+      // O aviso já sai pela notificação do sistema (ver efeito de executionError); sem cartão de erro no radial.
     });
 
     const cleanupWindowHidToTray = window.electron?.onWindowHidToTray(() => {
@@ -2986,27 +2978,6 @@ export default function App() {
         <Toast app={lastLaunched} />
         
         <AnimatePresence>
-          {executionError && (
-            <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[1000]">
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 20 }}
-                className="px-6 py-4 bg-red-500/90 backdrop-blur-xl border border-red-400/50 rounded-2xl shadow-2xl flex items-center gap-4 min-w-[320px]"
-              >
-                <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center text-white shrink-0">
-                  <AlertTriangle size={20} />
-                </div>
-                <div className="flex-1">
-                  <div className="text-[10px] font-black uppercase tracking-widest text-white/60 mb-1">Não foi possível</div>
-                  <div className="text-sm font-bold text-white leading-tight">{executionError}</div>
-                </div>
-                <button onClick={() => setExecutionError(null)} className="text-white/40 hover:text-white transition-colors">
-                  <X size={18} />
-                </button>
-              </motion.div>
-            </div>
-          )}
         </AnimatePresence>
 
 

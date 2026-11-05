@@ -5960,6 +5960,17 @@ const escapeCommand = (cmd) => {
   return cmd;
 };
 
+/** #17: o único aviso de erro é a notificação do Windows, em PT-BR e com o nome VOR. */
+const notifyErrorOs = (message) => {
+  const body = String(message || "").trim();
+  if (!body || /^(Cancelado|Senha cancelada)$/i.test(body)) return;
+  try {
+    const { Notification } = require("electron");
+    if (Notification.isSupported()) new Notification({ title: "VOR", body: body.slice(0, 240) }).show();
+  } catch { /* ignore */ }
+};
+ipcMain.on("vor-notify-error", (_event, message) => notifyErrorOs(message));
+
 // IPC: Recebe comando do React para executar app
 ipcMain.on("execute-command", async (event, command, commandType, options = {}) => {
   if (!command || typeof command !== "string" || command.trim() === "") {
@@ -5967,7 +5978,7 @@ ipcMain.on("execute-command", async (event, command, commandType, options = {}) 
     if (mainWindow) {
       mainWindow.webContents.send(
         "execution-error",
-        "Empty or invalid command",
+        "Comando vazio ou inválido.",
       );
     }
     return;
@@ -6088,7 +6099,7 @@ ipcMain.on("execute-command", async (event, command, commandType, options = {}) 
       if (mainWindow) {
         mainWindow.webContents.send(
           "execution-error",
-          "Failed to start key simulator",
+          "Não foi possível simular o atalho de teclado.",
         );
       }
     });
@@ -6401,7 +6412,7 @@ ipcMain.on("execute-command", async (event, command, commandType, options = {}) 
         await unixPlatform.launch(resolvedCommand);
         diagLog(`[Exec] Unix launch ok: ${resolvedCommand}`);
       } catch (err) {
-        const finalError = `Failed to run "${resolvedCommand.substring(0, 50)}". Error: ${err.message}`;
+        const finalError = `Não foi possível abrir "${resolvedCommand.substring(0, 50)}".`;
         diagLog(`[Exec] ${finalError}`);
         if (mainWindow) mainWindow.webContents.send("execution-error", finalError);
       }
@@ -6545,13 +6556,13 @@ ipcMain.on("execute-command", async (event, command, commandType, options = {}) 
     }
 
     // If we get here, all methods failed
-    const finalError = `Failed to run "${resolvedCommand.substring(0, 50)}${resolvedCommand.length > 50 ? "..." : ""}". Error: ${lastError?.message || "Unknown"}`;
+    const finalError = `Não foi possível abrir "${resolvedCommand.substring(0, 50)}${resolvedCommand.length > 50 ? "…" : ""}".`;
     console.error(`\n✗✗✗ EXEC_ABORT: ${finalError} ✗✗✗\n`);
     if (mainWindow) {
       mainWindow.webContents.send("execution-error", finalError);
     }
   } catch (err) {
-    const finalError = `Unexpected error while running command: ${err.message}`;
+    const finalError = "Não foi possível abrir este item.";
     console.error(`\n✗✗✗ EXEC_ABORT: ${finalError} ✗✗✗\n`);
     if (mainWindow) {
       mainWindow.webContents.send("execution-error", finalError);

@@ -67,6 +67,7 @@ contextBridge.exposeInMainWorld("electron", {
     return () => ipcRenderer.removeListener("file-wheel", listener);
   },
   runFileSlice: (id, filePath) => ipcRenderer.invoke("run-file-slice", id, filePath),
+  notifyError: (message) => ipcRenderer.send("vor-notify-error", String(message || "")),
   noteFileDragPath: (filePath) => ipcRenderer.invoke("note-file-drag-path", filePath),
   shiftToolStatus: () => ipcRenderer.invoke("shift-tool-status"),
   filePath: (file) => {
