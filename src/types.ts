@@ -419,7 +419,7 @@ export interface ElectronAPI {
       format: "png" | "jpeg" | "webp";
       quality: number;
       language: "pt" | "en";
-    }) => void,
+    } | null) => void,
   ) => () => void;
   onScreenshotVisible?: (callback: () => void) => () => void;
   screenshotAction?: (payload: {

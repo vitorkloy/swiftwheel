@@ -127,6 +127,9 @@ function installScreenshot(ctx) {
   let frameFile = "";
   let pendingSession = null;
   let revealOverlay = () => {};
+  let revealTimer = null;
+  let grabMs = 0;
+  let openedAt = 0;
   let shortcutsPaused = false;
   /** @type {Map<string, "region" | "full" | "window">} */
   let shortcutBindings = new Map();
@@ -197,13 +200,29 @@ function installScreenshot(ctx) {
     clipboard.writeImage(image);
   };
 
+  /**
+   * Esconde e reaproveita a janela em vez de a destruir: `close()` + criar outra fazia o DWM animar
+   * a saída e obrigava a recarregar o renderer. O renderer volta ao estado vazio (transparente) com
+   * a sessão `null` e a janela passa a ser a próxima warm shell.
+   */
   const closeOverlay = () => {
+    clearTimeout(revealTimer);
     pendingSession = null;
     revealOverlay = () => {};
     const win = overlay;
     overlay = null;
-    if (win && !win.isDestroyed()) win.close();
-    queueMicrotask(() => { void primeWarmShell(); });
+    if (!win || win.isDestroyed()) {
+      queueMicrotask(() => { void primeWarmShell(); });
+      return;
+    }
+    try {
+      win.hide();
+      win.webContents.send("screenshot-session", null);
+    } catch { /* ignore */ }
+    if (warmShell && warmShell !== win && !warmShell.isDestroyed()) {
+      try { warmShell.close(); } catch { /* ignore */ }
+    }
+    warmShell = win;
   };
 
   const pinImage = (dataUrl, width, height) => {
@@ -276,67 +295,87 @@ function installScreenshot(ctx) {
     || sources[0]
   );
 
-  /** Congela todos os monitores num PNG DIP alinhado ao desktop virtual. */
+  /**
+   * Congela todos os monitores à resolução física nativa, sem reamostrar. O `desktopCapturer` usa
+   * um único `thumbnailSize` para todas as telas (aspect-fit): com 1366×768 + 1600×900 o primário
+   * era ampliado para 1600×900 e depois reduzido para 1366×768 — 6,8% dos pixels mudavam e o
+   * "freeze" não batia com o ecrã real (o salto ao abrir/fechar). Agora há um pedido por resolução
+   * física distinta e cada bitmap é copiado 1:1 para o mosaico (em px físicos = DIP × escala).
+   */
   const grabVirtualDesktop = async () => {
     const { displays, origin, bounds } = virtualDesktopBounds();
-    let maxW = 1;
-    let maxH = 1;
-    for (const display of displays) {
-      const scale = display.scaleFactor || 1;
-      maxW = Math.max(maxW, Math.round(display.size.width * scale));
-      maxH = Math.max(maxH, Math.round(display.size.height * scale));
-    }
-    const sources = await desktopCapturer.getSources({
-      types: ["screen"],
-      thumbnailSize: { width: maxW, height: maxH },
-      fetchWindowIcons: false,
+    const scale = Math.max(...displays.map((d) => d.scaleFactor || 1));
+    const physical = (d) => ({
+      width: Math.max(1, Math.round(d.size.width * (d.scaleFactor || 1))),
+      height: Math.max(1, Math.round(d.size.height * (d.scaleFactor || 1))),
     });
-
-    // Um monitor: nativeImage.resize — sem sharp nem PNG round-trip extra.
-    if (displays.length === 1) {
-      const display = displays[0];
-      const source = pickSource(sources, display, 0);
-      if (!source || source.thumbnail.isEmpty()) throw new Error("captura vazia");
+    const sizeKeys = [...new Set(displays.map((d) => { const p = physical(d); return `${p.width}x${p.height}`; }))];
+    const lists = await Promise.all(sizeKeys.map((key) => {
+      const [width, height] = key.split("x").map(Number);
+      return desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width, height }, fetchWindowIcons: false });
+    }));
+    const shots = displays.map((display, index) => {
+      const p = physical(display);
+      const source = pickSource(lists[sizeKeys.indexOf(`${p.width}x${p.height}`)], display, index);
+      if (!source || source.thumbnail.isEmpty()) return null;
       let image = source.thumbnail;
-      const size = image.getSize();
-      if (size.width !== bounds.width || size.height !== bounds.height) {
-        image = image.resize({ width: bounds.width, height: bounds.height, quality: "better" });
+      // Só com DPIs diferentes entre monitores (escala do mosaico ≠ escala do monitor) há reamostragem.
+      const want = {
+        width: Math.max(1, Math.round(display.bounds.width * scale)),
+        height: Math.max(1, Math.round(display.bounds.height * scale)),
+      };
+      const got = image.getSize();
+      if (got.width !== want.width || got.height !== want.height) image = image.resize({ ...want, quality: "best" });
+      return { image, size: want, left: Math.round((display.bounds.x - origin.x) * scale), top: Math.round((display.bounds.y - origin.y) * scale) };
+    }).filter(Boolean);
+    if (!shots.length) throw new Error("captura vazia");
+    const W = Math.max(1, Math.round(bounds.width * scale));
+    const H = Math.max(1, Math.round(bounds.height * scale));
+    let image;
+    if (shots.length === 1 && shots[0].size.width === W && shots[0].size.height === H) {
+      image = shots[0].image;
+    } else {
+      const out = Buffer.alloc(W * H * 4);
+      new Uint32Array(out.buffer, out.byteOffset, W * H).fill(0xff000000);
+      for (const shot of shots) {
+        const src = shot.image.toBitmap();
+        const rowBytes = shot.size.width * 4;
+        for (let y = 0; y < shot.size.height; y += 1) {
+          const ty = shot.top + y;
+          if (ty < 0 || ty >= H) continue;
+          src.copy(out, (ty * W + shot.left) * 4, y * rowBytes, y * rowBytes + Math.min(rowBytes, (W - shot.left) * 4));
+        }
       }
-      if (image.isEmpty()) throw new Error("captura vazia");
-      return { image, png: image.toPNG(), origin, bounds };
+      image = nativeImage.createFromBitmap(out, { width: W, height: H, scaleFactor: 1 });
     }
-
-    const sharp = require("sharp");
-    const pngFast = { compressionLevel: 1, adaptiveFiltering: false };
-    const composites = (
-      await Promise.all(displays.map(async (display, index) => {
-        const source = pickSource(sources, display, index);
-        if (!source || source.thumbnail.isEmpty()) return null;
-        const dipW = Math.max(1, Math.round(display.bounds.width));
-        const dipH = Math.max(1, Math.round(display.bounds.height));
-        const resized = await sharp(source.thumbnail.toPNG())
-          .resize(dipW, dipH, { fit: "fill" })
-          .png(pngFast)
-          .toBuffer();
-        return {
-          input: resized,
-          left: Math.round(display.bounds.x - origin.x),
-          top: Math.round(display.bounds.y - origin.y),
-        };
-      }))
-    ).filter(Boolean);
-    if (!composites.length) throw new Error("captura vazia");
-    const png = await sharp({
-      create: {
-        width: bounds.width,
-        height: bounds.height,
-        channels: 3,
-        background: { r: 0, g: 0, b: 0 },
-      },
-    }).composite(composites).png(pngFast).toBuffer();
-    const image = nativeImage.createFromBuffer(png);
     if (image.isEmpty()) throw new Error("captura vazia");
-    return { image, png, origin, bounds };
+    return { image, png: image.toPNG(), origin, bounds };
+  };
+
+  /**
+   * Sem transições do DWM na janela de captura (DWMWA_TRANSITIONS_FORCEDISABLED = 3): o Windows
+   * animava show/hide da janela (zoom/fade do MinAnimate), o "pulo" ao abrir e ao fechar. Chamado
+   * uma vez por janela (ela é reaproveitada); o PowerShell termina logo, custo zero em repouso.
+   */
+  const disableTransitions = (win) => {
+    if (process.platform !== "win32" || !win || win.isDestroyed()) return;
+    try {
+      const handle = win.getNativeWindowHandle();
+      const hwnd = handle.length >= 8 ? handle.readBigUInt64LE(0) : BigInt(handle.readUInt32LE(0));
+      const script = [
+        "Add-Type -Namespace V -Name D -MemberDefinition '[DllImport(\"dwmapi.dll\")] public static extern int DwmSetWindowAttribute(IntPtr h, int a, ref int v, int s);'",
+        "$v = 1",
+        `[V.D]::DwmSetWindowAttribute([IntPtr]${hwnd.toString()}, 3, [ref]$v, 4)`,
+      ].join("; ");
+      const { spawn } = require("child_process");
+      const child = spawn("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], { windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+      let hr = "";
+      child.stdout.on("data", (chunk) => { hr += chunk.toString(); });
+      child.on("close", () => ctx.diagLog(`[Screenshot] DWMWA_TRANSITIONS_FORCEDISABLED hr=${hr.trim() || "?"}`));
+      child.on("error", (e) => ctx.diagLog(`[Screenshot] dwm: ${e.message}`));
+    } catch (e) {
+      ctx.diagLog(`[Screenshot] dwm: ${e.message}`);
+    }
   };
 
   const activeWindowRect = async (origin, virtual) => {
@@ -415,6 +454,7 @@ function installScreenshot(ctx) {
       },
     });
     attachShellLifecycle(win);
+    disableTransitions(win);
     if (ctx.isDev) await win.loadURL("http://localhost:5173/capture.html");
     else await win.loadFile(ctx.captureHtmlPath);
     if (!win.isDestroyed()) win.setBounds(bounds);
@@ -466,11 +506,11 @@ function installScreenshot(ctx) {
     if (win.isDestroyed()) return;
     overlay = win;
     let revealed = false;
-    let timer = null;
     const reveal = () => {
-      if (revealed || win.isDestroyed()) return;
+      if (revealed || win.isDestroyed() || overlay !== win) return;
       revealed = true;
-      if (timer != null) clearTimeout(timer);
+      clearTimeout(revealTimer);
+      ctx.diagLog(`[Screenshot] grab ${grabMs} ms, revelada ${Date.now() - openedAt} ms depois`);
       win.setBounds(bounds);
       win.showInactive();
       win.focus();
@@ -481,10 +521,8 @@ function installScreenshot(ctx) {
     pendingSession = session;
     win.webContents.send("screenshot-session", session);
     // Fallback se o frame não disparar "ready". A janela é transparente, logo revelar cedo não pisca.
-    timer = setTimeout(reveal, 700);
-    win.once("closed", () => {
-      if (timer != null) clearTimeout(timer);
-    });
+    clearTimeout(revealTimer);
+    revealTimer = setTimeout(reveal, 700);
   };
 
   const capture = async (mode) => {
@@ -509,7 +547,10 @@ function installScreenshot(ctx) {
         ? Promise.resolve(null)
         : takeOverlayShell(virtual.bounds);
       hideOurWindows();
+      const t0 = Date.now();
       const { image, png, bounds } = await grabVirtualDesktop();
+      grabMs = Date.now() - t0;
+      openedAt = Date.now();
       shell = await shellPromise;
 
       if (mode === "full") {
@@ -536,7 +577,8 @@ function installScreenshot(ctx) {
       ctx.diagLog(`[Screenshot] ${e.message}`);
       toast(ctx.language() === "pt" ? "Não foi possível capturar a tela." : "Could not capture the screen.");
       if (shell && !shell.isDestroyed()) {
-        try { shell.close(); } catch { /* ignore */ }
+        overlay = shell;
+        closeOverlay();
       }
     } finally {
       ctx.setGrabbing(false);

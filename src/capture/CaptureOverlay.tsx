@@ -360,6 +360,7 @@ export const CaptureOverlay: React.FC = () => {
   const frameKeyRef = useRef('');
   const imageRef = useRef<HTMLImageElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const veilRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
   const [barBox, setBarBox] = useState({ width: 420, height: 40 });
@@ -382,7 +383,28 @@ export const CaptureOverlay: React.FC = () => {
   >(null);
 
   useEffect(() => {
-    const apply = (next: Session) => {
+    const apply = (next: Session | null) => {
+      closingRef.current = false;
+      setClosing(false);
+      setTextAt(null);
+      setTextValue('');
+      setTextEditIndex(null);
+      setStatus('');
+      setTool('select');
+      if (!next) {
+        // Janela escondida para reaproveitar: volta a vazio (documento transparente).
+        frameKeyRef.current = '';
+        frameReadyRef.current = false;
+        setFrameReady(false);
+        setDimIn(false);
+        setSession(null);
+        setSelection(null);
+        setCommitted(false);
+        setMarks([]);
+        setDraft(null);
+        setTipAt(null);
+        return;
+      }
       const preset = next.preset && next.preset.width > 4 ? next.preset : null;
       const frame = next.frameUrl || next.dataUrl || '';
       if (frameKeyRef.current !== frame) {
@@ -513,9 +535,24 @@ export const CaptureOverlay: React.FC = () => {
       if (closingRef.current) return;
       closingRef.current = true;
       setClosing(true);
-      window.setTimeout(() => {
+      // Esmaece o escurecimento e só então pede para esconder: sem salto, só "clarear" como no Windows.
+      const veil = veilRef.current;
+      let sent = false;
+      const send = () => {
+        if (sent) return;
+        sent = true;
+        veil?.removeEventListener('transitionend', onEnd);
         void window.electron?.screenshotAction?.({ action: 'cancel' });
-      }, 180);
+      };
+      const onEnd = (event: TransitionEvent) => {
+        if (event.target === veil && event.propertyName === 'opacity') send();
+      };
+      if (!veil || getComputedStyle(veil).opacity === '0') {
+        send();
+      } else {
+        veil.addEventListener('transitionend', onEnd);
+        window.setTimeout(send, 400);
+      }
       return;
     }
     const shot = await exportShot();
@@ -952,24 +989,34 @@ export const CaptureOverlay: React.FC = () => {
         onLoad={() => {
           setImageEpoch((epoch) => epoch + 1);
           setFrameReady(true);
-          const signalReady = () => {
-            requestAnimationFrame(() => {
-              requestAnimationFrame(() => {
-                if (session.demo) {
-                  setDimIn(true);
-                  return;
-                }
-                if (frameReadyRef.current) return;
-                frameReadyRef.current = true;
-                void window.electron?.screenshotAction?.({ action: 'ready' });
-              });
-            });
+          const frameKey = frameKeyRef.current;
+          const signal = () => {
+            if (session.demo) {
+              setDimIn(true);
+              return;
+            }
+            if (frameReadyRef.current || frameKeyRef.current !== frameKey) return;
+            frameReadyRef.current = true;
+            void window.electron?.screenshotAction?.({ action: 'ready' });
           };
-          signalReady();
+          /**
+           * Janela escondida (reaproveitada): o Chromium não corre rAF, e esperar por ele caía no
+           * fallback de 700 ms. Basta o bitmap estar descodificado; a janela é transparente, logo
+           * mostrar antes do primeiro paint mostra o mesmo ecrã por baixo. Visível: dois frames.
+           */
+          const image = imageRef.current;
+          const decoded = image && typeof image.decode === 'function' ? image.decode().catch(() => undefined) : Promise.resolve();
+          void decoded.then(() => {
+            if (document.visibilityState === 'visible') {
+              requestAnimationFrame(() => requestAnimationFrame(signal));
+            } else {
+              signal();
+            }
+          });
         }}
       />
       <canvas ref={canvasRef} />
-      <div className={`cap-veil${dimIn ? ' is-in' : ''}`}>
+      <div ref={veilRef} className={`cap-veil${dimIn ? ' is-in' : ''}`}>
         {!selection && <div className="cap-dim" style={{ left: 0, top: 0, right: 0, bottom: 0 }} />}
         {selection && (
           <>
