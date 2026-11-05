@@ -4126,7 +4126,7 @@ app.whenReady().then(async () => {
           event.sender.startDrag({ file: String(target), icon: icon.isEmpty() ? nativeImage.createEmpty() : icon });
         } catch { /* o arrasto nativo falhou */ }
       });
-      const openFileStudio = (sliceId, target) => new Promise((resolve, reject) => {
+      const openFileStudio = (sliceId, target, batch = {}) => new Promise((resolve, reject) => {
         const { BrowserWindow, ipcMain: bus } = require("electron");
         const win = new BrowserWindow({
           width: 960,
@@ -4169,7 +4169,7 @@ app.whenReady().then(async () => {
             pages = prep.pages;
           }
           try { bus.removeHandler("studio-job"); } catch { /* ignore */ }
-          bus.handle("studio-job", () => ({ id: sliceId, filePath: target, pages }));
+          bus.handle("studio-job", () => ({ id: sliceId, filePath: target, pages, ...batch }));
           await win.loadFile(path.join(__dirname, "studio.html"));
         })().catch((err) => {
           if (!settled) {
@@ -4309,13 +4309,29 @@ app.whenReady().then(async () => {
           let out = "";
           let failed = 0;
           let lastError = "";
+          let studioState = null;
           for (let i = 0; i < list.length; i += 1) {
             const p = list[i];
             const label = list.length > 1 ? `${shiftVerb(id)} ${i + 1} de ${list.length}` : `${shiftVerb(id)}…`;
             if (shiftWheels.needsStudio(id)) {
-              const spec = await openFileStudio(id, p);
+              // Uma janela por arquivo; o ajuste anterior vem como estado inicial do próximo.
+              const spec = await openFileStudio(id, p, { files: list, index: i, total: list.length, rest: list.slice(i + 1), state: studioState });
+              if (spec.state) studioState = spec.state;
               showShiftToast(label, list.length > 1 ? i / list.length : -1);
               out = await shiftWheels.applyStudio(id, p, spec);
+              if (spec.all) {
+                // "Aplicar a Todos": mesmo ajuste nos arquivos restantes, sem reabrir a janela.
+                for (let j = i + 1; j < list.length; j += 1) {
+                  showShiftToast(`${shiftVerb(id)} ${j + 1} de ${list.length}`, j / list.length);
+                  const each = Array.isArray(spec.pngs) ? { ...spec, png: spec.pngs[j - i] } : spec;
+                  if (Array.isArray(spec.pngs) && !each.png) { failed += 1; continue; }
+                  try { out = await shiftWheels.applyStudio(id, list[j], each); } catch (err) {
+                    failed += 1;
+                    lastError = err && err.message ? err.message : String(err);
+                  }
+                }
+                break;
+              }
               continue;
             }
             showShiftToast(label, list.length > 1 ? i / list.length : -1);
