@@ -2621,8 +2621,8 @@ export default function App() {
     if (fileWheel) {
       const pt = (config.language || 'en') === 'pt';
       const names: Record<string, string> = pt
-        ? { compress: 'Comprimir', removeMetadata: 'Metadados', editImage: 'Editar', annotateImage: 'Anotar', frameImage: 'Fundo', cropImage: 'Cortar', cropVideo: 'Cortar', redactImage: 'Redigir', redactVideo: 'Redigir', normalizeAudio: 'Normalizar', muteVideo: 'Silenciar', trimVideo: 'Cortar tempo', trimAudio: 'Cortar tempo', splitPDF: 'Dividir', splitVideo: 'Dividir', organizePDF: 'Organizar', extractArchive: 'Extrair', createPDF: 'Criar PDF', mergePDF: 'Juntar PDF', changeVideoSpeed: 'Velocidade', joinVideos: 'Juntar', videoSnapshots: 'Instantâneo', audioToVideo: 'Visualizar', audioChannels: 'Canais', createCollage: 'Colagem', redactAudio: 'Censurar', airDrop: 'Partilhar', float: 'Flutuar', copy: 'Copiar', move: 'Mover', copyPath: 'Copiar caminho', openTerminal: 'Terminal' }
-        : { compress: 'Compress', removeMetadata: 'Metadata', editImage: 'Edit', annotateImage: 'Annotate', frameImage: 'Add background', cropImage: 'Crop', cropVideo: 'Crop', redactImage: 'Redact', redactVideo: 'Redact', normalizeAudio: 'Normalize', muteVideo: 'Mute', trimVideo: 'Trim', trimAudio: 'Trim', splitPDF: 'Split', splitVideo: 'Split', organizePDF: 'Organize', extractArchive: 'Extract', createPDF: 'Create PDF', mergePDF: 'Merge PDF', changeVideoSpeed: 'Speed', joinVideos: 'Join', videoSnapshots: 'Snapshot', audioToVideo: 'Visualize', audioChannels: 'Channels', createCollage: 'Collage', redactAudio: 'Bleep', airDrop: 'Share', float: 'Float', copy: 'Copy', move: 'Move', copyPath: 'Copy path', openTerminal: 'Terminal' };
+        ? { compress: 'Comprimir', removeMetadata: 'Metadados', editImage: 'Editar', annotateImage: 'Anotar', frameImage: 'Fundo', cropImage: 'Cortar', cropVideo: 'Cortar', redactImage: 'Ocultar', redactVideo: 'Ocultar', normalizeAudio: 'Normalizar', muteVideo: 'Silenciar', trimVideo: 'Aparar', trimAudio: 'Aparar', splitPDF: 'Dividir', splitVideo: 'Dividir', organizePDF: 'Organizar', extractArchive: 'Extrair', createPDF: 'Criar PDF', mergePDF: 'Juntar PDF', changeVideoSpeed: 'Velocidade', joinVideos: 'Juntar', videoSnapshots: 'Captura', audioToVideo: 'Visualizar', audioChannels: 'Canais', createCollage: 'Colagem', redactAudio: 'Bipar', zipFiles: 'Compactar', airDrop: 'Compartilhar', float: 'Flutuar', copy: 'Copiar', move: 'Mover', copyPath: 'Copiar caminho', openTerminal: 'Terminal', resize50: 'Reduzir 50%', resize1080: '1080p', rotate90: 'Girar' }
+        : { compress: 'Compress', removeMetadata: 'Metadata', editImage: 'Edit', annotateImage: 'Annotate', frameImage: 'Add background', cropImage: 'Crop', cropVideo: 'Crop', redactImage: 'Redact', redactVideo: 'Redact', normalizeAudio: 'Normalize', muteVideo: 'Mute', trimVideo: 'Trim', trimAudio: 'Trim', splitPDF: 'Split', splitVideo: 'Split', organizePDF: 'Organize', extractArchive: 'Extract', createPDF: 'Create PDF', mergePDF: 'Merge PDF', changeVideoSpeed: 'Speed', joinVideos: 'Join', videoSnapshots: 'Snapshot', audioToVideo: 'Visualize', audioChannels: 'Channels', createCollage: 'Collage', redactAudio: 'Bleep', zipFiles: 'Zip', airDrop: 'Share', float: 'Float', copy: 'Copy', move: 'Move', copyPath: 'Copy path', openTerminal: 'Terminal' };
       const reasons: Record<string, string> = pt
         ? { imagemagick: 'Requer ImageMagick', ffmpeg: 'Requer FFmpeg', libreoffice: 'Requer LibreOffice', ghostscript: 'Requer Ghostscript', pandoc: 'Requer Pandoc', tar: 'Requer tar.exe', soon: 'Em breve no ShiftDrop', pages: 'Pages é formato da Apple', unsupported: 'Não suportado' }
         : { imagemagick: 'Requires ImageMagick', ffmpeg: 'Requires FFmpeg', libreoffice: 'Requires LibreOffice', ghostscript: 'Requires Ghostscript', pandoc: 'Requires Pandoc', tar: 'Requires tar.exe', soon: 'Coming soon in ShiftDrop', pages: 'Pages is an Apple format', unsupported: 'Not supported' };
@@ -2631,7 +2631,7 @@ export default function App() {
         const title = names[key] || item.title;
         const reason = item.reason ? (reasons[item.reason] || item.reason) : '';
         const short: Record<string, string> = {
-          resize50: '50%', resize1080: '1080P', rotate90: pt ? 'GIRAR' : 'ROTATE',
+          resize50: '50%', resize1080: '1080P',
         };
         const icons: Record<string, string> = {
           compress: 'Minimize2', removeMetadata: 'Eraser', editImage: 'PenLine', annotateImage: 'MessageSquare',
@@ -2640,7 +2640,7 @@ export default function App() {
           splitPDF: 'SplitSquareHorizontal', splitVideo: 'SplitSquareHorizontal', organizePDF: 'ListOrdered',
           extractArchive: 'Archive', createPDF: 'FilePlus', mergePDF: 'Files', changeVideoSpeed: 'Gauge',
           joinVideos: 'Link', videoSnapshots: 'Camera', audioToVideo: 'Clapperboard', audioChannels: 'Headphones',
-          createCollage: 'LayoutGrid', redactAudio: 'AudioLines', airDrop: 'Share2', float: 'PictureInPicture2',
+          createCollage: 'LayoutGrid', redactAudio: 'AudioLines', zipFiles: 'FileArchive', airDrop: 'Share2', float: 'PictureInPicture2',
           copy: 'Copy', move: 'FolderInput', copyPath: 'Clipboard', openTerminal: 'Terminal',
           resize50: 'Scaling', resize1080: 'Monitor', rotate90: 'RotateCw',
         };

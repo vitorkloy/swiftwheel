@@ -750,6 +750,7 @@ function toolTitle(id) {
     cropImage: "CROP", cropVideo: "CROP", editImage: "EDIT", annotateImage: "ANNOTATE", frameImage: "ADD BG",
     trimVideo: "TRIM", trimAudio: "TRIM", splitVideo: "SPLIT", changeVideoSpeed: "SPEED",
     organizePDF: "ORGANIZE", audioToVideo: "VISUALIZE",
+    createPDF: "CRIAR PDF", createCollage: "COLAGEM", mergePDF: "JUNTAR", zipFiles: "ZIP",
     airDrop: "SHARE", float: "FLOAT", copy: "COPY", move: "MOVE", copyPath: "COPY PATH", openTerminal: "TERMINAL",
   };
   return map[id] || "?";
@@ -802,8 +803,70 @@ function pending(mode) {
   };
 }
 
+function isDir(p) {
+  try { return fs.statSync(p).isDirectory(); } catch { return false; }
+}
+
+/** "1,2 MB" — tamanho para o hub; pastas não mostram tamanho (somar seria lento). */
+function sizeLabel(p) {
+  try {
+    const st = fs.statSync(p);
+    if (st.isDirectory()) return "PASTA";
+    const units = ["B", "KB", "MB", "GB"];
+    let v = st.size;
+    let u = 0;
+    while (v >= 1024 && u < units.length - 1) { v /= 1024; u += 1; }
+    return `${(u === 0 ? String(v) : v.toFixed(v < 10 ? 1 : 0)).replace(".", ",")} ${units[u]}`;
+  } catch { return ""; }
+}
+
+const ACTIONS = ["airDrop", "float", "copy", "move", "copyPath", "openTerminal"];
+
+/** Ferramentas que trabalham com o lote inteiro de uma vez (um único resultado). */
+const BATCH = new Set(["createPDF", "createCollage", "mergePDF", "zipFiles"]);
+
+function isBatch(id) {
+  return id.startsWith("tool:") && BATCH.has(id.slice(5));
+}
+
+/** Vários itens: conversões em comum, ferramentas por arquivo sem tela e as de lote. */
+function buildMany(paths, mode) {
+  const kinds = new Set(paths.map((p) => (isDir(p) ? "folder" : kindOf(fmtOf(p)))));
+  const kind = kinds.size === 1 ? [...kinds][0] : "mixed";
+  const format = `${paths.length} ITENS`;
+  let items = [];
+  if (mode === "convert") {
+    if (kind !== "mixed" && kind !== "folder") {
+      const common = paths.map((p) => targets(kind, fmtOf(p)));
+      const all = targets(kind, "");
+      items = all.filter((to) => common.every((list) => list.includes(to)))
+        .map((to) => item(`conv:${to}`, titleOf(to), ok()));
+    }
+  } else if (mode === "tools") {
+    const ids = [];
+    if (kind === "image") ids.push("createPDF", "createCollage");
+    if (kind === "pdf") ids.push("mergePDF");
+    if (kind !== "mixed" && kind !== "folder") {
+      toolIds(kind, fmtOf(paths[0])).filter((id) => !STUDIO.has(id)).forEach((id) => ids.push(id));
+    }
+    ids.push("zipFiles");
+    items = ids.map((id) => item(`tool:${id}`, toolTitle(id), toolGate(id)));
+  } else {
+    items = ACTIONS.map((id) => item(`act:${id}`, toolTitle(id), toolGate(id)));
+  }
+  return { mode, format, kind, path: paths[0], paths, items };
+}
+
 function build(target, mode) {
-  const filePath = Array.isArray(target) ? target[0] : target;
+  const paths = (Array.isArray(target) ? target : [target]).filter(Boolean);
+  if (paths.length > 1) return buildMany(paths, mode);
+  const filePath = paths[0];
+  if (isDir(filePath)) {
+    const items = mode === "tools" ? [item("tool:zipFiles", toolTitle("zipFiles"), ok())]
+      : mode === "actions" ? ACTIONS.map((id) => item(`act:${id}`, toolTitle(id), toolGate(id)))
+        : [];
+    return { mode, format: "PASTA", kind: "folder", path: filePath, paths, items };
+  }
   const fmt = fmtOf(filePath);
   const kind = kindOf(fmt);
   let items = [];
@@ -812,11 +875,10 @@ function build(target, mode) {
   } else if (mode === "tools") {
     items = toolIds(kind, fmt).map((id) => item(`tool:${id}`, toolTitle(id), toolGate(id)));
   } else {
-    items = ["airDrop", "float", "copy", "move", "copyPath", "openTerminal"].map((id) =>
-      item(`act:${id}`, toolTitle(id), toolGate(id)),
-    );
+    items = ACTIONS.map((id) => item(`act:${id}`, toolTitle(id), toolGate(id)));
   }
-  return { mode, format: titleOf(fmt), kind, path: filePath, items };
+  const size = sizeLabel(filePath);
+  return { mode, format: size ? `${titleOf(fmt)} · ${size}` : titleOf(fmt), kind, path: filePath, paths, items };
 }
 
 function uniquePath(dir, stem, ext) {
@@ -1318,4 +1380,4 @@ async function studioPages(filePath) {
   return { tmp, pages };
 }
 
-module.exports = { build, pending, run, tools, prepare, targets, toolsFor, kindOf, fmtOf, needsStudio, applyStudio, studioPages };
+module.exports = { build, isBatch, isDir, pending, run, tools, prepare, targets, toolsFor, kindOf, fmtOf, needsStudio, applyStudio, studioPages };
