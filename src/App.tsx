@@ -2113,6 +2113,14 @@ export default function App() {
       clientSize?: { width: number; height: number } | null;
       paintToken?: number;
     }) => {
+      /**
+       * Roda de apps (MMB/atalho) nunca herda fatias de ficheiro. O payload de um arrasto anterior
+       * cancelado ficava em `fileWheel` e o clique do meio seguinte abria primeiro a roda do
+       * ShiftDrop (e só depois voltava ao normal).
+       */
+      if (data.source !== 'file' && !data.closeOnly && fileWheelRef.current) {
+        flushSync(() => setFileWheel(null));
+      }
       if (data.source === 'file' && data.fileWheel) {
         flushSync(() => {
           setFileWheel({
@@ -2476,6 +2484,8 @@ export default function App() {
     isHolding.current = false;
 
     if (!selectedId && isDesktopMode && !panelSurfaceOpen) {
+      // Fechar sem escolha também descarta a roda de ficheiro; senão ela reaparece no próximo MMB.
+      if (fileWheelRef.current) setFileWheel(null);
       window.electron?.setWindowSize('small', windowCenterScreenPoint());
       return;
     }

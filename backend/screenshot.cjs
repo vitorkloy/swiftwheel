@@ -388,16 +388,23 @@ function installScreenshot(ctx) {
       width: bounds.width,
       height: bounds.height,
       frame: false,
-      transparent: false,
+      /**
+       * Transparente e criada escondida no arranque (warm shell). Enquanto o renderer não confirma
+       * que pintou o frame congelado, qualquer frame apresentado pelo DWM é transparente — por
+       * baixo está exatamente a mesma imagem, portanto nada pisca. Antes era opaca (#000) e o
+       * primeiro frame podia sair preto/cinza, o "piscar" ao ativar a captura.
+       */
+      transparent: true,
       alwaysOnTop: true,
       skipTaskbar: true,
       resizable: false,
       movable: false,
       show: false,
+      paintWhenInitiallyHidden: true,
       hasShadow: false,
       enableLargerThanScreen: true,
       autoHideMenuBar: true,
-      backgroundColor: "#000000",
+      backgroundColor: "#00000000",
       focusable: true,
       webPreferences: {
         preload: ctx.preloadPath,
@@ -473,8 +480,8 @@ function installScreenshot(ctx) {
     revealOverlay = reveal;
     pendingSession = session;
     win.webContents.send("screenshot-session", session);
-    // Fallback se o frame não disparar "ready".
-    timer = setTimeout(reveal, 400);
+    // Fallback se o frame não disparar "ready". A janela é transparente, logo revelar cedo não pisca.
+    timer = setTimeout(reveal, 700);
     win.once("closed", () => {
       if (timer != null) clearTimeout(timer);
     });

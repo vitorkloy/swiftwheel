@@ -4031,6 +4031,7 @@ app.whenReady().then(async () => {
       };
       const releaseFileOverlay = (confirmSelection) => {
         fileDragOpen = false;
+        fileDragPath = "";
         fileGestureActive = false;
         fileDragMode = null;
         fileDragOrigin = null;
@@ -4092,14 +4093,26 @@ app.whenReady().then(async () => {
               if (Notification.isSupported()) new Notification({ title: "VOR", body: status }).show();
             } catch { /* ignore */ }
           });
-          const out = shiftWheels.run(id, filePath);
+          const out = await shiftWheels.run(id, filePath);
+          try {
+            const { Notification } = require("electron");
+            if (Notification.isSupported() && id.startsWith("conv:")) {
+              new Notification({ title: "VOR", body: `Pronto: ${path.basename(String(out))}` }).show();
+            }
+          } catch { /* ignore */ }
           if (id === "act:copyPath") {
             const { clipboard } = require("electron");
             clipboard.writeText(String(filePath));
           }
           return { ok: true, out };
         } catch (err) {
-          return { ok: false, error: err && err.message ? err.message : String(err) };
+          const message = err && err.message ? err.message : String(err);
+          diagLog(`[FileWheels] ${id}: ${message}`);
+          try {
+            const { Notification } = require("electron");
+            if (Notification.isSupported()) new Notification({ title: "VOR", body: message }).show();
+          } catch { /* ignore */ }
+          return { ok: false, error: message };
         }
       });
       ipcMain.handle("note-file-drag-path", (_event, filePath) => {
@@ -4112,7 +4125,12 @@ app.whenReady().then(async () => {
       const { uIOhook } = require("uiohook-napi");
       uIOhook.on("mousedown", (e) => {
         if (e.button !== 1) return;
-        noteFileMods(e);
+        /**
+         * Estado exato no instante do clique, não acumulado: `noteFileMods` só faz OR, e um keyup
+         * perdido (ex.: atalho engolido por outro hook) deixava Shift/Ctrl/Alt "presos" — qualquer
+         * arrasto seguinte abria a roda de ficheiro sem o utilizador segurar nada.
+         */
+        fileMods = { shift: !!e.shiftKey, ctrl: !!e.ctrlKey, alt: !!e.altKey };
         fileButtonDown = true;
         fileDragOrigin = { x: e.x, y: e.y };
         fileDragOpen = false;

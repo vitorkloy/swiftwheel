@@ -89,6 +89,13 @@ function pandocPath() {
   return findExe(path.join(dataRoot(), "Pandoc"), "pandoc.exe") || path.join(dataRoot(), "Pandoc", "pandoc.exe");
 }
 
+/** ffmpeg no PATH, ou o portátil que o VOR baixa sozinho no primeiro uso (como o ImageMagick). */
+function ffmpegPath() {
+  const onPath = which("ffmpeg");
+  if (onPath && fs.existsSync(onPath)) return onPath;
+  return findExe(path.join(dataRoot(), "FFmpeg"), "ffmpeg.exe") || path.join(dataRoot(), "FFmpeg", "ffmpeg.exe");
+}
+
 let toolsCache = null;
 function forgetTools() { toolsCache = null; }
 
@@ -96,7 +103,7 @@ function tools() {
   if (toolsCache) return toolsCache;
   toolsCache = {
     magick: magickPath(),
-    ffmpeg: which("ffmpeg"),
+    ffmpeg: ffmpegPath(),
     soffice: sofficePath(),
     pandoc: pandocPath(),
     tar: which("tar"),
@@ -111,6 +118,9 @@ function nativeConvertible(from, to) {
   const norm = (ext) => (ext === "jpeg" || ext === "jfif" ? "jpg" : ext === "tif" ? "tiff" : ext);
   return NATIVE_IMAGE.includes(norm(from)) && NATIVE_IMAGE.includes(norm(to));
 }
+
+/** Sem dados por este tempo = rede parada. Antes não havia timeout e a roda ficava "a pensar" para sempre. */
+const NET_IDLE_MS = 30000;
 
 function request(url, redirects = 0, headers = {}) {
   return new Promise((resolve, reject) => {
@@ -132,6 +142,7 @@ function request(url, redirects = 0, headers = {}) {
       }
       resolve(res);
     });
+    req.setTimeout(NET_IDLE_MS, () => req.destroy(new Error("sem resposta da rede")));
     req.on("error", reject);
   });
 }
@@ -145,23 +156,82 @@ function readText(url, headers) {
   }));
 }
 
+/** Baixa para `.part` e só renomeia no fim: um download interrompido nunca passa por completo. */
 function downloadFile(url, dest) {
+  const part = `${dest}.part`;
   return request(url).then((res) => new Promise((resolve, reject) => {
-    const file = fs.createWriteStream(dest);
+    const expected = Number(res.headers["content-length"]) || 0;
+    let got = 0;
+    const file = fs.createWriteStream(part);
+    const fail = (err) => {
+      res.destroy();
+      file.destroy();
+      fs.rm(part, { force: true }, () => reject(err));
+    };
+    res.setTimeout?.(NET_IDLE_MS, () => fail(new Error("download parado")));
+    res.on("data", (chunk) => { got += chunk.length; });
     res.pipe(file);
-    file.on("finish", () => file.close(() => resolve()));
-    file.on("error", reject);
-    res.on("error", reject);
+    file.on("finish", () => file.close(() => {
+      if (expected && got !== expected) {
+        fail(new Error("download incompleto"));
+        return;
+      }
+      try {
+        fs.renameSync(part, dest);
+        resolve();
+      } catch (err) {
+        reject(err);
+      }
+    }));
+    file.on("error", fail);
+    res.on("error", fail);
+    res.on("aborted", () => fail(new Error("download interrompido")));
   }));
 }
 
-function spawnWait(cmd, args) {
+/**
+ * Processo filho assíncrono com timeout. Tudo o que converte passava por `execFileSync` no
+ * processo principal do Electron: além de congelar a app, um conversor preso (LibreOffice com o
+ * perfil bloqueado, ffmpeg à espera de stdin) nunca devolvia erro.
+ */
+function spawnWait(cmd, args, options = {}) {
+  const { timeout = 120000, verbatim = false, env } = options;
   return new Promise((resolve, reject) => {
-    const child = spawn(cmd, args, { windowsHide: true, stdio: "ignore" });
-    child.on("error", reject);
+    let child;
+    try {
+      child = spawn(cmd, args, {
+        windowsHide: true,
+        stdio: ["ignore", "ignore", "pipe"],
+        windowsVerbatimArguments: verbatim,
+        env: env || process.env,
+      });
+    } catch (err) {
+      reject(err);
+      return;
+    }
+    let stderr = "";
+    let done = false;
+    const finish = (err) => {
+      if (done) return;
+      done = true;
+      clearTimeout(timer);
+      if (err) reject(err);
+      else resolve();
+    };
+    const timer = setTimeout(() => {
+      try { child.kill(); } catch { /* ignore */ }
+      finish(new Error(`${path.basename(cmd)} demorou demais e foi cancelado`));
+    }, timeout);
+    child.stderr.on("data", (chunk) => {
+      if (stderr.length < 4000) stderr += chunk.toString("utf8");
+    });
+    child.on("error", (err) => finish(err.code === "ENOENT" ? new Error(`${path.basename(cmd)} não encontrado`) : err));
     child.on("exit", (code) => {
-      if (code === 0) resolve();
-      else reject(new Error(`${path.basename(cmd)} saiu com código ${code}`));
+      if (code === 0) finish();
+      else {
+        const tail = stderr.trim().split(/\r?\n/).filter(Boolean).pop();
+        finish(new Error(`${path.basename(cmd)} falhou (código ${code})${tail ? `: ${tail.slice(0, 160)}` : ""}`));
+      }
     });
   });
 }
@@ -200,16 +270,31 @@ function installLibreOffice(onStatus) {
     const version = latestLibreOfficeVersion(html);
     const root = dataRoot();
     const work = path.join(root, ".soffice-tmp");
-    fs.rmSync(work, { recursive: true, force: true });
     fs.mkdirSync(work, { recursive: true });
-    const msi = path.join(work, "lo.msi");
-    const url = `https://download.documentfoundation.org/libreoffice/stable/${version}/win/x86_64/LibreOffice_${version}_Win_x86-64.msi`;
-    await downloadFile(url, msi);
+    /** Download completo fica guardado por versão: uma extração falhada não obriga a baixar ~350 MB de novo. */
+    const msi = path.join(work, `LibreOffice_${version}.msi`);
+    for (const entry of fs.readdirSync(work)) {
+      if (path.join(work, entry) !== msi) fs.rmSync(path.join(work, entry), { recursive: true, force: true });
+    }
+    if (!fs.existsSync(msi)) {
+      const url = `https://download.documentfoundation.org/libreoffice/stable/${version}/win/x86_64/LibreOffice_${version}_Win_x86-64.msi`;
+      await downloadFile(url, msi);
+    }
     if (onStatus) onStatus("Preparando o conversor de documentos…");
     const dir = path.join(root, "LibreOffice");
     fs.mkdirSync(dir, { recursive: true });
-    await spawnWait("msiexec.exe", ["/a", msi, "/qn", `TARGETDIR="${dir}"`]);
+    /**
+     * msiexec não usa as regras de aspas do CRT. Com `spawn` normal o Node escapava
+     * `TARGETDIR="C:\Users\Globalpac - Dev\…"` como `"TARGETDIR=\"…\""` e, com espaços no caminho
+     * do utilizador, o msiexec rejeitava os argumentos: o .msi ficava baixado e a pasta vazia —
+     * a cada tentativa a roda voltava a baixar 350 MB e nunca convertia. Linha de comando literal.
+     */
+    await spawnWait("msiexec.exe", ["/a", `"${msi}"`, "/qn", `TARGETDIR="${dir}"`], {
+      verbatim: true,
+      timeout: 10 * 60 * 1000,
+    });
     hoistNestedLibreOffice(dir);
+    if (!fs.existsSync(plannedSoffice())) throw new Error("Não consegui preparar o conversor de documentos");
     fs.rmSync(work, { recursive: true, force: true });
     if (!fs.existsSync(plannedSoffice())) throw new Error("Não consegui preparar o conversor de documentos");
   })().catch((err) => {
@@ -268,7 +353,7 @@ function hasWord() {
   return hasWord.cached;
 }
 
-function convertWithExcel(filePath, dest, to) {
+async function convertWithExcel(filePath, dest, to) {
   const format = EXCEL_FORMAT[to];
   const body = to === "pdf"
     ? `$excel = New-Object -ComObject Excel.Application
@@ -285,11 +370,8 @@ $wb = $excel.Workbooks.Open($env:VOR_SRC)
 $wb.SaveAs($env:VOR_DEST, ${format})
 $wb.Close($false)
 $excel.Quit()`;
-  execFileSync("powershell", ["-NoProfile", "-STA", "-Command", body], {
-    windowsHide: true,
-    stdio: "ignore",
+  await spawnWait("powershell", ["-NoProfile", "-STA", "-Command", body], {
     env: { ...process.env, VOR_SRC: filePath, VOR_DEST: dest },
-    timeout: 120000,
   });
   if (fs.existsSync(dest)) return dest;
   const asTxt = dest.replace(/\.[^.]+$/, ".txt");
@@ -317,10 +399,36 @@ async function installMagick(onStatus) {
   const archive = path.join(work, asset.name);
   await downloadFile(asset.browser_download_url, archive);
   if (onStatus) onStatus("Preparando o conversor de imagens…");
-  await spawnWait("tar", ["-xf", archive, "-C", root]);
+  await spawnWait("tar", ["-xf", archive, "-C", root], { timeout: 5 * 60 * 1000 });
   fs.rmSync(work, { recursive: true, force: true });
   forgetTools();
   if (!fs.existsSync(magickPath())) throw new Error("Não consegui preparar o conversor de imagens");
+}
+
+let ffmpegInstall = null;
+
+function installFfmpeg(onStatus) {
+  if (fs.existsSync(ffmpegPath())) return Promise.resolve();
+  if (ffmpegInstall) return ffmpegInstall;
+  ffmpegInstall = (async () => {
+    if (onStatus) onStatus("Baixando o conversor de áudio e vídeo…");
+    const root = path.join(dataRoot(), "FFmpeg");
+    const work = path.join(dataRoot(), ".ffmpeg-tmp");
+    fs.rmSync(work, { recursive: true, force: true });
+    fs.mkdirSync(work, { recursive: true });
+    fs.mkdirSync(root, { recursive: true });
+    const archive = path.join(work, "ffmpeg.zip");
+    await downloadFile("https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip", archive);
+    if (onStatus) onStatus("Preparando o conversor de áudio e vídeo…");
+    await spawnWait("tar", ["-xf", archive, "-C", root], { timeout: 5 * 60 * 1000 });
+    fs.rmSync(work, { recursive: true, force: true });
+    forgetTools();
+    if (!fs.existsSync(ffmpegPath())) throw new Error("Não consegui preparar o conversor de áudio e vídeo");
+  })().catch((err) => {
+    ffmpegInstall = null;
+    throw err;
+  });
+  return ffmpegInstall;
 }
 
 let pandocInstall = null;
@@ -344,7 +452,7 @@ async function installPandoc(onStatus) {
     const archive = path.join(work, asset.name);
     await downloadFile(asset.browser_download_url, archive);
     if (onStatus) onStatus("Preparando o conversor de texto…");
-    await spawnWait("tar", ["-xf", archive, "-C", root]);
+    await spawnWait("tar", ["-xf", archive, "-C", root], { timeout: 5 * 60 * 1000 });
     fs.rmSync(work, { recursive: true, force: true });
     forgetTools();
     if (!fs.existsSync(pandocPath())) throw new Error("Não consegui preparar o conversor de texto");
@@ -371,16 +479,25 @@ async function prepare(id, filePath, onStatus) {
     if (kindOf(from) === "image" && !nativeConvertible(from, to) && !fs.existsSync(magickPath())) {
       try {
         await installMagick(onStatus);
-      } catch {
-        throw new Error("Não consegui preparar o conversor de imagens");
+      } catch (err) {
+        throw new Error(`Não consegui preparar o conversor de imagens (${err.message})`);
       }
       forgetTools();
     }
     if (needsPandoc(id, filePath) && !fs.existsSync(pandocPath())) {
       try {
         await installPandoc(onStatus);
-      } catch {
-        throw new Error("Não consegui preparar o conversor de texto");
+      } catch (err) {
+        throw new Error(`Não consegui preparar o conversor de texto (${err.message})`);
+      }
+      forgetTools();
+    }
+    const media = kindOf(from);
+    if ((media === "audio" || media === "video" || media === "gif") && !fs.existsSync(ffmpegPath())) {
+      try {
+        await installFfmpeg(onStatus);
+      } catch (err) {
+        throw new Error(`Não consegui preparar o conversor de áudio e vídeo (${err.message})`);
       }
       forgetTools();
     }
@@ -390,7 +507,12 @@ async function prepare(id, filePath, onStatus) {
   if (kindOf(fmtOf(filePath)) === "sheet" && EXCEL_FORMAT[to] !== undefined && hasExcel()) return;
   const current = sofficePath();
   if (current && fs.existsSync(current)) return;
-  await installLibreOffice(onStatus);
+  try {
+    await installLibreOffice(onStatus);
+  } catch (err) {
+    throw new Error(`Não consegui preparar o conversor de documentos (${err.message})`);
+  }
+  forgetTools();
 }
 
 function fmtOf(file) {
@@ -495,19 +617,8 @@ function toolIds(kind, fmt) {
 }
 
 function toolGate(id, kind, t) {
-  if (id === "compress") {
-    if (kind === "image") return ok();
-    if (kind === "pdf") return need(t.gs, "ghostscript");
-    return need(t.ffmpeg, "ffmpeg");
-  }
-  if (id === "removeMetadata") {
-    if (kind === "image") return ok();
-    if (kind === "pdf") return no(SOON);
-    return need(t.ffmpeg, "ffmpeg");
-  }
-  if (["muteVideo", "changeVideoSpeed", "videoSnapshots", "splitVideo", "normalizeAudio", "audioToVideo", "audioChannels", "joinVideos"].includes(id)) {
-    return need(t.ffmpeg, "ffmpeg");
-  }
+  /** Só o que `run` implementa aparece disponível; o resto era anunciado e depois falhava. */
+  if (id === "compress") return kind === "image" ? ok() : no(SOON);
   if (id === "createPDF" || ["copy", "move", "copyPath", "openTerminal"].includes(id)) return ok();
   if (id === "extractArchive") return need(t.tar, "tar");
   return no(SOON);
@@ -561,24 +672,21 @@ function uniquePath(dir, stem, ext) {
 
 const PANDOC_WRITER = { txt: "plain", html: "html", docx: "docx", epub: "epub", pdf: "pdf", md: "markdown", odt: "odt", rtf: "rtf" };
 
-function convertWithPandoc(filePath, dest, to, pandoc) {
+async function convertWithPandoc(filePath, dest, to, pandoc) {
   const writer = PANDOC_WRITER[to];
   if (!writer) throw new Error("Esse formato ainda não sai deste arquivo");
   if (to === "pdf" && hasWord()) {
     const tmp = path.join(os.tmpdir(), `vor-${Date.now()}.docx`);
     try {
-      execFileSync(pandoc, [filePath, "-t", "docx", "-o", tmp], { windowsHide: true, stdio: "ignore", timeout: 120000 });
-      execFileSync("powershell", ["-NoProfile", "-STA", "-Command", `$word = New-Object -ComObject Word.Application
+      await spawnWait(pandoc, [filePath, "-t", "docx", "-o", tmp]);
+      await spawnWait("powershell", ["-NoProfile", "-STA", "-Command", `$word = New-Object -ComObject Word.Application
 $word.Visible = $false
 $word.DisplayAlerts = 0
 $doc = $word.Documents.Open($env:VOR_SRC)
 $doc.ExportAsFixedFormat($env:VOR_DEST, 17)
 $doc.Close($false)
 $word.Quit()`], {
-        windowsHide: true,
-        stdio: "ignore",
         env: { ...process.env, VOR_SRC: tmp, VOR_DEST: dest },
-        timeout: 120000,
       });
     } finally {
       fs.rmSync(tmp, { force: true });
@@ -587,16 +695,16 @@ $word.Quit()`], {
     return dest;
   }
   try {
-    execFileSync(pandoc, [filePath, "-t", writer, "-o", dest], { windowsHide: true, stdio: "ignore", timeout: 120000 });
-  } catch {
-    if (to === "pdf") throw new Error("Não consegui gerar o PDF");
-    throw new Error("A conversão não gerou o arquivo");
+    await spawnWait(pandoc, [filePath, "-t", writer, "-o", dest]);
+  } catch (err) {
+    if (to === "pdf") throw new Error(`Não consegui gerar o PDF (${err.message})`);
+    throw new Error(`A conversão não gerou o arquivo (${err.message})`);
   }
   if (!fs.existsSync(dest)) throw new Error("A conversão não gerou o arquivo");
   return dest;
 }
 
-function run(id, filePath) {
+async function run(id, filePath) {
   const built = build(filePath, id.startsWith("conv:") ? "convert" : id.startsWith("tool:") ? "tools" : "actions");
   const found = built.items.find((i) => i.id === id);
   if (found && !found.available) throw new Error(found.reason || "Indisponível");
@@ -609,45 +717,57 @@ function run(id, filePath) {
     const from = fmtOf(filePath);
     if (nativeConvertible(from, to)) {
       const fmt = { jpg: "Jpeg", png: "Png", bmp: "Bmp", gif: "Gif", tiff: "Tiff" }[to === "tif" ? "tiff" : to];
-      execFileSync("powershell", ["-NoProfile", "-Command", `
+      await spawnWait("powershell", ["-NoProfile", "-Command", `
         Add-Type -AssemblyName System.Drawing
-        $img = [System.Drawing.Image]::FromFile(${JSON.stringify(filePath)})
-        $img.Save(${JSON.stringify(dest)}, [System.Drawing.Imaging.ImageFormat]::${fmt})
+        $img = [System.Drawing.Image]::FromFile($env:VOR_SRC)
+        $img.Save($env:VOR_DEST, [System.Drawing.Imaging.ImageFormat]::${fmt})
         $img.Dispose()
-      `], { windowsHide: true, stdio: "ignore" });
+      `], { env: { ...process.env, VOR_SRC: filePath, VOR_DEST: dest } });
+      if (!fs.existsSync(dest)) throw new Error("A conversão não gerou o arquivo");
       return dest;
     }
     if (needsPandoc(id, filePath)) {
       if (!(t.pandoc && fs.existsSync(t.pandoc))) throw new Error("Não consegui preparar o conversor de texto");
       return convertWithPandoc(filePath, dest, to, t.pandoc);
     }
-    if (kindOf(from) === "image" && t.magick && fs.existsSync(t.magick)) {
-      execFileSync(t.magick, [filePath, dest], { windowsHide: true, stdio: "ignore" });
+    if (kindOf(from) === "image") {
+      if (!(t.magick && fs.existsSync(t.magick))) throw new Error("Conversor de imagens indisponível");
+      await spawnWait(t.magick, [filePath, dest]);
+      if (!fs.existsSync(dest)) throw new Error("A conversão não gerou o arquivo");
       return dest;
     }
-    if ((kindOf(from) === "audio" || kindOf(from) === "video" || kindOf(from) === "gif") && t.ffmpeg && ["mp3", "wav", "mp4", "gif", "webm", "mkv"].includes(to)) {
-      execFileSync(t.ffmpeg, ["-y", "-i", filePath, dest], { stdio: "ignore" });
+    if (kindOf(from) === "audio" || kindOf(from) === "video" || kindOf(from) === "gif") {
+      if (!(t.ffmpeg && fs.existsSync(t.ffmpeg))) throw new Error("Conversor de áudio e vídeo indisponível");
+      // -nostdin: sem isto o ffmpeg pode ficar à espera do terminal e nunca terminar.
+      await spawnWait(t.ffmpeg, ["-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-i", filePath, dest], {
+        timeout: 30 * 60 * 1000,
+      });
+      if (!fs.existsSync(dest)) throw new Error("A conversão não gerou o arquivo");
       return dest;
     }
     if (kindOf(from) === "sheet" && EXCEL_FORMAT[to] !== undefined && hasExcel()) {
       try {
-        return convertWithExcel(filePath, dest, to);
+        return await convertWithExcel(filePath, dest, to);
       } catch (err) {
         if (!(t.soffice && fs.existsSync(t.soffice))) throw err;
       }
     }
     if (t.soffice && fs.existsSync(t.soffice)) {
-      execFileSync(t.soffice, ["--headless", "--convert-to", to, "--outdir", dir, filePath], {
-        windowsHide: true,
-        stdio: "ignore",
-        timeout: 120000,
-      });
+      /**
+       * Perfil próprio: com o perfil padrão, um LibreOffice aberto (ou um lock órfão) faz o
+       * `--convert-to` sair sem fazer nada ou ficar pendurado.
+       */
+      const profile = require("url").pathToFileURL(path.join(dataRoot(), "soffice-profile")).href;
+      const args = ["--headless", "--norestore", `-env:UserInstallation=${profile}`];
+      if (from === "pdf") args.push("--infilter=writer_pdf_import");
+      args.push("--convert-to", to, "--outdir", dir, filePath);
+      await spawnWait(t.soffice, args, { timeout: 180000 });
       const produced = path.join(dir, `${stem}.${to}`);
       if (fs.existsSync(dest)) return dest;
       if (fs.existsSync(produced)) return produced;
       throw new Error("A conversão não gerou o arquivo");
     }
-    throw new Error("soon");
+    throw new Error("Essa conversão ainda não está disponível");
   }
   if (id === "act:copy" || id === "tool:copy") {
     const dest = uniquePath(dir, stem, path.extname(filePath).slice(1) || "bin");
@@ -668,18 +788,18 @@ function run(id, filePath) {
   }
   if (id === "tool:compress" && kindOf(fmtOf(filePath)) === "image") {
     const dest = uniquePath(dir, `${stem}-compressed`, "jpg");
-    execFileSync("powershell", ["-NoProfile", "-Command", `
+    await spawnWait("powershell", ["-NoProfile", "-Command", `
       Add-Type -AssemblyName System.Drawing
-      $img = [System.Drawing.Image]::FromFile(${JSON.stringify(filePath)})
-      $img.Save(${JSON.stringify(dest)}, [System.Drawing.Imaging.ImageFormat]::Jpeg)
+      $img = [System.Drawing.Image]::FromFile($env:VOR_SRC)
+      $img.Save($env:VOR_DEST, [System.Drawing.Imaging.ImageFormat]::Jpeg)
       $img.Dispose()
-    `], { stdio: "ignore" });
+    `], { env: { ...process.env, VOR_SRC: filePath, VOR_DEST: dest } });
     return dest;
   }
   if (id === "tool:extractArchive" && t.tar) {
     const destDir = uniquePath(dir, `${stem}-extract`, "dir").replace(/\.dir$/, "");
     fs.mkdirSync(destDir, { recursive: true });
-    execFileSync(t.tar, ["-xf", filePath, "-C", destDir], { stdio: "ignore" });
+    await spawnWait(t.tar, ["-xf", filePath, "-C", destDir], { timeout: 10 * 60 * 1000 });
     return destDir;
   }
   throw new Error(SOON);

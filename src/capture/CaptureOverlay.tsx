@@ -419,16 +419,43 @@ export const CaptureOverlay: React.FC = () => {
     };
   }, []);
 
+  /**
+   * O buffer do canvas só é (re)alocado quando o tamanho da sessão muda. Antes `canvas.width` era
+   * reatribuído em todo o redraw — e o redraw depende de `selection`, logo cada mousemove ao criar,
+   * mover ou redimensionar a seleção realocava e limpava um bitmap do tamanho do desktop: o "travado".
+   */
+  const canvasInkRef = useRef(false);
+  useLayoutEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas || !session) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = Math.round(session.width * dpr);
+    const h = Math.round(session.height * dpr);
+    if (canvas.width !== w) canvas.width = w;
+    if (canvas.height !== h) canvas.height = h;
+    canvasInkRef.current = true;
+  }, [session?.width, session?.height]);
+
   useEffect(() => {
     const canvas = canvasRef.current;
     const image = imageRef.current;
     const view = session ? { width: session.width, height: session.height } : null;
     if (!canvas || !image || !view) return;
+    const painted = marks.filter((_, index) => index !== textEditIndex);
+    const visible = draft ? [...painted, draft] : painted;
+    const showCursor = Boolean(session?.cursor && (!selection || inside(session.cursor, selection)));
+    /** Sem tinta para desenhar: não tocar no canvas (arrastar a seleção vazia fica só em CSS). */
+    if (!visible.length && !showCursor) {
+      if (!canvasInkRef.current) return;
+      canvasInkRef.current = false;
+      canvas.getContext('2d')?.clearRect(0, 0, canvas.width, canvas.height);
+      return;
+    }
+    canvasInkRef.current = true;
     const dpr = window.devicePixelRatio || 1;
-    canvas.width = Math.round(view.width * dpr);
-    canvas.height = Math.round(view.height * dpr);
     const g = canvas.getContext('2d');
     if (!g) return;
+    g.save();
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, view.width, view.height);
     if (selection && selection.width > 1 && selection.height > 1) {
@@ -436,10 +463,9 @@ export const CaptureOverlay: React.FC = () => {
       g.rect(selection.x, selection.y, selection.width, selection.height);
       g.clip();
     }
-    const painted = marks.filter((_, index) => index !== textEditIndex);
-    const visible = draft ? [...painted, draft] : painted;
     for (const mark of visible) paintMark(g, mark, image, view);
-    if (session?.cursor && (!selection || inside(session.cursor, selection))) drawCursor(g, session.cursor);
+    if (showCursor && session?.cursor) drawCursor(g, session.cursor);
+    g.restore();
   }, [marks, draft, session, imageEpoch, selection, textEditIndex]);
 
   const label = COPY[session?.language || 'pt'];
@@ -680,7 +706,33 @@ export const CaptureOverlay: React.FC = () => {
     dragRef.current = { kind: 'create', origin: point, current: point };
   };
 
+  /**
+   * pointermove chega a 125–1000 Hz com ratos de alta taxa; cada um fazia setState + render.
+   * Guardamos só o último ponto e processamos uma vez por frame (rAF).
+   */
+  const pendingMoveRef = useRef<{ clientX: number; clientY: number } | null>(null);
+  const moveFrameRef = useRef<number | null>(null);
+  const applyMoveRef = useRef<(event: { clientX: number; clientY: number }) => void>(() => {});
   const onPointerMove = (event: React.PointerEvent<HTMLDivElement>) => {
+    pendingMoveRef.current = { clientX: event.clientX, clientY: event.clientY };
+    if (moveFrameRef.current != null) return;
+    moveFrameRef.current = requestAnimationFrame(() => {
+      moveFrameRef.current = null;
+      const pending = pendingMoveRef.current;
+      pendingMoveRef.current = null;
+      if (pending) applyMoveRef.current(pending);
+    });
+  };
+  const flushPointerMove = () => {
+    if (moveFrameRef.current != null) {
+      cancelAnimationFrame(moveFrameRef.current);
+      moveFrameRef.current = null;
+    }
+    const pending = pendingMoveRef.current;
+    pendingMoveRef.current = null;
+    if (pending) applyMoveRef.current(pending);
+  };
+  applyMoveRef.current = (event: { clientX: number; clientY: number }) => {
     const drag = dragRef.current;
     const point = pointFrom(event);
     if (!selection) setTipAt(point);
@@ -760,6 +812,8 @@ export const CaptureOverlay: React.FC = () => {
   };
 
   const onPointerUp = () => {
+    // O último movimento ainda pode estar à espera do rAF: aplicá-lo antes de soltar.
+    flushPointerMove();
     const drag = dragRef.current;
     dragRef.current = null;
     setResizeHandle(null);
@@ -930,8 +984,9 @@ export const CaptureOverlay: React.FC = () => {
         <div
           className="cap-tip"
           style={{
-            left: Math.min(tipAt.x + 16, Math.max(8, bounds.width - 140)),
-            top: Math.min(tipAt.y + 20, Math.max(8, bounds.height - 28)),
+            left: 0,
+            top: 0,
+            transform: `translate3d(${Math.min(tipAt.x + 16, Math.max(8, bounds.width - 140))}px, ${Math.min(tipAt.y + 20, Math.max(8, bounds.height - 28))}px, 0)`,
           }}
         >
           {label.select}
@@ -939,7 +994,7 @@ export const CaptureOverlay: React.FC = () => {
       )}
       {selection && (
         <>
-          <div className="cap-sel" style={{ left: selection.x, top: selection.y, width: selection.width, height: selection.height }}>
+          <div className="cap-sel" style={{ left: 0, top: 0, transform: `translate3d(${selection.x}px, ${selection.y}px, 0)`, width: selection.width, height: selection.height }}>
             <span className={`cap-size${selection.y < 28 ? ' is-inside' : ''}`}>{Math.round(selection.width)} × {Math.round(selection.height)}</span>
           </div>
           {handles.map((handle) => {
