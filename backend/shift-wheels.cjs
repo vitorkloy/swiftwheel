@@ -708,7 +708,7 @@ function targets(kind, fmt) {
     audio: ["mp3", "m4a", "wav", "flac", "ogg", "opus", "aiff", "wma"],
     video: ["mp4", "mov", "mkv", "webm", "avi", "wmv", "gif", "mp3"],
     gif: ["mp4", "mov", "mkv", "webm", "avi", "wmv"],
-    pdf: ["docx", "pptx", "jpg", "png", "epub", "txt", "md", "html"],
+    pdf: ["docx", "pptx", "xlsx", "jpg", "png", "epub", "txt", "md", "html"],
     slides: ["pdf", "pptx", "jpg", "png"],
     sheet: ["xlsx", "ods", "csv", "tsv", "pdf"],
     doc: ["docx", "pdf", "txt", "md", "html", "epub", "png", "jpg"],
@@ -739,7 +739,8 @@ function toolsFor(id, filePath) {
     } else if (kind === "audio" || kind === "video" || kind === "gif") {
       need.add("ffmpeg");
     } else if (kind === "pdf") {
-      if (to === "docx" || to === "pptx") need.add("soffice");
+      if (to === "docx" || to === "pptx" || to === "xlsx") need.add("soffice");
+      if (to === "xlsx") need.add("mutool");
       else need.add("mutool");
       if (to === "epub" || to === "md") need.add("pandoc");
     } else if (kind === "doc" || kind === "txt" || kind === "slides" || kind === "sheet" || kind === "epub") {
@@ -1198,6 +1199,17 @@ async function convert(filePath, to) {
         throw new Error("Este PDF não tem texto (é só imagem). Use PNG/JPG ou DOCX/PPTX");
       }
       if (to === "txt") return finish(text);
+      if (to === "xlsx") {
+        // Tabelas do PDF: cada linha de texto vira uma linha; colunas separadas por 2+ espaços ou tab.
+        // Uma página por aba não é possível via CSV; as páginas ficam em sequência com uma linha vazia.
+        const rows = fs.readFileSync(text, "utf8").replace(/\f/g, "\n\n").split(/\r?\n/)
+          .map((line) => line.replace(/\s+$/, ""))
+          .map((line) => (line.trim() ? line.trim().split(/\t|\s{2,}/) : []));
+        const cell = (v) => (/[",\n;]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v);
+        const csv = path.join(tmp, `${stem}.csv`);
+        fs.writeFileSync(csv, "\ufeff" + rows.map((r) => r.map(cell).join(",")).join("\r\n"), "utf8");
+        return finish(await soffice(csv, "xlsx", tmp));
+      }
       const html = path.join(tmp, "doc.html");
       await mutoolRun(["convert", "-F", "html", "-o", html, filePath], { timeout: 300000 });
       exists(html);
