@@ -132,6 +132,9 @@ function installScreenshot(ctx) {
   let openedAt = 0;
   let shortcutsPaused = false;
   let busySince = 0;
+  let overlayActive = false;
+  let overlayHwnd = "";
+  let helperHideTimer = null;
   let helper = null;
   let helperUp = false;
   let helperRestarts = 0;
@@ -206,26 +209,42 @@ function installScreenshot(ctx) {
   };
 
   /**
-   * Esconde e reaproveita a janela em vez de a destruir: `close()` + criar outra fazia o DWM animar
-   * a saída e obrigava a recarregar o renderer. O renderer volta ao estado vazio (transparente) com
-   * a sessão `null` e a janela passa a ser a próxima warm shell.
+   * A janela do overlay nunca faz show/hide depois do arranque (#33): o Windows animava o show com
+   * zoom+fade (o "pulo"). Ociosa fica visível mas transparente, atravessável por cliques, sem foco,
+   * fora do Alt+Tab e sem alwaysOnTop (não atrapalha jogos em tela cheia). Na captura sobe ao topo.
    */
+  const parkWindow = (win) => {
+    if (!win || win.isDestroyed()) return;
+    try {
+      win.setIgnoreMouseEvents(true);
+      win.setAlwaysOnTop(false);
+      win.setFocusable(false);
+      win.webContents.send("screenshot-session", null);
+    } catch (e) { ctx.diagLog(`[Screenshot] park: ${e.message}`); }
+  };
+  const activateWindow = (win) => {
+    win.setFocusable(true);
+    win.setIgnoreMouseEvents(false);
+    win.setAlwaysOnTop(true, "screen-saver");
+    win.moveTop();
+    win.focus();
+  };
+
   const closeOverlay = () => {
     clearTimeout(revealTimer);
+    clearTimeout(helperHideTimer);
     helperSend("armed 0");
     helperSend("hide");
     pendingSession = null;
     revealOverlay = () => {};
+    overlayActive = false;
     const win = overlay;
     overlay = null;
     if (!win || win.isDestroyed()) {
       queueMicrotask(() => { void primeWarmShell(); });
       return;
     }
-    try {
-      win.hide();
-      win.webContents.send("screenshot-session", null);
-    } catch { /* ignore */ }
+    parkWindow(win);
     if (warmShell && warmShell !== win && !warmShell.isDestroyed()) {
       try { warmShell.close(); } catch { /* ignore */ }
     }
@@ -271,9 +290,6 @@ function installScreenshot(ctx) {
     const main = ctx.getMainWindow();
     if (main && !main.isDestroyed() && main.isVisible()) {
       try { main.hide(); } catch { /* ignore */ }
-    }
-    if (overlay && !overlay.isDestroyed() && overlay.isVisible()) {
-      try { overlay.hide(); } catch { /* ignore */ }
     }
   };
 
@@ -419,7 +435,6 @@ function installScreenshot(ctx) {
   };
 
   const attachShellLifecycle = (win) => {
-    win.setAlwaysOnTop(true, "screen-saver");
     win.removeMenu();
     win.on("closed", () => {
       if (overlay === win) overlay = null;
@@ -441,7 +456,7 @@ function installScreenshot(ctx) {
        * primeiro frame podia sair preto/cinza, o "piscar" ao ativar a captura.
        */
       transparent: true,
-      alwaysOnTop: true,
+      alwaysOnTop: false,
       skipTaskbar: true,
       resizable: false,
       movable: false,
@@ -451,7 +466,7 @@ function installScreenshot(ctx) {
       enableLargerThanScreen: true,
       autoHideMenuBar: true,
       backgroundColor: "#00000000",
-      focusable: true,
+      focusable: false,
       webPreferences: {
         preload: ctx.preloadPath,
         contextIsolation: true,
@@ -461,10 +476,23 @@ function installScreenshot(ctx) {
       },
     });
     attachShellLifecycle(win);
-    disableTransitions(win);
     if (ctx.isDev) await win.loadURL("http://localhost:5173/capture.html");
     else await win.loadFile(ctx.captureHtmlPath);
-    if (!win.isDestroyed()) win.setBounds(bounds);
+    if (!win.isDestroyed()) {
+      win.setBounds(bounds);
+      win.setIgnoreMouseEvents(true);
+      // Único show da vida da janela, ainda transparente (renderer sem sessão).
+      win.showInactive();
+      // Uma janela transparente mostrada depois de carregar escondida pode ficar com a superfície
+      // opaca (cinza) até o próximo paint: força um repaint transparente.
+      win.setBackgroundColor("#00000000");
+      win.webContents.invalidate();
+      setTimeout(() => { if (!win.isDestroyed()) win.webContents.invalidate(); }, 250);
+      const handle = win.getNativeWindowHandle();
+      const hwnd = handle.length >= 8 ? handle.readBigUInt64LE(0) : BigInt(handle.readUInt32LE(0));
+      overlayHwnd = hwnd.toString();
+      helperSend(`toolwindow ${overlayHwnd}`);
+    }
     return win;
   };
 
@@ -487,6 +515,15 @@ function installScreenshot(ctx) {
   };
 
   const takeOverlayShell = async (bounds) => {
+    // Reaproveita sempre a mesma janela: criar outra mostrava uma janela nova (com a animação do
+    // Windows) — era o que ainda fazia o pulo quando se carregava no atalho com a captura aberta.
+    if (overlay && !overlay.isDestroyed()) {
+      if (warmShell && warmShell !== overlay && !warmShell.isDestroyed()) {
+        try { warmShell.close(); } catch { /* ignore */ }
+      }
+      warmShell = null;
+      return overlay;
+    }
     const warm = warmShell && !warmShell.isDestroyed() ? warmShell : null;
     warmShell = null;
     if (warm) {
@@ -518,20 +555,28 @@ function installScreenshot(ctx) {
       revealed = true;
       clearTimeout(revealTimer);
       ctx.diagLog(`[Screenshot] grab ${grabMs} ms, revelada ${Date.now() - openedAt} ms depois`);
-      win.setBounds(bounds);
-      win.showInactive();
-      win.focus();
+      const b = win.getBounds();
+      if (b.x !== bounds.x || b.y !== bounds.y || b.width !== bounds.width || b.height !== bounds.height) win.setBounds(bounds);
+      overlayActive = true;
+      activateWindow(win);
       win.webContents.send("screenshot-visible");
       ctx.setGrabbing(false);
-      // O congelado nativo fica por baixo até o Electron já ter pintado o mesmo frame por cima.
-      setTimeout(() => helperSend("hide"), 120);
+      // O congelado nativo fica por baixo até o renderer confirmar que pintou ("painted").
+      clearTimeout(helperHideTimer);
+      helperHideTimer = setTimeout(() => {
+        ctx.diagLog("[Screenshot] painted não chegou em 800 ms, a esconder o congelado");
+        helperSend("hide");
+      }, 800);
     };
     revealOverlay = reveal;
     pendingSession = session;
     win.webContents.send("screenshot-session", session);
-    // Fallback se o frame não disparar "ready". A janela é transparente, logo revelar cedo não pisca.
+    // Fallback se o frame não disparar "ready". O congelado nativo continua por cima, logo não pisca.
     clearTimeout(revealTimer);
-    revealTimer = setTimeout(reveal, 700);
+    revealTimer = setTimeout(() => {
+      ctx.diagLog("[Screenshot] ready não chegou em 700 ms (fallback)");
+      reveal();
+    }, 700);
   };
 
   const capture = async (mode) => {
@@ -544,8 +589,8 @@ function installScreenshot(ctx) {
     if (busy) return;
     if (overlay && !overlay.isDestroyed()) {
       // Overlay visível = sessão ativa. Escondido/preso (ready nunca chegou) = recupera em vez de ignorar.
-      if (overlay.isVisible()) return;
-      ctx.diagLog("[Screenshot] overlay preso escondido, a recuperar");
+      if (overlayActive) return;
+      ctx.diagLog("[Screenshot] overlay preso sem sessão ativa, a recuperar");
       closeOverlay();
     }
     if (helperReady()) {
@@ -629,6 +674,12 @@ function installScreenshot(ctx) {
   const onHelperShot = async (parts) => {
     // shot <mode> <x> <y> <w> <h> <grabMs> <shownMs> <file...>
     const mode = parts[1];
+    if (overlayActive) {
+      // Atalho de novo com a captura já aberta: ignora, mantém a sessão atual.
+      ctx.diagLog("[Screenshot] atalho com captura aberta, ignorado");
+      helperSend("hide");
+      return;
+    }
     grabMs = Number(parts[6]) || 0;
     const file = parts.slice(8).join(" ");
     openedAt = Date.now();
@@ -689,7 +740,10 @@ function installScreenshot(ctx) {
         const parts = line.split(" ");
         if (parts[0] === "ready") {
           helperUp = true;
-          if (helperBindSpec) helperSend(`bind ${helperBindSpec}`);
+          if (helperBindSpec) helperSend(`bind ${shortcutsPaused ? "" : helperBindSpec}`);
+          if (overlayHwnd) helperSend(`toolwindow ${overlayHwnd}`);
+        } else if (parts[0] === "status") {
+          onHelperStatus(line);
         } else if (parts[0] === "shot") void onHelperShot(parts);
         else if (parts[0] === "full") {
           busy = false;
@@ -717,6 +771,58 @@ function installScreenshot(ctx) {
     child.on("error", (e) => onGone(e.message));
     child.stdin.on("error", () => {});
     return true;
+  };
+
+  /**
+   * Saúde do atalho (#33): a cada 30 s o helper reporta hook, nº de bindings e última tecla. Se os
+   * bindings sumiram sem pausa, re-sincroniza; se o helper não responde, é reiniciado.
+   */
+  let statusPending = 0;
+  const expectedBindings = () => (helperBindSpec ? helperBindSpec.split(";").filter(Boolean).length : 0);
+  const onHelperStatus = (line) => {
+    statusPending = 0;
+    const get = (key) => Number((new RegExp(`${key}=(-?\\d+)`).exec(line) || [])[1]);
+    const want = shortcutsPaused ? 0 : expectedBindings();
+    if (get("hook") !== 1) ctx.diagLog(`[Screenshot] helper sem hook: ${line}`);
+    if (get("bindings") !== want) {
+      ctx.diagLog(`[Screenshot] bindings ${get("bindings")} ≠ ${want}, a re-sincronizar`);
+      helperSend(`bind ${shortcutsPaused ? "" : helperBindSpec}`);
+    }
+  };
+  const statusTimer = setInterval(() => {
+    if (!helperReady()) return;
+    if (statusPending && Date.now() - statusPending > 5000) {
+      ctx.diagLog("[Screenshot] helper não respondeu ao status, a reiniciar");
+      statusPending = 0;
+      try { helper.kill(); } catch { /* ignore */ }
+      return;
+    }
+    statusPending = Date.now();
+    helperSend("status");
+  }, 30000);
+  if (statusTimer.unref) statusTimer.unref();
+
+  let pauseTimer = null;
+  const setPaused = (value, why) => {
+    const next = !!value;
+    clearTimeout(pauseTimer);
+    if (next) {
+      // Nunca fica pausado para sempre: se o resume se perder, volta sozinho em 15 s.
+      pauseTimer = setTimeout(() => setPaused(false, "timeout 15 s"), 15000);
+    }
+    if (shortcutsPaused === next) return;
+    shortcutsPaused = next;
+    ctx.diagLog(`[Screenshot] atalhos ${next ? "pausados" : "retomados"} (${why})`);
+    helperSend(`bind ${next ? "" : helperBindSpec}`);
+  };
+
+  const restartShortcut = () => {
+    ctx.diagLog("[Screenshot] reiniciar atalho de captura (manual)");
+    setPaused(false, "manual");
+    busy = false;
+    if (overlay && !overlay.isDestroyed() && !overlayActive) closeOverlay();
+    helperRestarts = 0;
+    if (helper) { try { helper.kill(); } catch { /* ignore */ } } else startHelper();
   };
 
   /** Mesma ordem de modificadores que o helper monta: ctrl, alt, shift, super, tecla. */
@@ -804,6 +910,12 @@ function installScreenshot(ctx) {
         revealOverlay();
         return { ok: true };
       }
+      if (action === "painted") {
+        clearTimeout(helperHideTimer);
+        ctx.diagLog(`[Screenshot] pintado ${Date.now() - openedAt} ms após o frame`);
+        helperSend("hide");
+        return { ok: true };
+      }
       if (action === "cancel") {
         closeOverlay();
         return { ok: true };
@@ -864,12 +976,9 @@ function installScreenshot(ctx) {
     capture,
     registerShortcuts,
     normalizeAccelerator,
-    setShortcutsPaused: (value) => {
-      shortcutsPaused = !!value;
-      // Enquanto o utilizador grava um atalho nas definições, o helper não pode engolir a tecla.
-      if (shortcutsPaused) helperSend("bind ");
-      else if (helperBindSpec) helperSend(`bind ${helperBindSpec}`);
-    },
+    // Enquanto o utilizador grava um atalho nas definições, o helper não pode engolir a tecla.
+    setShortcutsPaused: (value, why = "ipc") => setPaused(value, why),
+    restartShortcut,
     dispose: () => { helperSend("quit"); },
   };
 }

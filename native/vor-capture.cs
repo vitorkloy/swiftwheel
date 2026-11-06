@@ -42,6 +42,8 @@ static class VorCapture
     [DllImport("gdi32.dll")] static extern IntPtr SelectObject(IntPtr dc, IntPtr o);
     [DllImport("gdi32.dll")] static extern bool DeleteObject(IntPtr o);
     [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr dc);
+    [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] static extern IntPtr GetWindowLongPtr(IntPtr h, int i);
+    [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")] static extern IntPtr SetWindowLongPtr(IntPtr h, int i, IntPtr v);
     [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int a, ref int v, int s);
 
     [StructLayout(LayoutKind.Sequential)] struct MSG { public IntPtr h; public uint msg; public IntPtr w; public IntPtr l; public uint t; public int x; public int y; }
@@ -62,6 +64,8 @@ static class VorCapture
     static FreezeForm form;
     static int seq;
     static int shiftAt;
+    static int lastKeyAt;
+    static TestHook testHook;
 
     [STAThread]
     static void Main()
@@ -74,6 +78,7 @@ static class VorCapture
         var h = form.Handle; // cria o HWND agora (escondido)
         int one = 1; DwmSetWindowAttribute(h, 3, ref one, 4); // DWMWA_TRANSITIONS_FORCEDISABLED
 
+        testHook = new TestHook();
         var t = new Thread(HookLoop) { IsBackground = true, Name = "hook" };
         t.Start();
         var r = new Thread(ReadLoop) { IsBackground = true, Name = "stdin" };
@@ -96,6 +101,17 @@ static class VorCapture
                 else if (cmd == "armed") armed = arg == "1";
                 else if (cmd == "grab") { string m = arg; form.BeginInvoke((Action)(() => Grab(m))); }
                 else if (cmd == "hide") form.BeginInvoke((Action)HideFreeze);
+                else if (cmd == "status")
+                    Emit("status hook=" + (hook != IntPtr.Zero ? 1 : 0) + " bindings=" + bindings.Count + " lastkey=" + (lastKeyAt == 0 ? -1 : Environment.TickCount - lastKeyAt) + " armed=" + (armed ? 1 : 0));
+                else if (cmd == "toolwindow")
+                {
+                    // Overlay do Electron fora do Alt+Tab: WS_EX_TOOLWINDOW, sem WS_EX_APPWINDOW.
+                    IntPtr h = new IntPtr(long.Parse(arg));
+                    long ex = GetWindowLongPtr(h, -20).ToInt64();
+                    ex = (ex | 0x80) & ~0x40000L;
+                    SetWindowLongPtr(h, -20, new IntPtr(ex));
+                    Emit("log toolwindow " + arg);
+                }
                 else if (cmd == "quit") break;
             }
         }
@@ -159,6 +175,7 @@ static class VorCapture
             bool isDown = msg == 0x100 || msg == 0x104;
             bool isUp = msg == 0x101 || msg == 0x105;
             if (k.vk == 0x10 || k.vk == 0xA0 || k.vk == 0xA1) { if (isDown) { if (shiftAt == 0) shiftAt = Environment.TickCount; } else if (isUp) shiftAt = 0; }
+            lastKeyAt = Environment.TickCount;
             if (isUp && swallowUp.Remove(k.vk)) return new IntPtr(1);
             if (isDown)
             {
@@ -242,6 +259,19 @@ static class VorCapture
     {
         ShowWindow(form.Handle, 0);
         ReleaseFrame();
+    }
+
+    /// Gancho de teste: janela oculta "VorCaptureTestHook". WM_APP+1 abre a captura de região e
+    /// WM_APP+2 equivale ao Esc — permite testar sem SendInput.
+    class TestHook : NativeWindow
+    {
+        public TestHook() { CreateHandle(new CreateParams { Caption = "VorCaptureTestHook" }); }
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == 0x8001) { form.BeginInvoke((Action)(() => Grab("region"))); return; }
+            if (m.Msg == 0x8002) { Emit("esc"); return; }
+            base.WndProc(ref m);
+        }
     }
 
     class FreezeForm : Form

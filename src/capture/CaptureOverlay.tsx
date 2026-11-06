@@ -429,7 +429,13 @@ export const CaptureOverlay: React.FC = () => {
     const stopVisible = window.electron.onScreenshotVisible?.(() => {
       // Dois frames: garante que o freeze já pintou antes do esmaecer começar.
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => setDimIn(true));
+        requestAnimationFrame(() => {
+          setDimIn(true);
+          // Frame já composto na janela visível: o main pode esconder o congelado nativo (#33).
+          requestAnimationFrame(() => {
+            void window.electron?.screenshotAction?.({ action: 'painted' });
+          });
+        });
       });
     });
     void window.electron.getScreenshotSession?.().then((pending) => {
