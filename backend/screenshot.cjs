@@ -225,9 +225,17 @@ function installScreenshot(ctx) {
   const activateWindow = (win) => {
     win.setFocusable(true);
     win.setIgnoreMouseEvents(false);
+    // focus() antes do topmost: ao trocar o foreground o shell reergue a Shell_TrayWnd
+    // (também topmost) por cima; por isso o topmost vem depois e é reafirmado.
+    win.focus();
     win.setAlwaysOnTop(true, "screen-saver");
     win.moveTop();
-    win.focus();
+    const reassert = () => {
+      if (!overlayActive || overlay !== win || win.isDestroyed()) return;
+      try { win.moveTop(); } catch { /* ignore */ }
+      if (overlayHwnd) helperSend(`top ${overlayHwnd}`);
+    };
+    for (const ms of [30, 150, 400]) setTimeout(reassert, ms);
   };
 
   const closeOverlay = () => {
@@ -784,6 +792,10 @@ function installScreenshot(ctx) {
     const get = (key) => Number((new RegExp(`${key}=(-?\\d+)`).exec(line) || [])[1]);
     const want = shortcutsPaused ? 0 : expectedBindings();
     if (get("hook") !== 1) ctx.diagLog(`[Screenshot] helper sem hook: ${line}`);
+    if (get("armed") === 1 && !overlayActive && !busy) {
+      ctx.diagLog("[Screenshot] helper armado sem captura aberta, a desarmar");
+      helperSend("armed 0");
+    }
     if (get("bindings") !== want) {
       ctx.diagLog(`[Screenshot] bindings ${get("bindings")} ≠ ${want}, a re-sincronizar`);
       helperSend(`bind ${shortcutsPaused ? "" : helperBindSpec}`);

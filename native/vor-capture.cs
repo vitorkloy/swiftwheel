@@ -112,6 +112,12 @@ static class VorCapture
                     SetWindowLongPtr(h, -20, new IntPtr(ex));
                     Emit("log toolwindow " + arg);
                 }
+                else if (cmd == "top")
+                {
+                    // Reafirma o overlay acima da barra de tarefas (o shell a reergue ao trocar o foreground).
+                    IntPtr h = new IntPtr(long.Parse(arg));
+                    SetWindowPos(h, new IntPtr(-1), 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010);
+                }
                 else if (cmd == "quit") break;
             }
         }
@@ -211,6 +217,8 @@ static class VorCapture
     // ---- captura ----
     static void Grab(string mode)
     {
+        // Captura já aberta: novo atalho é no-op (sem novo freeze por cima do overlay = sem piscar).
+        if (armed) { Emit("log grab-ignorado armed"); return; }
         var sw = Stopwatch.StartNew();
         try
         {
@@ -241,6 +249,7 @@ static class VorCapture
             string file = Path.Combine(dir, "frame-" + (seq % 2) + ".bmp");
             bmp.Save(file, ImageFormat.Bmp);
             bmp.Dispose();
+            armed = true; // fecha a janela até o Node mandar "armed 1"; o close manda "armed 0"
             Emit("shot " + mode + " " + x + " " + y + " " + w + " " + h + " " + grabMs + " " + shownMs + " " + file);
         }
         catch (Exception e) { Emit("log grab-error " + e.Message.Replace('\n', ' ')); HideFreeze(); }
