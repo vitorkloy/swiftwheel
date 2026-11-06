@@ -55,6 +55,7 @@ const isDev = !app.isPackaged;
 /** Enquanto o frame está a ser lido, show/resize do painel não pode voltar a pintar o VOR na foto. */
 let screenshotGrabbing = false;
 let startScreenshot = async () => {};
+let restartCaptureShortcut = () => {};
 
 /**
  * Canal de distribuição. A Microsoft Store proíbe mecanismos próprios de atualização — quem
@@ -3872,6 +3873,10 @@ app.whenReady().then(async () => {
             }
           },
         },
+        {
+          label: pt ? "Reiniciar atalho de captura" : "Restart capture shortcut",
+          click: () => restartCaptureShortcut(),
+        },
         { label: `v${app.getVersion()}`, enabled: false },
         { label: pt ? "Sair" : "Quit", click: () => app.quit() },
       ]));
@@ -4656,6 +4661,10 @@ app.whenReady().then(async () => {
     },
   });
   startScreenshot = shotApi.capture;
+  restartCaptureShortcut = () => {
+    shotApi.restartShortcut();
+    registerGlobalShortcut(true);
+  };
 
   const registerGlobalShortcut = (force = false) => {
     const registrationSignature = shortcutRegistrationSignature();
@@ -4978,14 +4987,27 @@ app.whenReady().then(async () => {
     console.log("[Shortcuts] Pausing global shortcuts for recording...");
     lastShortcutRegistrationSignature = null;
     globalShortcut.unregisterAll();
-    shotApi.setShortcutsPaused(true);
+    shotApi.setShortcutsPaused(true, "gravar atalho");
   });
 
   ipcMain.on("resume-global-shortcut", () => {
     console.log("[Shortcuts] Resuming global shortcuts...");
-    shotApi.setShortcutsPaused(false);
+    shotApi.setShortcutsPaused(false, "fim da gravação");
     registerGlobalShortcut();
     // (though recording is usually done in settings where menu is not 'open-radial' but 'open-settings')
+  });
+
+  // Se as Configurações perderem o foco / fecharem a meio da gravação, o resume nunca chegava.
+  const resumeIfPaused = (why) => {
+    if (lastShortcutRegistrationSignature !== null) return;
+    shotApi.setShortcutsPaused(false, why);
+    registerGlobalShortcut();
+  };
+  app.on("browser-window-blur", (_event, win) => {
+    if (win === mainWindow) resumeIfPaused("Configurações sem foco");
+  });
+  app.on("browser-window-created", (_event, win) => {
+    win.on("hide", () => { if (win === mainWindow) resumeIfPaused("Configurações escondidas"); });
   });
 
   ipcMain.on("start-shortcut-recording", () => {

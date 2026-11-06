@@ -430,7 +430,7 @@ export interface ElectronAPI {
   ) => () => void;
   onScreenshotVisible?: (callback: () => void) => () => void;
   screenshotAction?: (payload: {
-    action: "copy" | "save" | "pin" | "wheel" | "cancel" | "remember" | "ready";
+    action: "copy" | "save" | "pin" | "wheel" | "cancel" | "remember" | "ready" | "painted";
     dataUrl?: string;
     pngDataUrl?: string;
     width?: number;

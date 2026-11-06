@@ -332,7 +332,6 @@ export const CaptureOverlay: React.FC = () => {
   const [color, setColor] = useState(COLORS[2]);
   const [size, setSize] = useState(4);
   const [marks, setMarks] = useState<Mark[]>([]);
-  const [draft, setDraft] = useState<Mark | null>(null);
   const [textAt, setTextAt] = useState<Point | null>(null);
   const [textValue, setTextValue] = useState('');
   const [textSize, setTextSize] = useState(4);
@@ -360,6 +359,7 @@ export const CaptureOverlay: React.FC = () => {
   const frameKeyRef = useRef('');
   const imageRef = useRef<HTMLImageElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const draftCanvasRef = useRef<HTMLCanvasElement>(null);
   const veilRef = useRef<HTMLDivElement>(null);
   const stageRef = useRef<HTMLDivElement>(null);
   const barRef = useRef<HTMLDivElement>(null);
@@ -384,6 +384,10 @@ export const CaptureOverlay: React.FC = () => {
 
   useEffect(() => {
     const apply = (next: Session | null) => {
+      if (moveFrameRef.current != null) cancelAnimationFrame(moveFrameRef.current);
+      moveFrameRef.current = null;
+      pendingMoveRef.current = null;
+      dragRef.current = null;
       closingRef.current = false;
       setClosing(false);
       setTextAt(null);
@@ -401,7 +405,7 @@ export const CaptureOverlay: React.FC = () => {
         setSelection(null);
         setCommitted(false);
         setMarks([]);
-        setDraft(null);
+        draftRef.current = null;
         setTipAt(null);
         return;
       }
@@ -418,7 +422,7 @@ export const CaptureOverlay: React.FC = () => {
       setSelection(preset);
       setCommitted(Boolean(preset));
       setMarks([]);
-      setDraft(null);
+      draftRef.current = null;
       setTipAt(preset ? null : (next.hintAt || next.cursor || null));
     };
     if (!window.electron?.onScreenshotSession) {
@@ -429,7 +433,13 @@ export const CaptureOverlay: React.FC = () => {
     const stopVisible = window.electron.onScreenshotVisible?.(() => {
       // Dois frames: garante que o freeze já pintou antes do esmaecer começar.
       requestAnimationFrame(() => {
-        requestAnimationFrame(() => setDimIn(true));
+        requestAnimationFrame(() => {
+          setDimIn(true);
+          // Frame já composto na janela visível: o main pode esconder o congelado nativo (#33).
+          requestAnimationFrame(() => {
+            void window.electron?.screenshotAction?.({ action: 'painted' });
+          });
+        });
       });
     });
     void window.electron.getScreenshotSession?.().then((pending) => {
@@ -438,6 +448,7 @@ export const CaptureOverlay: React.FC = () => {
     return () => {
       stop();
       stopVisible?.();
+      if (moveFrameRef.current != null) cancelAnimationFrame(moveFrameRef.current);
     };
   }, []);
 
@@ -448,24 +459,27 @@ export const CaptureOverlay: React.FC = () => {
    */
   const canvasInkRef = useRef(false);
   useLayoutEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas || !session) return;
+    const canvases = [canvasRef.current, draftCanvasRef.current];
+    if (!session) return;
     const dpr = window.devicePixelRatio || 1;
     const w = Math.round(session.width * dpr);
     const h = Math.round(session.height * dpr);
-    if (canvas.width !== w) canvas.width = w;
-    if (canvas.height !== h) canvas.height = h;
+    for (const canvas of canvases) {
+      if (!canvas) continue;
+      if (canvas.width !== w) canvas.width = w;
+      if (canvas.height !== h) canvas.height = h;
+    }
     canvasInkRef.current = true;
   }, [session?.width, session?.height]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     const canvas = canvasRef.current;
     const image = imageRef.current;
     const view = session ? { width: session.width, height: session.height } : null;
     if (!canvas || !image || !view) return;
     const painted = marks.filter((_, index) => index !== textEditIndex);
-    const visible = draft ? [...painted, draft] : painted;
-    const showCursor = Boolean(session?.cursor && (!selection || inside(session.cursor, selection)));
+    const visible = painted;
+    const showCursor = Boolean(session?.cursor);
     /** Sem tinta para desenhar: não tocar no canvas (arrastar a seleção vazia fica só em CSS). */
     if (!visible.length && !showCursor) {
       if (!canvasInkRef.current) return;
@@ -480,15 +494,37 @@ export const CaptureOverlay: React.FC = () => {
     g.save();
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, view.width, view.height);
-    if (selection && selection.width > 1 && selection.height > 1) {
-      g.beginPath();
-      g.rect(selection.x, selection.y, selection.width, selection.height);
-      g.clip();
-    }
     for (const mark of visible) paintMark(g, mark, image, view);
     if (showCursor && session?.cursor) drawCursor(g, session.cursor);
     g.restore();
-  }, [marks, draft, session, imageEpoch, selection, textEditIndex]);
+  }, [marks, session, imageEpoch, textEditIndex]);
+
+  const draftDirtyRef = useRef<Rect | null>(null);
+  const paintDraft = (mark: Mark | null) => {
+    const canvas = draftCanvasRef.current;
+    const g = canvas?.getContext('2d');
+    if (!canvas || !g || !session) return;
+    const dpr = window.devicePixelRatio || 1;
+    const dirty = draftDirtyRef.current;
+    if (dirty) g.clearRect(dirty.x * dpr, dirty.y * dpr, dirty.width * dpr, dirty.height * dpr);
+    draftDirtyRef.current = null;
+    if (!mark) return;
+    let left: number, top: number, right: number, bottom: number;
+    if (mark.tool === 'pen' || mark.tool === 'highlight') {
+      left = right = mark.points[0]?.x || 0; top = bottom = mark.points[0]?.y || 0;
+      for (const p of mark.points) { left = Math.min(left, p.x); right = Math.max(right, p.x); top = Math.min(top, p.y); bottom = Math.max(bottom, p.y); }
+    } else if ('a' in mark) {
+      left = Math.min(mark.a.x, mark.b.x); right = Math.max(mark.a.x, mark.b.x);
+      top = Math.min(mark.a.y, mark.b.y); bottom = Math.max(mark.a.y, mark.b.y);
+    } else return;
+    const pad = Math.max(24, mark.size * 6);
+    draftDirtyRef.current = { x: Math.floor(left - pad), y: Math.floor(top - pad), width: Math.ceil(right - left + pad * 2), height: Math.ceil(bottom - top + pad * 2) };
+    g.save(); g.scale(dpr, dpr);
+    paintMark(g, mark, imageRef.current, session);
+    g.restore();
+  };
+  // Commit and clear the transient layer in the same paint (no double-opacity highlighter).
+  useLayoutEffect(() => { paintDraft(null); }, [marks, session]);
 
   const label = COPY[session?.language || 'pt'];
   const bounds = { width: session?.width || 0, height: session?.height || 0 };
@@ -511,7 +547,41 @@ export const CaptureOverlay: React.FC = () => {
   };
 
   const selectionRef = useRef<Rect | null>(null);
-  selectionRef.current = selection;
+  if (!dragRef.current) selectionRef.current = selection;
+
+  const paintSelection = (rect: Rect) => {
+    selectionRef.current = rect;
+    const stage = stageRef.current;
+    if (!stage) return;
+    const box = stage.querySelector<HTMLElement>('.cap-sel');
+    if (box) { box.style.transform = `translate3d(${rect.x}px, ${rect.y}px, 0)`; box.style.width = `${rect.width}px`; box.style.height = `${rect.height}px`; }
+    const edgeTransforms = [`scaleX(${rect.width})`, `translateY(${rect.height}px) scaleX(${rect.width})`, `scaleY(${rect.height})`, `translateX(${rect.width}px) scaleY(${rect.height})`];
+    stage.querySelectorAll<HTMLElement>('.cap-edge').forEach((edge, i) => { edge.style.transform = edgeTransforms[i]; });
+    const label = stage.querySelector<HTMLElement>('.cap-size');
+    if (label) { label.textContent = `${Math.round(rect.width)} × ${Math.round(rect.height)}`; label.classList.toggle('is-inside', rect.y < 28); }
+    const dims = [
+      [0, 0, bounds.width, rect.y],
+      [0, rect.y + rect.height, bounds.width, bounds.height - rect.y - rect.height],
+      [0, rect.y, rect.x, rect.height],
+      [rect.x + rect.width, rect.y, bounds.width - rect.x - rect.width, rect.height],
+    ];
+    stage.querySelectorAll<HTMLElement>('.cap-dim').forEach((dim, i) => {
+      const d = dims[i]; if (d) dim.style.transform = `translate(${d[0]}px, ${d[1]}px) scale(${d[2]}, ${d[3]})`;
+    });
+    const positions = [[0,0],[.5,0],[1,0],[1,.5],[1,1],[.5,1],[0,1],[0,.5]];
+    stage.querySelectorAll<HTMLElement>('.cap-handle').forEach((handle, i) => { handle.style.left = `${rect.x + positions[i][0] * rect.width}px`; handle.style.top = `${rect.y + positions[i][1] * rect.height}px`; });
+    const clip = `inset(${rect.y}px ${Math.max(0, bounds.width - rect.x - rect.width)}px ${Math.max(0, bounds.height - rect.y - rect.height)}px ${rect.x}px)`;
+    for (const canvas of [canvasRef.current, draftCanvasRef.current]) if (canvas) canvas.style.clipPath = clip;
+    const bar = barRef.current;
+    if (bar) {
+      let left = rect.x + rect.width - barBox.width;
+      let top = rect.y + rect.height + 8;
+      if (left < 8) left = Math.max(8, rect.x);
+      if (left + barBox.width > bounds.width - 8) left = Math.max(8, bounds.width - barBox.width - 8);
+      if (top + barBox.height > bounds.height - 8) top = rect.y - barBox.height - 8;
+      bar.style.left = `${left}px`; bar.style.top = `${Math.max(8, top)}px`;
+    }
+  };
 
   const remember = (rect: Rect | null) => {
     if (!session || session.demo || !rect) return;
@@ -650,7 +720,6 @@ export const CaptureOverlay: React.FC = () => {
   }, [marks, size]);
 
   const undo = useCallback(() => {
-    setDraft(null);
     draftRef.current = null;
     setMarks((current) => current.slice(0, -1));
   }, []);
@@ -735,8 +804,9 @@ export const CaptureOverlay: React.FC = () => {
       return;
     }
     setCommitted(false);
+    setSelection(normalize(point, point, bounds));
+    setTipAt(null);
     setMarks([]);
-    setDraft(null);
     draftRef.current = null;
     clearTextDraft();
     setTool('select');
@@ -772,9 +842,9 @@ export const CaptureOverlay: React.FC = () => {
   applyMoveRef.current = (event: { clientX: number; clientY: number }) => {
     const drag = dragRef.current;
     const point = pointFrom(event);
-    if (!selection) setTipAt(point);
-    else setTipAt((current) => (current ? null : current));
     if (!drag) {
+      if (!selection) setTipAt(point);
+      else if (tipAt) setTipAt(null);
       if (hoverHandle) {
         setHoverMove(false);
         setHoverText(false);
@@ -802,18 +872,15 @@ export const CaptureOverlay: React.FC = () => {
     if (drag.kind === 'create') {
       drag.current = point;
       const next = normalize(drag.origin, point, bounds);
-      selectionRef.current = next;
-      setSelection(next);
+      paintSelection(next);
     } else if (drag.kind === 'move') {
       const dx = point.x - drag.origin.x;
       const dy = point.y - drag.origin.y;
       const next = clampRect({ ...drag.rect, x: drag.rect.x + dx, y: drag.rect.y + dy }, bounds);
-      selectionRef.current = next;
-      setSelection(next);
+      paintSelection(next);
     } else if (drag.kind === 'resize') {
       const next = resizeRect(drag.rect, drag.handle, point, bounds);
-      selectionRef.current = next;
-      setSelection(next);
+      paintSelection(next);
     } else if (drag.kind === 'move-text') {
       const dx = point.x - drag.origin.x;
       const dy = point.y - drag.origin.y;
@@ -839,11 +906,11 @@ export const CaptureOverlay: React.FC = () => {
           : [drag.origin, point];
         const next: Mark = { tool: tool === 'highlight' ? 'highlight' : 'pen', color, size, points };
         draftRef.current = next;
-        setDraft(next);
+        paintDraft(next);
       } else if (tool === 'arrow' || tool === 'rect' || tool === 'ellipse' || tool === 'line' || tool === 'blur') {
         const next: Mark = { tool, color, size, a: drag.origin, b: point };
         draftRef.current = next;
-        setDraft(next);
+        paintDraft(next);
       }
     }
   };
@@ -886,6 +953,7 @@ export const CaptureOverlay: React.FC = () => {
       return;
     }
     if (drag.kind === 'move' || drag.kind === 'resize') {
+      setSelection(selectionRef.current);
       remember(selectionRef.current);
       return;
     }
@@ -906,7 +974,6 @@ export const CaptureOverlay: React.FC = () => {
     if (drawn && (drawn.tool !== 'pen' && drawn.tool !== 'highlight' || drawn.points.length > 1)) {
       setMarks((current) => [...current, drawn]);
     }
-    setDraft(null);
   };
 
   if (!session) return null;
@@ -980,6 +1047,7 @@ export const CaptureOverlay: React.FC = () => {
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={onPointerUp}
+      onPointerCancel={onPointerUp}
     >
       <img
         ref={imageRef}
@@ -1015,17 +1083,17 @@ export const CaptureOverlay: React.FC = () => {
           });
         }}
       />
-      <canvas ref={canvasRef} />
+      <canvas ref={canvasRef} style={{ clipPath: selection ? `inset(${selection.y}px ${Math.max(0, bounds.width - selection.x - selection.width)}px ${Math.max(0, bounds.height - selection.y - selection.height)}px ${selection.x}px)` : undefined }} />
+      <canvas ref={draftCanvasRef} style={{ clipPath: selection ? `inset(${selection.y}px ${Math.max(0, bounds.width - selection.x - selection.width)}px ${Math.max(0, bounds.height - selection.y - selection.height)}px ${selection.x}px)` : undefined }} />
       <div ref={veilRef} className={`cap-veil${dimIn ? ' is-in' : ''}`}>
-        {!selection && <div className="cap-dim" style={{ left: 0, top: 0, right: 0, bottom: 0 }} />}
-        {selection && (
-          <>
-            <div className="cap-dim" style={{ left: 0, top: 0, right: 0, height: selection.y }} />
-            <div className="cap-dim" style={{ left: 0, top: selection.y + selection.height, right: 0, bottom: 0 }} />
-            <div className="cap-dim" style={{ left: 0, top: selection.y, width: selection.x, height: selection.height }} />
-            <div className="cap-dim" style={{ left: selection.x + selection.width, top: selection.y, right: 0, height: selection.height }} />
-          </>
-        )}
+        {(selection ? [
+          { x: 0, y: 0, width: bounds.width, height: selection.y },
+          { x: 0, y: selection.y + selection.height, width: bounds.width, height: bounds.height - selection.y - selection.height },
+          { x: 0, y: selection.y, width: selection.x, height: selection.height },
+          { x: selection.x + selection.width, y: selection.y, width: bounds.width - selection.x - selection.width, height: selection.height },
+        ] : [{ x: 0, y: 0, width: bounds.width, height: bounds.height }]).map((rect, index) => (
+          <div key={index} className="cap-dim" style={{ transform: `translate(${rect.x}px, ${rect.y}px) scale(${rect.width}, ${rect.height})` }} />
+        ))}
       </div>
       {!selection && !committed && tipAt && (
         <div
@@ -1042,6 +1110,10 @@ export const CaptureOverlay: React.FC = () => {
       {selection && (
         <>
           <div className="cap-sel" style={{ left: 0, top: 0, transform: `translate3d(${selection.x}px, ${selection.y}px, 0)`, width: selection.width, height: selection.height }}>
+            <i className="cap-edge is-horizontal" style={{ transform: `scaleX(${selection.width})` }} />
+            <i className="cap-edge is-horizontal" style={{ transform: `translateY(${selection.height}px) scaleX(${selection.width})` }} />
+            <i className="cap-edge is-vertical" style={{ transform: `scaleY(${selection.height})` }} />
+            <i className="cap-edge is-vertical" style={{ transform: `translateX(${selection.width}px) scaleY(${selection.height})` }} />
             <span className={`cap-size${selection.y < 28 ? ' is-inside' : ''}`}>{Math.round(selection.width)} × {Math.round(selection.height)}</span>
           </div>
           {handles.map((handle) => {
