@@ -4628,6 +4628,7 @@ app.whenReady().then(async () => {
     isDev,
     preloadPath: path.join(__dirname, "electron-preload.js"),
     captureHtmlPath: path.join(__dirname, "../dist/capture.html"),
+    captureHelperPath: path.join(__dirname, "bin", "vor-capture.exe").replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`),
     getMainWindow: () => mainWindow,
     getScreenshotSettings: () => currentSettings.screenshot,
     getActiveWin: getActiveWinModule,

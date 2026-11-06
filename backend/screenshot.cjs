@@ -131,6 +131,11 @@ function installScreenshot(ctx) {
   let grabMs = 0;
   let openedAt = 0;
   let shortcutsPaused = false;
+  let busySince = 0;
+  let helper = null;
+  let helperUp = false;
+  let helperRestarts = 0;
+  let helperBindSpec = "";
   /** @type {Map<string, "region" | "full" | "window">} */
   let shortcutBindings = new Map();
   let shortcutListener = null;
@@ -144,7 +149,7 @@ function installScreenshot(ctx) {
     const body = fs.readFileSync(frameFile);
     return new Response(body, {
       headers: {
-        "content-type": "image/png",
+        "content-type": frameFile.endsWith(".bmp") ? "image/bmp" : "image/png",
         "content-length": String(body.length),
         "cache-control": "no-store",
       },
@@ -207,6 +212,8 @@ function installScreenshot(ctx) {
    */
   const closeOverlay = () => {
     clearTimeout(revealTimer);
+    helperSend("armed 0");
+    helperSend("hide");
     pendingSession = null;
     revealOverlay = () => {};
     const win = overlay;
@@ -516,6 +523,8 @@ function installScreenshot(ctx) {
       win.focus();
       win.webContents.send("screenshot-visible");
       ctx.setGrabbing(false);
+      // O congelado nativo fica por baixo até o Electron já ter pintado o mesmo frame por cima.
+      setTimeout(() => helperSend("hide"), 120);
     };
     revealOverlay = reveal;
     pendingSession = session;
@@ -527,9 +536,28 @@ function installScreenshot(ctx) {
 
   const capture = async (mode) => {
     const cfg = settings();
-    if (cfg.enabled === false || busy) return;
-    if (overlay && !overlay.isDestroyed()) return;
+    if (cfg.enabled === false) return;
+    if (busy && Date.now() - busySince > 5000) {
+      ctx.diagLog("[Screenshot] busy preso há >5 s, a recuperar");
+      busy = false;
+    }
+    if (busy) return;
+    if (overlay && !overlay.isDestroyed()) {
+      // Overlay visível = sessão ativa. Escondido/preso (ready nunca chegou) = recupera em vez de ignorar.
+      if (overlay.isVisible()) return;
+      ctx.diagLog("[Screenshot] overlay preso escondido, a recuperar");
+      closeOverlay();
+    }
+    if (helperReady()) {
+      // Caminho nativo: o helper congela a tela e responde com "shot".
+      busy = true;
+      busySince = Date.now();
+      ctx.setGrabbing(true);
+      helperSend(`grab ${mode}`);
+      return;
+    }
     busy = true;
+    busySince = Date.now();
     ctx.setGrabbing(true);
     let shell = null;
     try {
@@ -586,6 +614,120 @@ function installScreenshot(ctx) {
     }
   };
 
+  /**
+   * Helper nativo (backend/bin/vor-capture.exe). Faz o que o Lightshot faz: atalho tratado num
+   * processo próprio que responde ao hook na hora, BitBlt do desktop virtual e uma janela topmost
+   * que mostra o frame congelado sem ativação. O `node-global-key-listener` esperava a resposta do
+   * Node a cada tecla do sistema; com o main ocupado (grab de 300–850 ms) o hook estourava o
+   * LowLevelHooksTimeout e o Windows removia-o em silêncio: o atalho morria e o resto do VOR seguia.
+   */
+  const helperReady = () => !!(helper && helperUp && !helper.killed);
+  const helperSend = (line) => {
+    if (!helperReady()) return;
+    try { helper.stdin.write(`${line}\n`); } catch { /* ignore */ }
+  };
+  const onHelperShot = async (parts) => {
+    // shot <mode> <x> <y> <w> <h> <grabMs> <shownMs> <file...>
+    const mode = parts[1];
+    grabMs = Number(parts[6]) || 0;
+    const file = parts.slice(8).join(" ");
+    openedAt = Date.now();
+    ctx.diagLog(`[Screenshot] nativo: BitBlt ${grabMs} ms, congelado visível em ${parts[7]} ms`);
+    const cfg = settings();
+    try {
+      hideOurWindows();
+      const virtual = virtualDesktopBounds();
+      const point = screen.getCursorScreenPoint();
+      const cursor = { x: point.x - virtual.origin.x, y: point.y - virtual.origin.y };
+      let preset = null;
+      if (mode === "window") preset = await activeWindowRect(virtual.origin, virtual.bounds);
+      else if (mode === "region" && cfg.rememberRegion && cfg.lastRegion) preset = cfg.lastRegion;
+      const shell = await takeOverlayShell(virtual.bounds);
+      frameFile = file;
+      helperSend("armed 1");
+      await openOverlay(virtual.bounds, {
+        frameUrl: `vor-shot://frame/${Date.now()}`,
+        mode: mode === "window" ? "window" : "region",
+        width: virtual.bounds.width,
+        height: virtual.bounds.height,
+        preset,
+        cursor: cfg.includeCursor ? cursor : null,
+        hintAt: cursor,
+        copyOnSelect: !!cfg.copyOnSelect,
+        format: cfg.format === "jpeg" || cfg.format === "webp" ? cfg.format : "png",
+        quality: Math.min(100, Math.max(50, Number(cfg.quality) || 92)),
+        language: ctx.language() === "pt" ? "pt" : "en",
+      }, shell);
+    } catch (e) {
+      ctx.diagLog(`[Screenshot] nativo: ${e.message}`);
+      helperSend("hide");
+      closeOverlay();
+    } finally {
+      ctx.setGrabbing(false);
+      busy = false;
+    }
+  };
+  const startHelper = () => {
+    if (process.platform !== "win32" || helper) return false;
+    const exe = ctx.captureHelperPath;
+    if (!exe || !fs.existsSync(exe)) {
+      ctx.diagLog(`[Screenshot] helper nativo ausente (${exe}), a usar o listener antigo`);
+      return false;
+    }
+    const { spawn } = require("child_process");
+    const child = spawn(exe, [], { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
+    helper = child;
+    helperUp = false;
+    let buf = "";
+    child.stdout.on("data", (chunk) => {
+      buf += chunk.toString("utf8");
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        const parts = line.split(" ");
+        if (parts[0] === "ready") {
+          helperUp = true;
+          if (helperBindSpec) helperSend(`bind ${helperBindSpec}`);
+        } else if (parts[0] === "shot") void onHelperShot(parts);
+        else if (parts[0] === "full") {
+          busy = false;
+          ctx.setGrabbing(false);
+          toast(ctx.language() === "pt" ? "Tela copiada." : "Screen copied.");
+        } else if (parts[0] === "esc") {
+          if (overlay && !overlay.isDestroyed()) closeOverlay();
+          else helperSend("hide");
+        } else if (parts[0] === "log") {
+          ctx.diagLog(`[Screenshot] helper: ${parts.slice(1).join(" ")}`);
+          if (parts[1] === "grab-error") { busy = false; ctx.setGrabbing(false); }
+        }
+      }
+    });
+    const onGone = (why) => {
+      if (helper !== child) return;
+      helper = null;
+      helperUp = false;
+      busy = false;
+      ctx.diagLog(`[Screenshot] helper saiu (${why}), a reiniciar`);
+      helperRestarts += 1;
+      if (helperRestarts < 20) setTimeout(() => startHelper(), Math.min(5000, 300 * helperRestarts));
+    };
+    child.on("exit", (code) => onGone(`código ${code}`));
+    child.on("error", (e) => onGone(e.message));
+    child.stdin.on("error", () => {});
+    return true;
+  };
+
+  /** Mesma ordem de modificadores que o helper monta: ctrl, alt, shift, super, tecla. */
+  const canonicalAccelerator = (raw) => {
+    const parts = normalizeAccelerator(raw).toLowerCase().split("+").filter(Boolean);
+    const order = ["commandorcontrol", "alt", "shift", "super"];
+    const mods = order.filter((m) => parts.includes(m));
+    const key = parts.filter((p) => !order.includes(p)).pop() || "";
+    return key ? [...mods, key].join("+") : "";
+  };
+
   const ensureShortcutListener = () => {
     if (shortcutListener) return;
     try {
@@ -624,7 +766,11 @@ function installScreenshot(ctx) {
       ctx.replaceScreenshotSettings(cfg);
     }
     shortcutBindings = new Map();
-    if (cfg.enabled === false) return;
+    if (cfg.enabled === false) {
+      helperBindSpec = "";
+      helperSend("bind ");
+      return;
+    }
     const pairs = [
       [cfg.shortcutRegion, "region"],
       [cfg.shortcutFull, "full"],
@@ -635,6 +781,15 @@ function installScreenshot(ctx) {
       if (!accelerator || shortcutBindings.has(accelerator)) continue;
       shortcutBindings.set(accelerator, mode);
       ctx.diagLog(`[Screenshot] atalho ${accelerator} → ${mode}`);
+    }
+    helperBindSpec = pairs
+      .map(([raw, mode]) => [canonicalAccelerator(raw), mode])
+      .filter(([accel]) => accel)
+      .map(([accel, mode]) => `${accel}=${mode}`)
+      .join(";");
+    if (helper || startHelper()) {
+      helperSend(`bind ${shortcutsPaused ? "" : helperBindSpec}`);
+      return;
     }
     ensureShortcutListener();
   };
@@ -709,7 +864,13 @@ function installScreenshot(ctx) {
     capture,
     registerShortcuts,
     normalizeAccelerator,
-    setShortcutsPaused: (value) => { shortcutsPaused = !!value; },
+    setShortcutsPaused: (value) => {
+      shortcutsPaused = !!value;
+      // Enquanto o utilizador grava um atalho nas definições, o helper não pode engolir a tecla.
+      if (shortcutsPaused) helperSend("bind ");
+      else if (helperBindSpec) helperSend(`bind ${helperBindSpec}`);
+    },
+    dispose: () => { helperSend("quit"); },
   };
 }
 
