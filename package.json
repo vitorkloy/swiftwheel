@@ -11,7 +11,7 @@
   },
   "scripts": {
     "dev": "vite",
-    "build": "tsc && node scripts/generate-win-icon.mjs && vite build && node scripts/verify-radial-windowing.mjs && node scripts/generate-appx-assets.mjs",
+    "build": "tsc && node scripts/build-capture-helper.cjs && node scripts/generate-win-icon.mjs && vite build && node scripts/verify-radial-windowing.mjs && node scripts/generate-appx-assets.mjs",
     "electron": "wait-on tcp:5173 && cross-env NODE_ENV=development node scripts/launch-electron.js",
     "start": "node scripts/start-local-runtime.cjs",
     "start:runtime": "concurrently -k \"npm run dev\" \"npm run electron\"",
@@ -68,6 +68,7 @@
     "asar": true,
     "asarUnpack": [
       "backend/*.ps1",
+      "backend/bin/**/*",
       "resources/bin/**/*",
       "node_modules/sql.js/dist/sql-wasm.wasm",
       "node_modules/active-win/**/*",

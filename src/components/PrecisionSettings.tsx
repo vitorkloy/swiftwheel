@@ -27,8 +27,40 @@ import {
   SquareStack,
   Trash2,
   X,
+  Info,
+  CircleDot,
+  Hand,
+  Database,
+  FileImage,
+  Languages,
+  Gauge,
+  Keyboard,
+  Power,
+  SunMoon,
+  RefreshCw,
+  Disc3,
+  LayoutGrid,
+  Sparkles,
+  Image as ImageIcon,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
+
+/** Acento do usuário como `--zn-accent`; branco padrão segue o "sólido" do tema (preto no claro). */
+function accentStyle(color: string | undefined, theme: string): React.CSSProperties {
+  const hex = /^#[0-9a-f]{6}$/i.test(color ?? '') ? color! : '#FFFFFF';
+  const accent = /^#ffffff$/i.test(hex) ? (theme === 'white' ? '#101012' : '#ffffff') : hex;
+  const [r, g, b] = [1, 3, 5].map((i) => parseInt(accent.slice(i, i + 2), 16));
+  const on = (0.2126 * r + 0.7152 * g + 0.0722 * b) / 255 > 0.56 ? '#0a0a0b' : '#ffffff';
+  return { ['--zn-accent' as string]: accent, ['--zn-on-accent' as string]: on };
+}
+
+/** Ícone de cada grupo: título e cartões recolhidos deixam de ser só texto. */
+const GROUP_ICONS: Record<string, LucideIcon> = {
+  About: Info, 'App wheel': CircleDot, Behavior: Hand, Capture: Camera, Data: Database,
+  'File wheel': FileImage, Format: ImageIcon, Language: Languages, Performance: Gauge,
+  Protection: Shield, Shortcuts: Keyboard, Startup: Power, Theme: SunMoon, Updates: RefreshCw,
+  Wheel: Disc3, Workspaces: SquareStack, 'Your workspaces': LayoutGrid, Presence: Sparkles,
+};
 import type { AppItem, ScreenshotSettings, UIConfig, Workspace } from '../types';
 import { DEFAULT_SCREENSHOT } from '../defaults';
 import { getIcon } from '../iconMap';
@@ -112,6 +144,9 @@ const PT: Record<string, string> = {
   'English, Português (Brasil), or the Windows language.': 'English, Português (Brasil) ou o idioma do Windows.',
   Search: 'Procurar',
   General: 'Geral',
+  About: 'Sobre',
+  Version: 'Versão',
+  VOR: 'VOR',
   'Core VOR behavior.': 'Comportamento central do VOR.',
   Activation: 'Ativação',
   'How and where the wheel appears.': 'Como e onde a roda aparece.',
@@ -197,6 +232,11 @@ const PT: Record<string, string> = {
   'Target spacing': 'Espaço entre alvos',
   'Free space between items.': 'Espaço livre entre itens.',
   'Hover color': 'Cor ao pairar',
+  'Accent color': 'Cor de destaque',
+  'Hovered target, selected controls, ShiftDrop and progress. White follows the theme.': 'Item apontado, controles selecionados, ShiftDrop e progresso. Branco segue o tema.',
+  'Glass effect': 'Efeito vidro',
+  'Translucent wheel and ShiftDrop surfaces. Off keeps every surface solid.': 'Roda e janelas do ShiftDrop translúcidas. Desligado, tudo fica sólido.',
+  'Settings window, title bar and the ShiftDrop wheel and windows. The app wheel stays a dark overlay.': 'Janela de definições, barra de título, roda e janelas do ShiftDrop. A roda de apps continua escura sobre a tela.',
   'Color used by the target under the pointer.': 'Cor do alvo sob o ponteiro.',
   Targeting: 'Mira',
   Direction: 'Direção',
@@ -544,6 +584,11 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
     return {
       general: [
         {
+          key: 'version', group: 'About', title: 'Version',
+          description: appVersion ? `VOR ${appVersion}` : 'VOR',
+          kind: 'note',
+        },
+        {
           key: 'language', group: 'Language', title: 'Language',
           description: 'English, Português (Brasil), or the Windows language.',
           kind: 'segmented',
@@ -644,7 +689,7 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
       appearance: [
         {
           key: 'theme', group: 'Theme', title: 'VOR surfaces',
-          description: 'Applies to the window and title bar. The wheel remains dark.',
+          description: 'Settings window, title bar and the ShiftDrop wheel and windows. The app wheel stays a dark overlay.',
           kind: 'segmented', current: theme,
           choices: [{ value: 'black', label: 'Black' }, { value: 'white', label: 'White' }],
           onChange: (value) => update('appearanceTheme', value as UIConfig['appearanceTheme']),
@@ -662,10 +707,16 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
         range('file-spacing', 'File wheel', 'Target spacing', 'Free space between items.',
           config.fileWheelSpacing ?? 10, 0, 40, (value) => update('fileWheelSpacing', value), (value) => `${Math.round(value)} px`),
         {
-          key: 'radialHoverColor', group: 'Wheel', title: 'Hover color',
-          description: 'Color used by the target under the pointer.',
+          key: 'radialHoverColor', group: 'Theme', title: 'Accent color',
+          description: 'Hovered target, selected controls, ShiftDrop and progress. White follows the theme.',
           kind: 'color', value: config.radialHoverColor ?? '#FFFFFF',
-          onChange: (value) => update('radialHoverColor', String(value)),
+          onChange: (value) => setConfig((current) => ({ ...current, radialHoverColor: String(value), accentColor: String(value) })),
+        },
+        {
+          key: 'glass', group: 'Presence', title: 'Glass effect',
+          description: 'Translucent wheel and ShiftDrop surfaces. Off keeps every surface solid.',
+          kind: 'bool', enabled: config.glassEffect !== false,
+          onToggle: () => update('glassEffect', config.glassEffect === false),
         },
         {
           key: 'aim', group: 'Wheel', title: 'Targeting',
@@ -875,7 +926,7 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
         },
       ],
     };
-  }, [config, gameMode, theme, apps, update, updateShot, updateInfo, updateBusy, updateNote, isStoreBuild, runUpdateCheck, onReset, onClose, deleteWorkspace, reorderWorkspaces, assignFileWheelKey]);
+  }, [config, gameMode, theme, apps, appVersion, update, updateShot, updateInfo, updateBusy, updateNote, isStoreBuild, runUpdateCheck, onReset, onClose, deleteWorkspace, reorderWorkspaces, assignFileWheelKey]);
 
   const tr = (text?: string) => {
     if (!text) return '';
@@ -913,6 +964,7 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
       id="settings-container"
       className={`zs-shell${isDismissing ? ' is-dismissing' : ''}`}
       data-zn-theme={theme}
+      style={accentStyle(config.radialHoverColor, theme)}
     >
       <motion.section
         className={`zs-window${isSidebarCollapsed ? ' is-sidebar-collapsed' : ''}`}
@@ -1003,11 +1055,17 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
                           aria-expanded={expanded}
                           onClick={() => setOpenFold(expanded ? null : group.name)}
                         >
-                          <span>{tr(group.name)}</span>
+                          <span className="zs-fold-label">
+                            {GROUP_ICONS[group.name] ? React.createElement(GROUP_ICONS[group.name], { size: 15, strokeWidth: 1.8, className: 'zs-group-icon' }) : null}
+                            {tr(group.name)}
+                          </span>
                           <ChevronDown size={14} strokeWidth={1.9} style={{ transform: expanded ? 'rotate(180deg)' : 'none' }} />
                         </button>
                       ) : (
-                        <h2 className="zs-group-title">{tr(group.name)}</h2>
+                        <h2 className="zs-group-title">
+                          {GROUP_ICONS[group.name] ? React.createElement(GROUP_ICONS[group.name], { size: 13, strokeWidth: 1.9, className: 'zs-group-icon' }) : null}
+                          {tr(group.name)}
+                        </h2>
                       )}
                       {expanded && (group.name === 'Your workspaces' && !trimmedQuery ? (
                         /** Fora da pesquisa a grelha manda; a procurar, as linhas continuam a dar resultados. */

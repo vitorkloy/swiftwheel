@@ -127,7 +127,15 @@ function installScreenshot(ctx) {
   let frameFile = "";
   let pendingSession = null;
   let revealOverlay = () => {};
+  let revealTimer = null;
+  let grabMs = 0;
+  let openedAt = 0;
   let shortcutsPaused = false;
+  let busySince = 0;
+  let helper = null;
+  let helperUp = false;
+  let helperRestarts = 0;
+  let helperBindSpec = "";
   /** @type {Map<string, "region" | "full" | "window">} */
   let shortcutBindings = new Map();
   let shortcutListener = null;
@@ -141,7 +149,7 @@ function installScreenshot(ctx) {
     const body = fs.readFileSync(frameFile);
     return new Response(body, {
       headers: {
-        "content-type": "image/png",
+        "content-type": frameFile.endsWith(".bmp") ? "image/bmp" : "image/png",
         "content-length": String(body.length),
         "cache-control": "no-store",
       },
@@ -197,13 +205,31 @@ function installScreenshot(ctx) {
     clipboard.writeImage(image);
   };
 
+  /**
+   * Esconde e reaproveita a janela em vez de a destruir: `close()` + criar outra fazia o DWM animar
+   * a saída e obrigava a recarregar o renderer. O renderer volta ao estado vazio (transparente) com
+   * a sessão `null` e a janela passa a ser a próxima warm shell.
+   */
   const closeOverlay = () => {
+    clearTimeout(revealTimer);
+    helperSend("armed 0");
+    helperSend("hide");
     pendingSession = null;
     revealOverlay = () => {};
     const win = overlay;
     overlay = null;
-    if (win && !win.isDestroyed()) win.close();
-    queueMicrotask(() => { void primeWarmShell(); });
+    if (!win || win.isDestroyed()) {
+      queueMicrotask(() => { void primeWarmShell(); });
+      return;
+    }
+    try {
+      win.hide();
+      win.webContents.send("screenshot-session", null);
+    } catch { /* ignore */ }
+    if (warmShell && warmShell !== win && !warmShell.isDestroyed()) {
+      try { warmShell.close(); } catch { /* ignore */ }
+    }
+    warmShell = win;
   };
 
   const pinImage = (dataUrl, width, height) => {
@@ -276,67 +302,87 @@ function installScreenshot(ctx) {
     || sources[0]
   );
 
-  /** Congela todos os monitores num PNG DIP alinhado ao desktop virtual. */
+  /**
+   * Congela todos os monitores à resolução física nativa, sem reamostrar. O `desktopCapturer` usa
+   * um único `thumbnailSize` para todas as telas (aspect-fit): com 1366×768 + 1600×900 o primário
+   * era ampliado para 1600×900 e depois reduzido para 1366×768 — 6,8% dos pixels mudavam e o
+   * "freeze" não batia com o ecrã real (o salto ao abrir/fechar). Agora há um pedido por resolução
+   * física distinta e cada bitmap é copiado 1:1 para o mosaico (em px físicos = DIP × escala).
+   */
   const grabVirtualDesktop = async () => {
     const { displays, origin, bounds } = virtualDesktopBounds();
-    let maxW = 1;
-    let maxH = 1;
-    for (const display of displays) {
-      const scale = display.scaleFactor || 1;
-      maxW = Math.max(maxW, Math.round(display.size.width * scale));
-      maxH = Math.max(maxH, Math.round(display.size.height * scale));
-    }
-    const sources = await desktopCapturer.getSources({
-      types: ["screen"],
-      thumbnailSize: { width: maxW, height: maxH },
-      fetchWindowIcons: false,
+    const scale = Math.max(...displays.map((d) => d.scaleFactor || 1));
+    const physical = (d) => ({
+      width: Math.max(1, Math.round(d.size.width * (d.scaleFactor || 1))),
+      height: Math.max(1, Math.round(d.size.height * (d.scaleFactor || 1))),
     });
-
-    // Um monitor: nativeImage.resize — sem sharp nem PNG round-trip extra.
-    if (displays.length === 1) {
-      const display = displays[0];
-      const source = pickSource(sources, display, 0);
-      if (!source || source.thumbnail.isEmpty()) throw new Error("captura vazia");
+    const sizeKeys = [...new Set(displays.map((d) => { const p = physical(d); return `${p.width}x${p.height}`; }))];
+    const lists = await Promise.all(sizeKeys.map((key) => {
+      const [width, height] = key.split("x").map(Number);
+      return desktopCapturer.getSources({ types: ["screen"], thumbnailSize: { width, height }, fetchWindowIcons: false });
+    }));
+    const shots = displays.map((display, index) => {
+      const p = physical(display);
+      const source = pickSource(lists[sizeKeys.indexOf(`${p.width}x${p.height}`)], display, index);
+      if (!source || source.thumbnail.isEmpty()) return null;
       let image = source.thumbnail;
-      const size = image.getSize();
-      if (size.width !== bounds.width || size.height !== bounds.height) {
-        image = image.resize({ width: bounds.width, height: bounds.height, quality: "better" });
+      // Só com DPIs diferentes entre monitores (escala do mosaico ≠ escala do monitor) há reamostragem.
+      const want = {
+        width: Math.max(1, Math.round(display.bounds.width * scale)),
+        height: Math.max(1, Math.round(display.bounds.height * scale)),
+      };
+      const got = image.getSize();
+      if (got.width !== want.width || got.height !== want.height) image = image.resize({ ...want, quality: "best" });
+      return { image, size: want, left: Math.round((display.bounds.x - origin.x) * scale), top: Math.round((display.bounds.y - origin.y) * scale) };
+    }).filter(Boolean);
+    if (!shots.length) throw new Error("captura vazia");
+    const W = Math.max(1, Math.round(bounds.width * scale));
+    const H = Math.max(1, Math.round(bounds.height * scale));
+    let image;
+    if (shots.length === 1 && shots[0].size.width === W && shots[0].size.height === H) {
+      image = shots[0].image;
+    } else {
+      const out = Buffer.alloc(W * H * 4);
+      new Uint32Array(out.buffer, out.byteOffset, W * H).fill(0xff000000);
+      for (const shot of shots) {
+        const src = shot.image.toBitmap();
+        const rowBytes = shot.size.width * 4;
+        for (let y = 0; y < shot.size.height; y += 1) {
+          const ty = shot.top + y;
+          if (ty < 0 || ty >= H) continue;
+          src.copy(out, (ty * W + shot.left) * 4, y * rowBytes, y * rowBytes + Math.min(rowBytes, (W - shot.left) * 4));
+        }
       }
-      if (image.isEmpty()) throw new Error("captura vazia");
-      return { image, png: image.toPNG(), origin, bounds };
+      image = nativeImage.createFromBitmap(out, { width: W, height: H, scaleFactor: 1 });
     }
-
-    const sharp = require("sharp");
-    const pngFast = { compressionLevel: 1, adaptiveFiltering: false };
-    const composites = (
-      await Promise.all(displays.map(async (display, index) => {
-        const source = pickSource(sources, display, index);
-        if (!source || source.thumbnail.isEmpty()) return null;
-        const dipW = Math.max(1, Math.round(display.bounds.width));
-        const dipH = Math.max(1, Math.round(display.bounds.height));
-        const resized = await sharp(source.thumbnail.toPNG())
-          .resize(dipW, dipH, { fit: "fill" })
-          .png(pngFast)
-          .toBuffer();
-        return {
-          input: resized,
-          left: Math.round(display.bounds.x - origin.x),
-          top: Math.round(display.bounds.y - origin.y),
-        };
-      }))
-    ).filter(Boolean);
-    if (!composites.length) throw new Error("captura vazia");
-    const png = await sharp({
-      create: {
-        width: bounds.width,
-        height: bounds.height,
-        channels: 3,
-        background: { r: 0, g: 0, b: 0 },
-      },
-    }).composite(composites).png(pngFast).toBuffer();
-    const image = nativeImage.createFromBuffer(png);
     if (image.isEmpty()) throw new Error("captura vazia");
-    return { image, png, origin, bounds };
+    return { image, png: image.toPNG(), origin, bounds };
+  };
+
+  /**
+   * Sem transições do DWM na janela de captura (DWMWA_TRANSITIONS_FORCEDISABLED = 3): o Windows
+   * animava show/hide da janela (zoom/fade do MinAnimate), o "pulo" ao abrir e ao fechar. Chamado
+   * uma vez por janela (ela é reaproveitada); o PowerShell termina logo, custo zero em repouso.
+   */
+  const disableTransitions = (win) => {
+    if (process.platform !== "win32" || !win || win.isDestroyed()) return;
+    try {
+      const handle = win.getNativeWindowHandle();
+      const hwnd = handle.length >= 8 ? handle.readBigUInt64LE(0) : BigInt(handle.readUInt32LE(0));
+      const script = [
+        "Add-Type -Namespace V -Name D -MemberDefinition '[DllImport(\"dwmapi.dll\")] public static extern int DwmSetWindowAttribute(IntPtr h, int a, ref int v, int s);'",
+        "$v = 1",
+        `[V.D]::DwmSetWindowAttribute([IntPtr]${hwnd.toString()}, 3, [ref]$v, 4)`,
+      ].join("; ");
+      const { spawn } = require("child_process");
+      const child = spawn("powershell", ["-NoProfile", "-NonInteractive", "-Command", script], { windowsHide: true, stdio: ["ignore", "pipe", "ignore"] });
+      let hr = "";
+      child.stdout.on("data", (chunk) => { hr += chunk.toString(); });
+      child.on("close", () => ctx.diagLog(`[Screenshot] DWMWA_TRANSITIONS_FORCEDISABLED hr=${hr.trim() || "?"}`));
+      child.on("error", (e) => ctx.diagLog(`[Screenshot] dwm: ${e.message}`));
+    } catch (e) {
+      ctx.diagLog(`[Screenshot] dwm: ${e.message}`);
+    }
   };
 
   const activeWindowRect = async (origin, virtual) => {
@@ -388,16 +434,23 @@ function installScreenshot(ctx) {
       width: bounds.width,
       height: bounds.height,
       frame: false,
-      transparent: false,
+      /**
+       * Transparente e criada escondida no arranque (warm shell). Enquanto o renderer não confirma
+       * que pintou o frame congelado, qualquer frame apresentado pelo DWM é transparente — por
+       * baixo está exatamente a mesma imagem, portanto nada pisca. Antes era opaca (#000) e o
+       * primeiro frame podia sair preto/cinza, o "piscar" ao ativar a captura.
+       */
+      transparent: true,
       alwaysOnTop: true,
       skipTaskbar: true,
       resizable: false,
       movable: false,
       show: false,
+      paintWhenInitiallyHidden: true,
       hasShadow: false,
       enableLargerThanScreen: true,
       autoHideMenuBar: true,
-      backgroundColor: "#000000",
+      backgroundColor: "#00000000",
       focusable: true,
       webPreferences: {
         preload: ctx.preloadPath,
@@ -408,6 +461,7 @@ function installScreenshot(ctx) {
       },
     });
     attachShellLifecycle(win);
+    disableTransitions(win);
     if (ctx.isDev) await win.loadURL("http://localhost:5173/capture.html");
     else await win.loadFile(ctx.captureHtmlPath);
     if (!win.isDestroyed()) win.setBounds(bounds);
@@ -459,32 +513,51 @@ function installScreenshot(ctx) {
     if (win.isDestroyed()) return;
     overlay = win;
     let revealed = false;
-    let timer = null;
     const reveal = () => {
-      if (revealed || win.isDestroyed()) return;
+      if (revealed || win.isDestroyed() || overlay !== win) return;
       revealed = true;
-      if (timer != null) clearTimeout(timer);
+      clearTimeout(revealTimer);
+      ctx.diagLog(`[Screenshot] grab ${grabMs} ms, revelada ${Date.now() - openedAt} ms depois`);
       win.setBounds(bounds);
       win.showInactive();
       win.focus();
       win.webContents.send("screenshot-visible");
       ctx.setGrabbing(false);
+      // O congelado nativo fica por baixo até o Electron já ter pintado o mesmo frame por cima.
+      setTimeout(() => helperSend("hide"), 120);
     };
     revealOverlay = reveal;
     pendingSession = session;
     win.webContents.send("screenshot-session", session);
-    // Fallback se o frame não disparar "ready".
-    timer = setTimeout(reveal, 400);
-    win.once("closed", () => {
-      if (timer != null) clearTimeout(timer);
-    });
+    // Fallback se o frame não disparar "ready". A janela é transparente, logo revelar cedo não pisca.
+    clearTimeout(revealTimer);
+    revealTimer = setTimeout(reveal, 700);
   };
 
   const capture = async (mode) => {
     const cfg = settings();
-    if (cfg.enabled === false || busy) return;
-    if (overlay && !overlay.isDestroyed()) return;
+    if (cfg.enabled === false) return;
+    if (busy && Date.now() - busySince > 5000) {
+      ctx.diagLog("[Screenshot] busy preso há >5 s, a recuperar");
+      busy = false;
+    }
+    if (busy) return;
+    if (overlay && !overlay.isDestroyed()) {
+      // Overlay visível = sessão ativa. Escondido/preso (ready nunca chegou) = recupera em vez de ignorar.
+      if (overlay.isVisible()) return;
+      ctx.diagLog("[Screenshot] overlay preso escondido, a recuperar");
+      closeOverlay();
+    }
+    if (helperReady()) {
+      // Caminho nativo: o helper congela a tela e responde com "shot".
+      busy = true;
+      busySince = Date.now();
+      ctx.setGrabbing(true);
+      helperSend(`grab ${mode}`);
+      return;
+    }
     busy = true;
+    busySince = Date.now();
     ctx.setGrabbing(true);
     let shell = null;
     try {
@@ -502,7 +575,10 @@ function installScreenshot(ctx) {
         ? Promise.resolve(null)
         : takeOverlayShell(virtual.bounds);
       hideOurWindows();
+      const t0 = Date.now();
       const { image, png, bounds } = await grabVirtualDesktop();
+      grabMs = Date.now() - t0;
+      openedAt = Date.now();
       shell = await shellPromise;
 
       if (mode === "full") {
@@ -529,12 +605,127 @@ function installScreenshot(ctx) {
       ctx.diagLog(`[Screenshot] ${e.message}`);
       toast(ctx.language() === "pt" ? "Não foi possível capturar a tela." : "Could not capture the screen.");
       if (shell && !shell.isDestroyed()) {
-        try { shell.close(); } catch { /* ignore */ }
+        overlay = shell;
+        closeOverlay();
       }
     } finally {
       ctx.setGrabbing(false);
       busy = false;
     }
+  };
+
+  /**
+   * Helper nativo (backend/bin/vor-capture.exe). Faz o que o Lightshot faz: atalho tratado num
+   * processo próprio que responde ao hook na hora, BitBlt do desktop virtual e uma janela topmost
+   * que mostra o frame congelado sem ativação. O `node-global-key-listener` esperava a resposta do
+   * Node a cada tecla do sistema; com o main ocupado (grab de 300–850 ms) o hook estourava o
+   * LowLevelHooksTimeout e o Windows removia-o em silêncio: o atalho morria e o resto do VOR seguia.
+   */
+  const helperReady = () => !!(helper && helperUp && !helper.killed);
+  const helperSend = (line) => {
+    if (!helperReady()) return;
+    try { helper.stdin.write(`${line}\n`); } catch { /* ignore */ }
+  };
+  const onHelperShot = async (parts) => {
+    // shot <mode> <x> <y> <w> <h> <grabMs> <shownMs> <file...>
+    const mode = parts[1];
+    grabMs = Number(parts[6]) || 0;
+    const file = parts.slice(8).join(" ");
+    openedAt = Date.now();
+    ctx.diagLog(`[Screenshot] nativo: BitBlt ${grabMs} ms, congelado visível em ${parts[7]} ms`);
+    const cfg = settings();
+    try {
+      hideOurWindows();
+      const virtual = virtualDesktopBounds();
+      const point = screen.getCursorScreenPoint();
+      const cursor = { x: point.x - virtual.origin.x, y: point.y - virtual.origin.y };
+      let preset = null;
+      if (mode === "window") preset = await activeWindowRect(virtual.origin, virtual.bounds);
+      else if (mode === "region" && cfg.rememberRegion && cfg.lastRegion) preset = cfg.lastRegion;
+      const shell = await takeOverlayShell(virtual.bounds);
+      frameFile = file;
+      helperSend("armed 1");
+      await openOverlay(virtual.bounds, {
+        frameUrl: `vor-shot://frame/${Date.now()}`,
+        mode: mode === "window" ? "window" : "region",
+        width: virtual.bounds.width,
+        height: virtual.bounds.height,
+        preset,
+        cursor: cfg.includeCursor ? cursor : null,
+        hintAt: cursor,
+        copyOnSelect: !!cfg.copyOnSelect,
+        format: cfg.format === "jpeg" || cfg.format === "webp" ? cfg.format : "png",
+        quality: Math.min(100, Math.max(50, Number(cfg.quality) || 92)),
+        language: ctx.language() === "pt" ? "pt" : "en",
+      }, shell);
+    } catch (e) {
+      ctx.diagLog(`[Screenshot] nativo: ${e.message}`);
+      helperSend("hide");
+      closeOverlay();
+    } finally {
+      ctx.setGrabbing(false);
+      busy = false;
+    }
+  };
+  const startHelper = () => {
+    if (process.platform !== "win32" || helper) return false;
+    const exe = ctx.captureHelperPath;
+    if (!exe || !fs.existsSync(exe)) {
+      ctx.diagLog(`[Screenshot] helper nativo ausente (${exe}), a usar o listener antigo`);
+      return false;
+    }
+    const { spawn } = require("child_process");
+    const child = spawn(exe, [], { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
+    helper = child;
+    helperUp = false;
+    let buf = "";
+    child.stdout.on("data", (chunk) => {
+      buf += chunk.toString("utf8");
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        const parts = line.split(" ");
+        if (parts[0] === "ready") {
+          helperUp = true;
+          if (helperBindSpec) helperSend(`bind ${helperBindSpec}`);
+        } else if (parts[0] === "shot") void onHelperShot(parts);
+        else if (parts[0] === "full") {
+          busy = false;
+          ctx.setGrabbing(false);
+          toast(ctx.language() === "pt" ? "Tela copiada." : "Screen copied.");
+        } else if (parts[0] === "esc") {
+          if (overlay && !overlay.isDestroyed()) closeOverlay();
+          else helperSend("hide");
+        } else if (parts[0] === "log") {
+          ctx.diagLog(`[Screenshot] helper: ${parts.slice(1).join(" ")}`);
+          if (parts[1] === "grab-error") { busy = false; ctx.setGrabbing(false); }
+        }
+      }
+    });
+    const onGone = (why) => {
+      if (helper !== child) return;
+      helper = null;
+      helperUp = false;
+      busy = false;
+      ctx.diagLog(`[Screenshot] helper saiu (${why}), a reiniciar`);
+      helperRestarts += 1;
+      if (helperRestarts < 20) setTimeout(() => startHelper(), Math.min(5000, 300 * helperRestarts));
+    };
+    child.on("exit", (code) => onGone(`código ${code}`));
+    child.on("error", (e) => onGone(e.message));
+    child.stdin.on("error", () => {});
+    return true;
+  };
+
+  /** Mesma ordem de modificadores que o helper monta: ctrl, alt, shift, super, tecla. */
+  const canonicalAccelerator = (raw) => {
+    const parts = normalizeAccelerator(raw).toLowerCase().split("+").filter(Boolean);
+    const order = ["commandorcontrol", "alt", "shift", "super"];
+    const mods = order.filter((m) => parts.includes(m));
+    const key = parts.filter((p) => !order.includes(p)).pop() || "";
+    return key ? [...mods, key].join("+") : "";
   };
 
   const ensureShortcutListener = () => {
@@ -544,8 +735,12 @@ function installScreenshot(ctx) {
       shortcutListener = new GlobalKeyboardListener();
       void shortcutListener.addListener((event, down) => {
         shortcutTracker.note(event);
-        if (shortcutsPaused) return;
         const pressed = shortcutTracker.format(event, down);
+        if (pressed && overlay && !overlay.isDestroyed() && normalizeAccelerator(pressed).toLowerCase() === "escape") {
+          closeOverlay();
+          return true;
+        }
+        if (shortcutsPaused) return;
         if (!pressed) return;
         const mode = shortcutBindings.get(normalizeAccelerator(pressed).toLowerCase());
         if (!mode) return;
@@ -571,7 +766,11 @@ function installScreenshot(ctx) {
       ctx.replaceScreenshotSettings(cfg);
     }
     shortcutBindings = new Map();
-    if (cfg.enabled === false) return;
+    if (cfg.enabled === false) {
+      helperBindSpec = "";
+      helperSend("bind ");
+      return;
+    }
     const pairs = [
       [cfg.shortcutRegion, "region"],
       [cfg.shortcutFull, "full"],
@@ -582,6 +781,15 @@ function installScreenshot(ctx) {
       if (!accelerator || shortcutBindings.has(accelerator)) continue;
       shortcutBindings.set(accelerator, mode);
       ctx.diagLog(`[Screenshot] atalho ${accelerator} → ${mode}`);
+    }
+    helperBindSpec = pairs
+      .map(([raw, mode]) => [canonicalAccelerator(raw), mode])
+      .filter(([accel]) => accel)
+      .map(([accel, mode]) => `${accel}=${mode}`)
+      .join(";");
+    if (helper || startHelper()) {
+      helperSend(`bind ${shortcutsPaused ? "" : helperBindSpec}`);
+      return;
     }
     ensureShortcutListener();
   };
@@ -656,7 +864,13 @@ function installScreenshot(ctx) {
     capture,
     registerShortcuts,
     normalizeAccelerator,
-    setShortcutsPaused: (value) => { shortcutsPaused = !!value; },
+    setShortcutsPaused: (value) => {
+      shortcutsPaused = !!value;
+      // Enquanto o utilizador grava um atalho nas definições, o helper não pode engolir a tecla.
+      if (shortcutsPaused) helperSend("bind ");
+      else if (helperBindSpec) helperSend(`bind ${helperBindSpec}`);
+    },
+    dispose: () => { helperSend("quit"); },
   };
 }
 

@@ -4,7 +4,7 @@ import { getIcon } from '../iconMap';
 import { CornerUpLeft } from 'lucide-react';
 import { SmartIcon } from './SmartIcon';
 import { RovylLogo } from './RovylLogo';
-import { FilePetalWheel } from './FilePetalWheel';
+import { FilePetalWheel, filePetalDeadZonePx, filePetalIndexAt } from './FilePetalWheel';
 import { getTranslation } from '../translations';
 import { RadialHud } from './RadialHud';
 import {
@@ -223,6 +223,8 @@ interface RadialMenuItemProps {
   totalApps: number;
   /** Narrow style props so parent config identity does not bust memo for every App re-render. */
   backdropOpacity: number;
+  /** Alfa da superfície do tile: 1 = sólido; < 1 = vidro (Aparência → Efeito vidro + Opacidade). */
+  surfaceAlpha: number;
   hoverColor: string;
   showLabels: boolean;
   alwaysShowAppLabels: boolean;
@@ -301,6 +303,7 @@ const RadialMenuItem = React.memo(({
   actualIconSize,
   totalApps,
   backdropOpacity,
+  surfaceAlpha,
   hoverColor,
   showLabels,
   alwaysShowAppLabels,
@@ -427,7 +430,11 @@ const RadialMenuItem = React.memo(({
                */
               backgroundColor: isActive
                 ? hoverColor
-                : `rgb(${12 + Math.round(backdropOpacity * 10)}, ${12 + Math.round(backdropOpacity * 10)}, ${12 + Math.round(backdropOpacity * 10)})`,
+                : `rgba(${12 + Math.round(backdropOpacity * 10)}, ${12 + Math.round(backdropOpacity * 10)}, ${14 + Math.round(backdropOpacity * 10)}, ${surfaceAlpha})`,
+              /* Vidro: brilho de cima para baixo por cima do fundo translúcido (só com alfa < 1). */
+              backgroundImage: !isActive && surfaceAlpha < 1
+                ? 'linear-gradient(180deg, rgba(255,255,255,0.10), rgba(255,255,255,0.02) 55%, rgba(255,255,255,0))'
+                : undefined,
               border: isActive ? `1px solid ${hoverColor}` : `1px solid rgba(255,255,255,${0.28 + backdropOpacity * 0.08})`,
               color: isActive ? activeForeground : '#fff',
               /**
@@ -593,6 +600,8 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
   const configRef = useRef(config);
   configRef.current = config;
   const radialHoverColor = normalizeHoverColor(config.radialHoverColor);
+  /** Antes `menuOpacity` não era lido por ninguém e o "vidro" não existia: os tiles eram sempre opacos. */
+  const surfaceAlpha = config.glassEffect === false ? 1 : Math.min(1, Math.max(0.35, config.menuOpacity ?? 0.8));
   const radialHoverForeground = getReadableForeground(radialHoverColor);
   const iconSizePx = config.iconSize || 64;
   const minGap = config.appSpacing || 0;
@@ -728,10 +737,12 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
    * voltar e executar uma fatia. O `× 1.06` acompanha a escala que o hub ganha quando está ativo,
    * que é exatamente o estado em que este clique acontece.
    */
-  const deadZoneRadius = Math.max(
-    config.activationThreshold ?? 60,
-    Math.ceil((hubDiameter / 2) * 1.06 * Math.SQRT2) + 4,
-  );
+  const deadZoneRadius = fileMode
+    ? filePetalDeadZonePx()
+    : Math.max(
+      config.activationThreshold ?? 60,
+      Math.ceil((hubDiameter / 2) * 1.06 * Math.SQRT2) + 4,
+    );
 
   /**
    * Diagnóstico da confirmação. Fica no log de persistência (`rovyl-persistence.log`) e diz, para
@@ -788,6 +799,7 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
     actualMenuRadius,
     actualIconSize,
     deadZoneRadius,
+    fileMode,
   });
 
   /** Layout: pointer math uses `position` — must match props before paint or first rAF sees stale center (fullscreen vs ilha small). */
@@ -806,8 +818,9 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
       actualMenuRadius,
       actualIconSize,
       deadZoneRadius,
+      fileMode,
     };
-  }, [isOpen, position, activeIndex, onClose, currentLevelApps, config, isCenterActive, hasMoved, folderStack, apps, actualMenuRadius, actualIconSize, deadZoneRadius]);
+  }, [isOpen, position, activeIndex, onClose, currentLevelApps, config, isCenterActive, hasMoved, folderStack, apps, actualMenuRadius, actualIconSize, deadZoneRadius, fileMode]);
 
   /** Última posição REAL do ponteiro, escrita no próprio evento — sem passar por render. */
   const lastPointerRef = useRef<{ x: number; y: number } | null>(null);
@@ -829,8 +842,15 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
    */
   const resolveAimAtPoint = useCallback(
     (point: { x: number; y: number } | null): { isCenter: boolean; index: number | null } => {
-      const { position, currentLevelApps, deadZoneRadius, config, actualMenuRadius, actualIconSize } =
-        stateRef.current;
+      const {
+        position,
+        currentLevelApps,
+        deadZoneRadius,
+        config,
+        actualMenuRadius,
+        actualIconSize,
+        fileMode: aimingFile,
+      } = stateRef.current;
       if (!point) return { isCenter: true, index: null };
 
       const deltaX = point.x - position.x;
@@ -839,6 +859,18 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
         return { isCenter: true, index: null };
       }
       if (currentLevelApps.length === 0) return { isCenter: false, index: null };
+
+      /**
+       * Roda de ficheiros: a mira tem de usar a mesma origem angular das pétalas
+       * (3 itens começam à esquerda; o resto no topo). A fórmula da roda de apps
+       * deslocava o destaque para a fatia vizinha.
+       */
+      if (aimingFile) {
+        return {
+          isCenter: false,
+          index: filePetalIndexAt(deltaX, deltaY, currentLevelApps.length),
+        };
+      }
 
       const sliceAngle = 360 / currentLevelApps.length;
 
@@ -1607,9 +1639,10 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
               <div
                 className="absolute top-0 left-0 z-30 pointer-events-auto cursor-pointer"
                 style={{
-                  width: `${hubHitSize}px`,
-                  height: `${hubHitSize}px`,
+                  width: `${fileMode ? deadZoneRadius * 2 : hubHitSize}px`,
+                  height: `${fileMode ? deadZoneRadius * 2 : hubHitSize}px`,
                   transform: 'translate(-50%, -50%)',
+                  borderRadius: fileMode ? '50%' : undefined,
                 }}
                 onMouseDown={(e) => e.stopPropagation()}
                 onMouseUp={(e) => e.stopPropagation()}
@@ -1623,6 +1656,9 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
 
             {fileMode && (
               <FilePetalWheel
+                accent={radialHoverColor}
+                theme={config.appearanceTheme === 'white' ? 'white' : 'black'}
+                surfaceAlpha={surfaceAlpha}
                 items={currentLevelApps}
                 activeIndex={activeIndex}
                 centerActive={isCenterActive}
@@ -1653,7 +1689,7 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
                  * que não têm aresta para serrilhar. O fundo sobe de .78 para .90 porque deixou
                  * de haver anel a segurar o contorno sobre um wallpaper claro.
                  */
-                backgroundColor: isCenterActive ? radialHoverColor : 'rgba(6,7,9,0.90)',
+                backgroundColor: isCenterActive ? radialHoverColor : `rgba(6,7,9,${Math.min(0.9, surfaceAlpha)})`,
                 /** A borda não é CSS — é um `<circle>` SVG lá dentro. Ver o comentário do anel. */
                 border: 'none',
                 color: isCenterActive ? radialHoverForeground : undefined,
@@ -1838,6 +1874,7 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
                     actualIconSize={actualIconSize}
                     totalApps={currentLevelApps.length}
                     backdropOpacity={config.backdropOpacity}
+                    surfaceAlpha={surfaceAlpha}
                     hoverColor={radialHoverColor}
                     showLabels={config.showLabels}
                     alwaysShowAppLabels={config.alwaysShowAppLabels ?? false}
