@@ -216,6 +216,8 @@ function installScreenshot(ctx) {
   const parkWindow = (win) => {
     if (!win || win.isDestroyed()) return;
     try {
+      // Ociosa = opacidade 0: nada visível mesmo que a superfície do Chromium saia opaca (cinza).
+      win.setOpacity(0);
       win.setIgnoreMouseEvents(true);
       win.setAlwaysOnTop(false);
       win.setFocusable(false);
@@ -489,7 +491,10 @@ function installScreenshot(ctx) {
     if (!win.isDestroyed()) {
       win.setBounds(bounds);
       win.setIgnoreMouseEvents(true);
-      // Único show da vida da janela, ainda transparente (renderer sem sessão).
+      // Único show da vida da janela, com opacidade 0: no arranque a superfície do Chromium podia
+      // sair opaca (#2b2b2b) e cobria o PC inteiro até fechar o VOR. Só passa a opacidade 1 quando
+      // o renderer confirma que pintou o frame congelado ("painted"), por baixo do congelado nativo.
+      win.setOpacity(0);
       win.showInactive();
       // Uma janela transparente mostrada depois de carregar escondida pode ficar com a superfície
       // opaca (cinza) até o próximo paint: força um repaint transparente.
@@ -573,6 +578,7 @@ function installScreenshot(ctx) {
       clearTimeout(helperHideTimer);
       helperHideTimer = setTimeout(() => {
         ctx.diagLog("[Screenshot] painted não chegou em 800 ms, a esconder o congelado");
+        if (!win.isDestroyed() && overlay === win) win.setOpacity(1);
         helperSend("hide");
       }, 800);
     };
@@ -925,7 +931,10 @@ function installScreenshot(ctx) {
       if (action === "painted") {
         clearTimeout(helperHideTimer);
         ctx.diagLog(`[Screenshot] pintado ${Date.now() - openedAt} ms após o frame`);
-        helperSend("hide");
+        overlay.setOpacity(1);
+        ctx.diagLog(`[Screenshot] opacidade ${overlay.getOpacity()}`);
+        // Um frame do DWM já opaco antes de tirar o congelado nativo de cima.
+        setTimeout(() => helperSend("hide"), 34);
         return { ok: true };
       }
       if (action === "cancel") {
