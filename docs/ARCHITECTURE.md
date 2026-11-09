@@ -1,7 +1,7 @@
 # Architecture
 
-Notes on the parts of Rovyl that are not obvious from reading the code, and the reasons
-behind decisions that look arbitrary until you know what broke.
+Notes on the parts of SwiftWheel (fork of Rovyl) that are not obvious from reading the
+code, and the reasons behind decisions that look arbitrary until you know what broke.
 
 ## Layout
 
@@ -108,9 +108,15 @@ the cache is discarded when it does not match.
 
 ## Persistence
 
-`config-v2.json` in `userData`, written atomically, with a `.bak` and a quarantine path
-for corrupt blobs. `persistence-normalize.cjs` accepts both the legacy flat shape and the
-v2 nested shape and always returns `{ user, apps, config }`.
+`config-v2.json` in `userData` (`%APPDATA%\SwiftWheel` and the macOS/Linux equivalents),
+written atomically, with a `.bak` and a quarantine path for corrupt blobs.
+`persistence-normalize.cjs` accepts both the legacy flat shape and the v2 nested shape
+and always returns `{ user, apps, config }`.
+
+On the first start, if that folder has no profile yet and `%APPDATA%\VOR` (or the older
+Zenith folders) does, `backend/user-data-migrate.cjs` copies the profile across and
+leaves the old folder in place. The copy is idempotent and does not overwrite files
+already present in SwiftWheel.
 
 On read, the stored config is spread **over `DEFAULT_UI_CONFIG`**. Without that base, any
 setting introduced after a file was written arrives as `undefined` instead of its default,
@@ -131,9 +137,17 @@ the Store forbids one, and a submission with `autoInstallOnAppQuit` active fails
 certification — and skips the license gate, because the Store collected payment before it
 handed over the package.
 
-The direct build keeps both: `electron-updater` against this repository's releases, and a
-license key. There is no native update dialog — the main process emits `update-state`, the
-wheel shows a badge on the hub, and Settings → Advanced offers the restart.
+The direct build keeps both: `electron-updater` against this repository's GitHub releases
+(`vitorkloy/swiftwheel`), and a license key. There is no native update dialog — the main
+process emits `update-state`, the wheel shows a badge on the hub, and Settings → Advanced
+offers the restart.
+
+Windows NSIS upgrades from VOR keep the same `appId` (`com.vitorkloy.vor`) and NSIS `guid`,
+so Add/Remove Programs treats SwiftWheel as the same product (one install, not two). The
+installer kills `VOR.exe`, deletes leftover `VOR.exe` / Start Menu / Desktop / Run entries,
+and `setLoginItemSettings` rewrites the current executable path so “start with Windows”
+keeps working. VOR 0.2.16 still asks `vitorkloy/vor` for `latest.yml`; GitHub redirects that
+name to this repo, so the old updater finds the new feed.
 
 Applying the update is `beginUpdateInstall()`, and every path goes through it: the Settings
 row, and the end of the quit flush. `autoInstallOnAppQuit` is deliberately off — it hooks

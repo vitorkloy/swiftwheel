@@ -130,7 +130,7 @@ interface SettingItem {
  * Monocromáticos — a cor fica reservada ao que é ação ou estado, nunca à navegação.
  */
 const SECTIONS: Array<{ id: SectionId; label: string; caption: string; icon: LucideIcon }> = [
-  { id: 'general', label: 'General', caption: 'Core VOR behavior.', icon: Settings },
+  { id: 'general', label: 'General', caption: 'Core SwiftWheel behavior.', icon: Settings },
   { id: 'trigger', label: 'Activation', caption: 'How and where the wheel appears.', icon: Mouse },
   { id: 'appearance', label: 'Appearance', caption: 'Shape, presence, and theme.', icon: Palette },
   { id: 'capture', label: 'Screenshots', caption: 'Freeze, mark, and keep a capture.', icon: Camera },
@@ -146,8 +146,8 @@ const PT: Record<string, string> = {
   General: 'Geral',
   About: 'Sobre',
   Version: 'Versão',
-  VOR: 'VOR',
-  'Core VOR behavior.': 'Comportamento central do VOR.',
+  SwiftWheel: 'SwiftWheel',
+  'Core SwiftWheel behavior.': 'Comportamento central do SwiftWheel.',
   Activation: 'Ativação',
   'How and where the wheel appears.': 'Como e onde a roda aparece.',
   Appearance: 'Aparência',
@@ -186,10 +186,10 @@ const PT: Record<string, string> = {
   Shortcuts: 'Atalhos',
   Format: 'Formato',
   Behavior: 'Comportamento',
-  'Print Screen can stay with Windows. If the shortcut never reaches VOR, record another combination.': 'O Print Screen pode ficar com o Windows. Se o atalho não chegar ao VOR, grave outra combinação.',
+  'Print Screen can stay with Windows. If the shortcut never reaches SwiftWheel, record another combination.': 'O Print Screen pode ficar com o Windows. Se o atalho não chegar ao SwiftWheel, grave outra combinação.',
   Startup: 'Arranque',
   'Start with Windows': 'Iniciar com o Windows',
-  'VOR is ready as soon as you sign in to Windows.': 'O VOR fica pronto assim que inicia sessão no Windows.',
+  'SwiftWheel is ready as soon as you sign in to Windows.': 'O SwiftWheel fica pronto assim que inicia sessão no Windows.',
   'Workspace switching': 'Mudança de espaço',
   'Use the visual wheel picker or number keys.': 'Use a roda visual ou as teclas numéricas.',
   Picker: 'Roda',
@@ -203,7 +203,7 @@ const PT: Record<string, string> = {
   'Open the wheel over any application.': 'Abre a roda por cima de qualquer aplicação.',
   Mouse: 'Rato',
   'Mouse trigger': 'Gatilho do rato',
-  'Open VOR with a mouse button instead of the keyboard.': 'Abre o VOR com um botão do rato em vez do teclado.',
+  'Open SwiftWheel with a mouse button instead of the keyboard.': 'Abre o SwiftWheel com um botão do rato em vez do teclado.',
   'Trigger button': 'Botão',
   'Side buttons are usually free; left and right stay with Windows.': 'Os botões laterais costumam estar livres; esquerdo e direito ficam com o Windows.',
   Wheel: 'Roda',
@@ -221,7 +221,7 @@ const PT: Record<string, string> = {
   Actions: 'Ações',
   'Key held while dragging a file.': 'Tecla mantida ao arrastar um arquivo.',
   Theme: 'Tema',
-  'VOR surfaces': 'Superfícies do VOR',
+  'SwiftWheel surfaces': 'Superfícies do SwiftWheel',
   'Applies to the window and title bar. The wheel remains dark.': 'Aplica-se à janela e à barra. A roda continua escura.',
   Black: 'Preto',
   White: 'Branco',
@@ -585,7 +585,7 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
       general: [
         {
           key: 'version', group: 'About', title: 'Version',
-          description: appVersion ? `VOR ${appVersion}` : 'VOR',
+          description: appVersion ? `SwiftWheel ${appVersion}` : 'SwiftWheel',
           kind: 'note',
         },
         {
@@ -606,7 +606,7 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
         },
         {
           key: 'openAtLogin', group: 'Startup', title: 'Start with Windows',
-          description: 'VOR is ready as soon as you sign in to Windows.',
+          description: 'SwiftWheel is ready as soon as you sign in to Windows.',
           kind: 'bool', enabled: Boolean(config.openAtLogin),
           onToggle: () => {
             const next = !config.openAtLogin;
@@ -635,7 +635,7 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
         },
         {
           key: 'mouse', group: 'App wheel', title: 'Mouse trigger',
-          description: 'Open VOR with a mouse button instead of the keyboard.',
+          description: 'Open SwiftWheel with a mouse button instead of the keyboard.',
           kind: 'bool', enabled: config.enableMouseTrigger,
           onToggle: () => update('enableMouseTrigger', !config.enableMouseTrigger),
         },
@@ -688,7 +688,7 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
       ],
       appearance: [
         {
-          key: 'theme', group: 'Theme', title: 'VOR surfaces',
+          key: 'theme', group: 'Theme', title: 'SwiftWheel surfaces',
           description: 'Settings window, title bar and the ShiftDrop wheel and windows. The app wheel stays a dark overlay.',
           kind: 'segmented', current: theme,
           choices: [{ value: 'black', label: 'Black' }, { value: 'white', label: 'White' }],
@@ -854,7 +854,7 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
               key: 'update-ready',
               group: 'Updates',
               title: `Version ${updateInfo.version ?? ''} is ready`.replace(/\s+/g, ' ').trim(),
-              description: 'Downloaded and verified. VOR restarts to finish.',
+              description: 'Downloaded and verified. SwiftWheel restarts to finish.',
               kind: 'action' as const,
               actionLabel: 'Restart now',
               actionIcon: ArrowUpFromLine,
@@ -871,7 +871,7 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
                 updateNote ??
                 (updateInfo.state === 'downloading'
                   ? `Downloading version ${updateInfo.version ?? ''}…`.replace(/\s+/g, ' ')
-                  : 'VOR checks automatically a few seconds after launch.'),
+                  : 'SwiftWheel checks automatically a few seconds after launch.'),
               kind: 'action' as const,
               actionLabel: updateBusy ? 'Checking…' : 'Check now',
               actionIcon: ArrowDownToLine,
@@ -971,7 +971,7 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
         initial={{ opacity: 0 }}
         animate={{ opacity: 1 }}
         transition={{ duration: reduceMotion ? 0 : 0.22, ease: [0.22, 1, 0.36, 1] }}
-        aria-label="VOR Settings"
+        aria-label="SwiftWheel Settings"
       >
         <aside className="zs-sidebar">
           <div className="zs-sidebar-head">
@@ -1013,7 +1013,7 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
           </nav>
 
           <div className="zs-sidebar-foot">
-            <b>VOR</b>
+            <b>SwiftWheel</b>
             {appVersion && <span>{appVersion}</span>}
           </div>
         </aside>
@@ -1492,7 +1492,7 @@ function SettingsEditor({
       const field = target === 'shot-full' ? 'shortcutFull' : target === 'shot-window' ? 'shortcutWindow' : 'shortcutRegion';
       const shot = { ...DEFAULT_SCREENSHOT, ...config.screenshot };
       title = target === 'shot-full' ? 'Full screen shortcut' : target === 'shot-window' ? 'Active window shortcut' : 'Selection shortcut';
-      description = 'Print Screen can stay with Windows. If the shortcut never reaches VOR, record another combination.';
+      description = 'Print Screen can stay with Windows. If the shortcut never reaches SwiftWheel, record another combination.';
       content = (
         <ShortcutRecorder
           value={shot[field]}
@@ -1504,7 +1504,7 @@ function SettingsEditor({
 
   if (editor.kind === 'blocked') {
     title = 'Protected applications';
-    description = 'Choose installed applications; VOR handles process matching automatically.';
+    description = 'Choose installed applications; SwiftWheel handles process matching automatically.';
     content = (
       <ProtectedAppsManager
         value={gameMode.blockedApps}

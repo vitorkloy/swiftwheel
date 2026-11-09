@@ -1,4 +1,4 @@
-// Harness das superfícies React do VOR: definições (todas as páginas), roda principal e toast de erro.
+// Harness das superfícies React do SwiftWheel: definições (todas as páginas), roda principal e toast de erro.
 import React from 'react';
 import { createRoot } from 'react-dom/client';
 import { PrecisionSettings } from '../../src/components/PrecisionSettings';

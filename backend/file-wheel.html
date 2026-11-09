@@ -2,7 +2,7 @@
 <html lang="pt-BR">
   <head>
     <meta charset="utf-8" />
-    <title>VOR</title>
+    <title>SwiftWheel</title>
     <style>
       html, body { margin: 0; width: 100%; height: 100%; background: transparent; overflow: hidden; user-select: none; }
       .hub, .slice { position: absolute; left: 50%; top: 50%; }
@@ -20,7 +20,7 @@
     <script>
       const q = new URLSearchParams(location.search);
       const data = JSON.parse(decodeURIComponent(q.get("payload") || "%7B%7D"));
-      document.getElementById("pill").textContent = "VOR / " + (data.mode || "");
+      document.getElementById("pill").textContent = "SwiftWheel / " + (data.mode || "");
       const root = document.getElementById("slices");
       (data.items || []).forEach((item, i, all) => {
         const angle = -Math.PI / 2 + (2 * Math.PI * i) / all.length;

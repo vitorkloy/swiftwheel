@@ -27,14 +27,14 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            artifact: vor-windows
+            artifact: swiftwheel-windows
             builder_args: --win nsis
             files: |
-              build-out/VOR_*_x64-setup.exe
-              build-out/VOR_*_x64-setup.exe.blockmap
+              build-out/SwiftWheel_*_x64-setup.exe
+              build-out/SwiftWheel_*_x64-setup.exe.blockmap
               build-out/latest.yml
           - os: macos-latest
-            artifact: vor-macos
+            artifact: swiftwheel-macos
             builder_args: --mac dmg zip --x64 --arm64
             files: |
               build-out/*.dmg
@@ -42,7 +42,7 @@ jobs:
               build-out/*.blockmap
               build-out/latest-mac.yml
           - os: ubuntu-latest
-            artifact: vor-linux
+            artifact: swiftwheel-linux
             builder_args: --linux AppImage deb --x64
             files: |
               build-out/*.AppImage
@@ -63,6 +63,11 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends libx11-dev libxtst-dev libxt-dev libxinerama-dev libxrandr-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxkbfile-dev
       - run: npm ci
+      - name: Unit tests
+        run: |
+          npm run test:user-data-migrate
+          npm run test:persistence-shape
+          npm run test:win32-launch
       - name: Unix platform tests
         if: runner.os != 'Windows'
         run: npm run test:platform-unix
@@ -87,7 +92,7 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          pattern: vor-*
+          pattern: swiftwheel-*
           path: dist
           merge-multiple: true
       - name: Publish GitHub Release (Windows, macOS e Linux)
@@ -102,8 +107,9 @@ jobs:
             gh release upload "$TAG" dist/* --repo "$GITHUB_REPOSITORY" --clobber
             exit 0
           fi
+          # Título SwiftWheel vX. Corpo = notes geradas pelo GitHub (PRs/commits), sem prefixo VOR.
           gh release create "$TAG" dist/* \
             --repo "$GITHUB_REPOSITORY" \
-            --title "VOR $TAG" \
+            --title "SwiftWheel $TAG" \
             --generate-notes \
             --verify-tag

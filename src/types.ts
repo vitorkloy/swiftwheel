@@ -227,7 +227,7 @@ export interface ElectronAPI {
   ) => () => void;
   runFileSlice?: (id: string, filePath: string | string[]) => Promise<{ ok: boolean; out?: string; error?: string; canceled?: boolean }>;
   noteFileDragPath?: (filePath: string) => Promise<{ ok: boolean }>;
-  /** Mostra um erro só como notificação do sistema (PT-BR, título VOR). */
+  /** Mostra um erro só como notificação do sistema (PT-BR, título SwiftWheel). */
   notifyError?: (message: string) => void;
   /** Tema/acento/vidro para as janelas do ShiftDrop (estúdio, toast, prateleira), que não são React. */
   setAppearance?: (appearance: { theme: 'black' | 'white'; accent: string; glass: boolean; opacity: number }) => void;

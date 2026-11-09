@@ -630,7 +630,7 @@ export default function App() {
     // console.log('[Icons] Cache-busted: re-fetching icons with new normalization.');
   }, [isLoaded]);
 
-  /** Erros só pela notificação do sistema (#17): nada de toast vermelho dentro do VOR. */
+  /** Erros só pela notificação do sistema (#17): nada de toast vermelho dentro do SwiftWheel. */
   useEffect(() => {
     if (!executionError) return;
     window.electron?.notifyError?.(executionError);
@@ -955,7 +955,7 @@ export default function App() {
           `Hydration: no payload but disk has data (primary=${persistenceMeta.primaryBytes} bak=${persistenceMeta.backupBytes} quarantine=${quarantineBytes}) — blocking saves`,
         );
         setExecutionError(
-          'O VOR não conseguiu ler a configuração salva. Para proteger seus dados, salvar está bloqueado até restaurar config-v2.json (ou .bak) na pasta de dados do app.',
+          'O SwiftWheel não conseguiu ler a configuração salva. Para proteger seus dados, salvar está bloqueado até restaurar config-v2.json (ou .bak) na pasta de dados do app.',
         );
       } else {
         persistenceSaveBlockedRef.current = false;

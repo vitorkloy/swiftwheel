@@ -1,13 +1,12 @@
 <div align="center">
 
-# Rovyl
+# SwiftWheel
 
 **One gesture. Any destination.**
 
 A radial launcher for Windows. Hold the middle mouse button anywhere, aim, release.
 
-[![Microsoft Store](https://img.shields.io/badge/Microsoft%20Store-Get%20it-0067b8?style=flat-square&logo=microsoft)](https://apps.microsoft.com/detail/9N03SVPMXSV1)
-![Platform](https://img.shields.io/badge/platform-Windows%2010%20%7C%2011-0078d4?style=flat-square)
+Fork of [Rovyl](https://github.com/HenryCauan/rovyl) by **HenryCauan** (HenryCa).
 
 </div>
 
@@ -32,8 +31,8 @@ Requires **Windows 10 or 11** and **Node 20+**. Windows-only by design: the trig
 icon pipeline and the window handling all depend on Win32 behaviour.
 
 ```bash
-git clone https://github.com/HenryCauan/rovyl
-cd rovyl
+git clone https://github.com/vitorkloy/swiftwheel
+cd swiftwheel
 npm install
 npm start
 ```
@@ -45,9 +44,11 @@ Google sign-in needs credentials of your own — copy `.env.example` to `.env.lo
 fill in a client ID from your own Google Cloud project. There is deliberately no default,
 so a fork never inherits someone else's OAuth client.
 
-> The dev app and the packaged app share `%APPDATA%\Rovyl`, because Electron derives it
-> from `productName`. A dev session therefore reads and writes your real configuration.
-> Pass `--user-data-dir` to work against a clean profile.
+> The dev app and the packaged app share `%APPDATA%\SwiftWheel` (macOS:
+> `~/Library/Application Support/SwiftWheel`, Linux: `~/.config/SwiftWheel`), because the
+> main process pins `userData` to that folder. A first launch copies an existing VOR
+> (or older Zenith) profile into the new folder and leaves the old one in place.
+> Pass `--user-data-dir` or `SWIFTWHEEL_USER_DATA` to work against a clean profile.
 
 <details>
 <summary><b>All scripts</b></summary>
@@ -62,6 +63,7 @@ so a fork never inherits someone else's OAuth client.
 | `npm run dist:store` | `build` + electron-builder, MSIX package for the Store |
 | `npm run verify:radial-windowing` | Checks the radial handshake invariants |
 | `npm run test:win32-launch` | Command parsing and quoting |
+| `npm run test:user-data-migrate` | VOR → SwiftWheel userData migration |
 | `npm run test:persistence-shape` | Persistence blob normalisation |
 
 </details>
@@ -78,16 +80,17 @@ window-handshake invariants. If it fails, the handshake was broken, not the test
 
 ## Links
 
-- **Microsoft Store** — [Rovyl](https://apps.microsoft.com/detail/9N03SVPMXSV1)
-- **Website and docs** — [rovyl-red.vercel.app](https://rovyl-red.vercel.app)
-- **Releases** — [github.com/HenryCauan/rovyl/releases](https://github.com/HenryCauan/rovyl/releases)
+- **Releases** — [github.com/vitorkloy/swiftwheel/releases](https://github.com/vitorkloy/swiftwheel/releases)
+- **Upstream Rovyl** — [github.com/HenryCauan/rovyl](https://github.com/HenryCauan/rovyl)
+- **Microsoft Store (Rovyl)** — [Rovyl](https://apps.microsoft.com/detail/9N03SVPMXSV1)
+- **Upstream website and docs** — [rovyl-red.vercel.app](https://rovyl-red.vercel.app)
 - **Privacy policy** — [rovyl-red.vercel.app/privacy](https://rovyl-red.vercel.app/privacy)
 
 ## License
 
 Copyright © 2026 Henry Cauan.
 
-Rovyl is free software, licensed under the **GNU General Public License v3.0** — see
+SwiftWheel is a fork of Rovyl, free software licensed under the **GNU General Public License v3.0** — see
 [LICENSE](LICENSE). You may use, study, modify and share it. If you distribute a modified
 version, you have to release its source under the same licence.
 
@@ -97,3 +100,5 @@ Microsoft Store is distributed under Microsoft's standard terms. Both are the sa
 ## Fork
 
 Este repositório é um fork de [HenryCauan/rovyl](https://github.com/HenryCauan/rovyl), criado e mantido por **HenryCauan** (HenryCa). Todo o crédito pelo projeto original é do autor. O código continua licenciado sob a **GNU GPL-3.0** (ver [LICENSE](LICENSE)); as alterações deste fork seguem a mesma licença.
+
+O produto deste fork chama-se **SwiftWheel** (antes VOR). O GitHub redireciona `vitorkloy/vor` para `vitorkloy/swiftwheel`.
