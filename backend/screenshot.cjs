@@ -2,7 +2,7 @@
 
 /**
  * Captura de tela offline. O frame vem do desktopCapturer no processo principal,
- * antes de a janela de anotação existir, para o VOR não sair na foto.
+ * antes de a janela de anotação existir, para o SwiftWheel não sair na foto.
  */
 const fs = require("fs");
 const os = require("os");
@@ -172,7 +172,7 @@ function installScreenshot(ctx) {
   const toast = (body) => {
     if (!settings().showToasts || !body) return;
     try {
-      new Notification({ title: "VOR", body: String(body) }).show();
+      new Notification({ title: "SwiftWheel", body: String(body) }).show();
     } catch (e) {
       ctx.diagLog(`[Screenshot] toast: ${e.message}`);
     }
@@ -190,7 +190,7 @@ function installScreenshot(ctx) {
     const now = new Date();
     const pad = (value) => String(value).padStart(2, "0");
     const stamp = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
-    return `VOR_${stamp}.${ext}`;
+    return `SwiftWheel_${stamp}.${ext}`;
   };
 
   const writeImage = (dataUrl, format) => {
@@ -492,7 +492,7 @@ function installScreenshot(ctx) {
       win.setBounds(bounds);
       win.setIgnoreMouseEvents(true);
       // Único show da vida da janela, com opacidade 0: no arranque a superfície do Chromium podia
-      // sair opaca (#2b2b2b) e cobria o PC inteiro até fechar o VOR. Só passa a opacidade 1 quando
+      // sair opaca (#2b2b2b) e cobria o PC inteiro até fechar o SwiftWheel. Só passa a opacidade 1 quando
       // o renderer confirma que pintou o frame congelado ("painted"), por baixo do congelado nativo.
       win.setOpacity(0);
       win.showInactive();
@@ -678,7 +678,7 @@ function installScreenshot(ctx) {
    * processo próprio que responde ao hook na hora, BitBlt do desktop virtual e uma janela topmost
    * que mostra o frame congelado sem ativação. O `node-global-key-listener` esperava a resposta do
    * Node a cada tecla do sistema; com o main ocupado (grab de 300–850 ms) o hook estourava o
-   * LowLevelHooksTimeout e o Windows removia-o em silêncio: o atalho morria e o resto do VOR seguia.
+   * LowLevelHooksTimeout e o Windows removia-o em silêncio: o atalho morria e o resto do SwiftWheel seguia.
    */
   const helperReady = () => !!(helper && helperUp && !helper.killed);
   const helperSend = (line) => {

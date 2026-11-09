@@ -26,14 +26,18 @@ function which(cmd) {
 
 function dataRoot() {
   const base = process.env.LOCALAPPDATA || path.join(os.homedir(), "AppData", "Local");
-  return path.join(base, "VOR", "tools");
+  const next = path.join(base, "SwiftWheel", "tools");
+  const legacy = path.join(base, "VOR", "tools");
+  if (fs.existsSync(next)) return next;
+  if (fs.existsSync(legacy)) return legacy;
+  return next;
 }
 
 function plannedSoffice() {
   return path.join(dataRoot(), "LibreOffice", "program", "soffice.exe");
 }
 
-/** Instalação já presente, ou o caminho que o próprio VOR vai preencher no primeiro uso. */
+/** Instalação já presente, ou o caminho que o próprio SwiftWheel vai preencher no primeiro uso. */
 function sofficePath() {
   const roots = [process.env.ProgramFiles, process.env["ProgramFiles(x86)"], process.env.ProgramW6432].filter(Boolean);
   for (const root of roots) {
@@ -89,7 +93,7 @@ function pandocPath() {
   return findExe(path.join(dataRoot(), "Pandoc"), "pandoc.exe") || path.join(dataRoot(), "Pandoc", "pandoc.exe");
 }
 
-/** ffmpeg no PATH, ou o portátil que o VOR baixa sozinho no primeiro uso (como o ImageMagick). */
+/** ffmpeg no PATH, ou o portátil que o SwiftWheel baixa sozinho no primeiro uso (como o ImageMagick). */
 function ffmpegPath() {
   const onPath = which("ffmpeg");
   if (onPath && fs.existsSync(onPath)) return onPath;
@@ -124,7 +128,7 @@ const NET_IDLE_MS = 30000;
 
 function request(url, redirects = 0, headers = {}) {
   return new Promise((resolve, reject) => {
-    const req = https.get(url, { headers: { "User-Agent": "VOR", ...headers } }, (res) => {
+    const req = https.get(url, { headers: { "User-Agent": "SwiftWheel", ...headers } }, (res) => {
       const next = res.headers.location;
       if (res.statusCode >= 300 && res.statusCode < 400 && next) {
         res.resume();
@@ -699,7 +703,7 @@ function kindOf(fmt) {
 }
 
 /**
- * Destinos por tipo. Só entra o que o VOR consegue gerar de verdade; formatos que não se
+ * Destinos por tipo. Só entra o que o SwiftWheel consegue gerar de verdade; formatos que não se
  * podem escrever (PAGES/KEY são da Apple) ou que não fazem sentido (PDF → XLSX) ficam fora da
  * roda em vez de aparecerem como "em breve".
  */

@@ -2433,7 +2433,7 @@ const AboutTab = ({ config }: { config: UIConfig }) => {
     return (
         <motion.div className="h-full overflow-y-auto custom-scrollbar pb-24 pt-20 px-8 flex flex-col items-start gap-4" initial={{ opacity: 0 }} animate={{ opacity: 1 }}>
             <RovylLogo size={72} />
-            <h2 className="text-white text-2xl font-semibold">VOR</h2>
+            <h2 className="text-white text-2xl font-semibold">SwiftWheel</h2>
             <p className="text-white/70 text-[15px]">{t('about.body')}</p>
             <p className="text-white/40 text-[13px]">{appPackage.version}</p>
         </motion.div>
@@ -3195,7 +3195,7 @@ const UserTab = React.memo(({
                             <div className="min-w-0 flex-1 text-center sm:text-left">
                                 <div className="flex flex-wrap items-center justify-center gap-2 sm:justify-start">
                                     <h4 className="text-lg font-semibold tracking-tight text-white/95">
-                                        {user?.name || 'VOR User'}
+                                        {user?.name || 'SwiftWheel User'}
                                     </h4>
                                     {user?.isAdmin ? (
                                         <span className="rounded-md border border-red-500/20 bg-red-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-400">
@@ -3677,7 +3677,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
         try {
             const result = await window.electron.importConfig();
             if (result.success) {
-                setStatus({ type: 'success', message: getTranslation(config, 'user.import_success') || 'Backup imported successfully. VOR will relaunch...' });
+                setStatus({ type: 'success', message: getTranslation(config, 'user.import_success') || 'Backup imported successfully. SwiftWheel will relaunch...' });
             } else if (result.error) {
                 setStatus({ type: 'error', message: result.error });
             }
@@ -4744,7 +4744,7 @@ export const SettingsModal: React.FC<SettingsModalProps> = ({
                                                     <RovylLogo size={18} />
                                                 </div>
                                                 <div className="flex flex-col">
-                                                    <h2 className="text-[12px] font-bold text-white tracking-[0.1em] uppercase group-hover/logo:text-white transition-colors">VOR</h2>
+                                                    <h2 className="text-[12px] font-bold text-white tracking-[0.1em] uppercase group-hover/logo:text-white transition-colors">SwiftWheel</h2>
                                                     <span className="text-[8px] text-white/30 font-black tracking-widest uppercase group-hover/logo:text-white/50 transition-colors">Kernel Settings</span>
                                                 </div>
                                             </motion.div>

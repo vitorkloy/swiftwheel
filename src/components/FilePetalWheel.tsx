@@ -90,7 +90,7 @@ interface FilePetalWheelProps {
   centerActive: boolean;
   formatLabel: string | null;
   bloom: boolean;
-  /** Acento do VOR (Aparência → cor). Branco padrão vira o "sólido" do tema (preto no tema claro). */
+  /** Acento do SwiftWheel (Aparência → cor). Branco padrão vira o "sólido" do tema (preto no tema claro). */
   accent?: string;
   theme?: 'black' | 'white';
   /** 1 = sólido; < 1 = vidro. */
@@ -128,7 +128,7 @@ function palette(theme: 'black' | 'white', accentIn: string, alpha: number) {
 }
 
 /**
- * Roda do ShiftDrop no estilo Tangerine, com os tokens do VOR: disco de vidro, fatias em "pílula"
+ * Roda do ShiftDrop no estilo Tangerine, com os tokens do SwiftWheel: disco de vidro, fatias em "pílula"
  * separadas por um vão, brilho interno no topo, fatia apontada cheia no acento e hub em pílula.
  * Só `transform`/`opacity` animam (60 fps); entrada com leve overshoot, saída curta.
  */

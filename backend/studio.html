@@ -2,9 +2,9 @@
 <html lang="pt">
 <head>
 <meta charset="utf-8" />
-<title>VOR</title>
+<title>SwiftWheel</title>
 <style>
-  /* Tokens Zenith do VOR (src/index.css), aplicados por data-theme; o acento vem da Aparência. */
+  /* Tokens Zenith do SwiftWheel (src/index.css), aplicados por data-theme; o acento vem da Aparência. */
   :root {
     color-scheme: dark;
     --bg: rgba(21,21,23,var(--alpha,.94)); --raised: rgba(255,255,255,.055); --hover: rgba(255,255,255,.08);
@@ -89,7 +89,7 @@
 </head>
 <body>
 <div class="win" id="win">
-<header><strong id="title">VOR</strong><span id="hint"></span><button class="x" id="close" type="button" title="Fechar (Esc)">✕</button></header>
+<header><strong id="title">SwiftWheel</strong><span id="hint"></span><button class="x" id="close" type="button" title="Fechar (Esc)">✕</button></header>
 <div class="bar" id="bar" hidden></div>
 <main id="main"></main>
 <footer>
@@ -621,7 +621,7 @@ window.studio.job().then((data) => {
   job = data;
   applyTheme(job.appearance);
   const tool = String(job.id || "").slice(5);
-  $("title").textContent = (titles[tool] || "VOR") + (job.total > 1 ? ` · ${job.index + 1} de ${job.total}` : "");
+  $("title").textContent = (titles[tool] || "SwiftWheel") + (job.total > 1 ? ` · ${job.index + 1} de ${job.total}` : "");
   // Faixa de miniaturas do lote: mostra onde você está; o ajuste anterior é mantido no próximo arquivo.
   (job.files || []).slice(0, 12).forEach((f, i) => {
     const t = document.createElement("span");

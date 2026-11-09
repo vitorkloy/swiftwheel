@@ -1,13 +1,13 @@
 {
-  "name": "vor",
+  "name": "swiftwheel",
   "private": true,
   "version": "0.2.16",
   "main": "backend/electron-main.js",
   "author": "vitorkloy",
-  "description": "VOR — Visual Operations Router",
+  "description": "SwiftWheel — radial launcher (fork of Rovyl)",
   "repository": {
     "type": "git",
-    "url": "https://github.com/vitorkloy/vor.git"
+    "url": "https://github.com/vitorkloy/swiftwheel.git"
   },
   "scripts": {
     "dev": "vite",
@@ -17,6 +17,7 @@
     "start:runtime": "concurrently -k \"npm run dev\" \"npm run electron\"",
     "dist": "npm run build && node scripts/run-electron-builder.mjs",
     "test:win32-launch": "node --test backend/win32-launch.test.cjs",
+    "test:user-data-migrate": "node --test backend/user-data-migrate.test.cjs",
     "test:persistence-shape": "node scripts/persistence-normalize-smoke.mjs",
     "verify:radial-windowing": "node scripts/verify-radial-windowing.mjs",
     "release": "node scripts/release.mjs",
@@ -57,7 +58,8 @@
   },
   "build": {
     "appId": "com.vitorkloy.vor",
-    "productName": "VOR",
+    "productName": "SwiftWheel",
+    "executableName": "SwiftWheel",
     "icon": "build/icon.ico",
     "files": [
       "dist/**/*",
@@ -83,7 +85,7 @@
     "publish": {
       "provider": "github",
       "owner": "vitorkloy",
-      "repo": "vor",
+      "repo": "swiftwheel",
       "releaseType": "release"
     },
     "afterPack": "./scripts/after-pack-win-icon.cjs",
@@ -96,7 +98,7 @@
       "signAndEditExecutable": false
     },
     "nsis": {
-      "uninstallDisplayName": "VOR",
+      "uninstallDisplayName": "SwiftWheel",
       "installerIcon": "build/icon.ico",
       "uninstallerIcon": "build/icon.ico",
       "installerHeaderIcon": "build/icon.ico",
@@ -105,8 +107,9 @@
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
       "createDesktopShortcut": true,
+      "shortcutName": "SwiftWheel",
       "guid": "7c2a9e14-6b21-4d0a-9f33-000000000200",
-      "artifactName": "VOR_${version}_x64-setup.${ext}",
+      "artifactName": "SwiftWheel_${version}_x64-setup.${ext}",
       "include": "nsis/installer.nsh",
       "deleteAppDataOnUninstall": true
     },
@@ -115,7 +118,7 @@
       "publisher": "CN=B2313BE4-E4A4-4805-A379-905ED98AD53F",
       "publisherDisplayName": "HenryCa",
       "applicationId": "VOR",
-      "displayName": "VOR",
+      "displayName": "SwiftWheel",
       "backgroundColor": "#101014",
       "showNameOnTiles": false,
       "languages": [
@@ -145,7 +148,7 @@
       "hardenedRuntime": false,
       "artifactName": "${productName}-${version}-mac-${arch}.${ext}",
       "extendInfo": {
-        "NSAppleEventsUsageDescription": "O VOR abre os aplicativos que você escolhe no menu radial."
+        "NSAppleEventsUsageDescription": "O SwiftWheel abre os aplicativos que você escolhe no menu radial."
       }
     },
     "dmg": {

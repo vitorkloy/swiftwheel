@@ -66,11 +66,11 @@ module.exports = async function afterPackWinIcon(context) {
     "file-version": pkg.version,
     "product-version": pkg.version,
     "version-string": {
-      FileDescription: "Rovyl",
-      ProductName: "Rovyl",
-      InternalName: "Rovyl",
+      FileDescription: "SwiftWheel",
+      ProductName: "SwiftWheel",
+      InternalName: "SwiftWheel",
       OriginalFilename: `${path.basename(exePath)}`,
-      CompanyName: "Henry Cauan",
+      CompanyName: "vitorkloy",
       LegalCopyright: `Copyright © ${year} Henry Cauan`,
     },
   });

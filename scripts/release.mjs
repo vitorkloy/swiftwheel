@@ -1,5 +1,5 @@
 /**
- * Publica uma release do Rovyl, verificando primeiro tudo o que pode correr mal.
+ * Publica uma release do SwiftWheel, verificando primeiro tudo o que pode correr mal.
  *
  * O `electron-builder --publish always` só descobre os problemas no FIM: compila dez minutos,
  * empacota, carrega os ficheiros — e só então falha porque o repositório está vazio, ou porque o
@@ -33,7 +33,7 @@ async function api(pathname, init = {}) {
     ...init,
     headers: {
       Accept: "application/vnd.github+json",
-      "User-Agent": "rovyl-release",
+      "User-Agent": "swiftwheel-release",
       ...(token ? { Authorization: `Bearer ${token}` } : {}),
       ...(init.headers || {}),
     },
@@ -41,7 +41,7 @@ async function api(pathname, init = {}) {
   return response;
 }
 
-console.log(`\nRovyl ${version} → ${owner}/${repo}\n`);
+console.log(`\nSwiftWheel ${version} → ${owner}/${repo}\n`);
 
 /* ── 1. Token ─────────────────────────────────────────────────────────────── */
 if (!token) {

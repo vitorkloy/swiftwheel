@@ -1,4 +1,6 @@
-// vor-capture: helper nativo da captura do VOR (Windows).
+// vor-capture: helper nativo da captura do SwiftWheel (Windows).
+// O nome do binário (vor-capture.exe) fica: é interno, o protocolo vor-shot e o atalho
+// vor:screenshot estão gravados nos perfis existentes.
 // - Atalhos via WH_KEYBOARD_LL numa thread própria que responde na hora (sem ida e volta ao Node),
 //   então o Windows nunca remove o hook por LowLevelHooksTimeout.
 // - Congela a tela com BitBlt (GDI) do desktop virtual inteiro, em pixels físicos (Per-Monitor V2),

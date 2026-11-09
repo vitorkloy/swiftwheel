@@ -17,6 +17,8 @@ let vorAppearance = { theme: "black", accent: "#FFFFFF", glass: true, opacity: 0
 const vorAppearanceHooks = new Set();
 const { autoUpdater } = require("electron-updater");
 const { Notification: UpdateNotification } = require("electron");
+const { PRODUCT_NAME, APP_ID } = require("./product.cjs");
+const { migrateUserDataIfNeeded } = require("./user-data-migrate.cjs");
 const path = require("path");
 const { exec, spawn, execFile, execFileSync } = require("child_process");
 const os = require("os");
@@ -52,7 +54,7 @@ protocol.registerSchemesAsPrivileged([
 ]);
 
 const isDev = !app.isPackaged;
-/** Enquanto o frame está a ser lido, show/resize do painel não pode voltar a pintar o VOR na foto. */
+/** Enquanto o frame está a ser lido, show/resize do painel não pode voltar a pintar o SwiftWheel na foto. */
 let screenshotGrabbing = false;
 let startScreenshot = async () => {};
 let restartCaptureShortcut = () => {};
@@ -183,15 +185,18 @@ function applyEnvFileContent(content) {
 }
 
 /**
- * Rovyl keeps one profile for packaged and development builds. During the rebrand,
- * copy the former Zenith profile forward so existing workspaces and preferences survive.
- * `ZENITH_USER_DATA` remains supported as a backwards-compatible environment override.
- * Must run before any `app.getPath("userData")`.
+ * Um perfil para o build empacotado e o de desenvolvimento. Pasta nova: SwiftWheel
+ * (%APPDATA%\SwiftWheel e equivalentes). Se só existir o perfil VOR (ou Zenith),
+ * copia-se na primeira arranque — idempotente, sem apagar a pasta antiga.
+ * `SWIFTWHEEL_USER_DATA` / `ROVYL_USER_DATA` / `ZENITH_USER_DATA` continuam a forçar o caminho.
+ * Tem de correr antes de qualquer `app.getPath("userData")`.
  */
 function ensureUnifiedUserDataDirectory() {
   const udOverride = (
+    process.env.SWIFTWHEEL_USER_DATA ||
     process.env.ROVYL_USER_DATA ||
     process.env.ZENITH_USER_DATA ||
+    process.env.VOR_USER_DATA ||
     ""
   ).trim();
   if (udOverride) {
@@ -200,49 +205,14 @@ function ensureUnifiedUserDataDirectory() {
       diagLog(`[Persist] userData override=${app.getPath("userData")}`);
       return;
     } catch (e) {
-      console.error("ROVYL_USER_DATA setPath failed:", e.message);
+      console.error("SWIFTWHEEL_USER_DATA setPath failed:", e.message);
     }
   }
 
   try {
-    const appData = app.getPath("appData");
-    const unifiedDir = path.join(appData, "VOR");
-    const unifiedCfg = path.join(unifiedDir, "config-v2.json");
-    const legacyDirs = [
-      path.join(appData, "Zenith OS"),
-      path.join(appData, "zenith-radial-menu"),
-    ];
-    const legacyDir = legacyDirs.find((dir) =>
-      fs.existsSync(path.join(dir, "config-v2.json")),
-    );
-
-    if (!fs.existsSync(unifiedCfg) && legacyDir) {
-      if (!fs.existsSync(unifiedDir)) {
-        fs.mkdirSync(unifiedDir, { recursive: true });
-      }
-      for (const f of [
-        "config-v2.json",
-        "config-v2.json.bak",
-        "settings.json",
-        "zenith-persistence.log",
-        "rovyl-persistence.log",
-        "icon-cache.json",
-      ]) {
-        const src = path.join(legacyDir, f);
-        const dst = path.join(unifiedDir, f);
-        if (fs.existsSync(src) && !fs.existsSync(dst)) {
-          try {
-            fs.copyFileSync(src, dst);
-            diagLog(`[Persist] Migrated legacy profile ${f} → VOR userData`);
-          } catch (e) {
-            diagLog(`[Persist] Migrate ${f} failed: ${e.message}`);
-          }
-        }
-      }
-    }
-
-    app.setPath("userData", unifiedDir);
-    diagLog(`[Persist] VOR userData: ${unifiedDir}`);
+    const result = migrateUserDataIfNeeded(app.getPath("appData"), { log: diagLog });
+    app.setPath("userData", result.userDataDir);
+    diagLog(`[Persist] SwiftWheel userData: ${result.userDataDir}`);
   } catch (e) {
     console.error("ensureUnifiedUserDataDirectory:", e.message);
   }
@@ -586,7 +556,7 @@ async function loadRecentlyOpenedPathsFromVscdb(vscdbPath) {
   }
 }
 
-diagLog("VOR Main Process Started");
+diagLog("SwiftWheel Main Process Started");
 
 /**
  * Ctrl+C no terminal envia SIGINT ao processo Node/Electron. Sem este handler, o processo
@@ -671,9 +641,9 @@ if (process.env.ZENITH_AGGRESSIVE_GPU !== "1") {
 }
 diagLog("[Perf] Background throttling dynamically controlled by window visibility.");
 
-// Fix Taskbar Icon Grouping
-app.setName("VOR");
-app.setAppUserModelId("com.vitorkloy.vor");
+// Fix Taskbar Icon Grouping — AppUserModelId fica o do VOR para toasts/agrupamento no upgrade.
+app.setName(PRODUCT_NAME);
+app.setAppUserModelId(APP_ID);
 // app.setPath("userData", path.join(os.tmpdir(), "zenith-radial-menu-cache")); // REMOVED: tmpdir is not persistent
 
 // Single instance: prevents two Zenith processes when login startup is slow and the user launches manually.
@@ -2744,7 +2714,7 @@ function beginUpdateInstall() {
  * assinatura não pode auto-instalar (o Squirrel.Mac recusa) e o .deb precisa de root — nesses
  * casos só avisamos e abrimos a página da release.
  */
-const UPDATE_RELEASES_URL = "https://github.com/vitorkloy/rovyl/releases/latest";
+const UPDATE_RELEASES_URL = "https://github.com/vitorkloy/swiftwheel/releases/latest";
 function canSelfInstallUpdate() {
   if (process.platform === "win32") return true;
   if (process.platform === "linux") return Boolean(process.env.APPIMAGE);
@@ -2810,7 +2780,7 @@ function configureAutoUpdates() {
   });
 
   /**
-   * Mesma abordagem do ShiftDrop: checa as Releases do GitHub (vitorkloy/rovyl, via `latest.yml`)
+   * Mesma abordagem do ShiftDrop: checa as Releases do GitHub (vitorkloy/swiftwheel, via `latest.yml`)
    * alguns segundos depois de abrir e de novo a cada 15 minutos.
    */
   const runUpdateCheck = () =>
@@ -2834,8 +2804,8 @@ function showUpdateToast(version) {
   try {
     if (!UpdateNotification.isSupported()) return;
     const toast = new UpdateNotification({
-      title: "Nova versão do VOR",
-      body: `A versão ${version} está disponível. Clique para atualizar agora (ou ela instala ao fechar o VOR).`,
+      title: `Nova versão do ${PRODUCT_NAME}`,
+      body: `A versão ${version} está disponível. Clique para atualizar agora (ou ela instala ao fechar o ${PRODUCT_NAME}).`,
     });
     if (!canSelfInstallUpdate()) {
       toast.body = `A versão ${version} está disponível. Clique para abrir a página de download.`;
@@ -2910,20 +2880,50 @@ app.whenReady().then(async () => {
     screenshot: { ...DEFAULT_SCREENSHOT },
   };
 
+  const removeLegacyWindowsLoginItems = () => {
+    if (process.platform !== "win32") return;
+    const runKey = "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run";
+    for (const name of ["VOR", "vor", "Rovyl"]) {
+      try {
+        execFileSync("reg.exe", ["delete", runKey, "/v", name, "/f"], {
+          windowsHide: true,
+          stdio: "ignore",
+        });
+      } catch (_) {
+        /* valor ausente — ok */
+      }
+    }
+    const startup = path.join(
+      app.getPath("appData"),
+      "Microsoft",
+      "Windows",
+      "Start Menu",
+      "Programs",
+      "Startup",
+    );
+    for (const name of ["VOR.lnk", "Rovyl.lnk"]) {
+      try {
+        fs.unlinkSync(path.join(startup, name));
+      } catch (_) {
+        /* atalho ausente — ok */
+      }
+    }
+  };
+
   const syncLoginItemSettings = (openAtLogin) => {
     try {
-      if (typeof openAtLogin === "boolean") {
-        const currentLoginSettings = app.getLoginItemSettings();
-        if (currentLoginSettings.openAtLogin !== openAtLogin) {
-          app.setLoginItemSettings({
-            openAtLogin: openAtLogin,
-            path: app.getPath("exe"),
-          });
-          console.log(
-            `Login item settings synced: openAtLogin = ${openAtLogin}`,
-          );
-        }
-      }
+      if (typeof openAtLogin !== "boolean") return;
+      removeLegacyWindowsLoginItems();
+      /**
+       * Sempre reescreve o caminho. Depois do upgrade VOR → SwiftWheel o boolean já é
+       * `true`, mas o Run ainda apontava para VOR.exe; saltar o write deixava o arranque
+       * com o Windows a lançar o binário antigo (ou nada, se o NSIS o apagou).
+       */
+      app.setLoginItemSettings({
+        openAtLogin,
+        path: app.getPath("exe"),
+      });
+      console.log(`Login item settings synced: openAtLogin = ${openAtLogin}`);
     } catch (e) {
       console.error("Failed to sync login item settings:", e);
     }
@@ -3483,7 +3483,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle("export-config", async () => {
     const result = await dialog.showSaveDialog(mainWindow, {
-      title: "Export VOR Backup",
+      title: `Export ${PRODUCT_NAME} Backup`,
       defaultPath: path.join(app.getPath("downloads"), "rovyl-backup.json"),
       filters: [{ name: "JSON", extensions: ["json"] }],
     });
@@ -3515,7 +3515,7 @@ app.whenReady().then(async () => {
 
   ipcMain.handle("import-config", async () => {
     const result = await dialog.showOpenDialog(mainWindow, {
-      title: "Import VOR Backup",
+      title: `Import ${PRODUCT_NAME} Backup`,
       filters: [{ name: "JSON", extensions: ["json"] }],
       properties: ["openFile"],
     });
@@ -3882,7 +3882,7 @@ app.whenReady().then(async () => {
       ]));
     };
     rebuildTrayMenu();
-    tray.setToolTip("VOR");
+    tray.setToolTip(PRODUCT_NAME);
     screen.on("display-metrics-changed", () => {
       try {
         if (!tray || tray.isDestroyed()) return;
@@ -4215,7 +4215,7 @@ app.whenReady().then(async () => {
           copyFileToClipboard(list);
           try {
             const { Notification } = require("electron");
-            if (Notification.isSupported()) new Notification({ title: "VOR", body: list.length > 1 ? `${list.length} itens copiados — cole no app para compartilhar.` : "Arquivo copiado — cole no app para compartilhar." }).show();
+            if (Notification.isSupported()) new Notification({ title: PRODUCT_NAME, body: list.length > 1 ? `${list.length} itens copiados — cole no app para compartilhar.` : "Arquivo copiado — cole no app para compartilhar." }).show();
           } catch { /* ignore */ }
         };
         if (list.length !== 1) { fallback(); return; }
@@ -4386,7 +4386,7 @@ app.whenReady().then(async () => {
           : "Não foi possível processar este arquivo.";
         try {
           const { Notification } = require("electron");
-          if (Notification.isSupported()) new Notification({ title: "VOR", body }).show();
+          if (Notification.isSupported()) new Notification({ title: PRODUCT_NAME, body }).show();
         } catch { /* ignore */ }
         return body;
       };
@@ -4583,7 +4583,7 @@ app.whenReady().then(async () => {
     tray.setContextMenu(contextMenu);
 
     // Feedback de início
-    console.log("VOR started successfully in the background.");
+    console.log("SwiftWheel started successfully in the background.");
   } catch (err) {
     console.error("Failed to create tray icon:", err);
   }
@@ -4604,7 +4604,7 @@ app.whenReady().then(async () => {
   const altZOverlayHint = (shortcutStr) => {
     const k = shortcutCompactKey(shortcutStr);
     if (k === "alt+z" || k === "option+z") {
-      return " Alt+Z is commonly reserved by the NVIDIA GeForce Experience overlay or another app. Disable it there or choose a different shortcut in VOR Settings.";
+      return " Alt+Z is commonly reserved by the NVIDIA GeForce Experience overlay or another app. Disable it there or choose a different shortcut in SwiftWheel Settings.";
     }
     return "";
   };
@@ -4915,7 +4915,7 @@ app.whenReady().then(async () => {
 
   /** Windows: run NSIS uninstaller from registry, or open Apps settings; dev → Apps; macOS: reveal .app in Finder. */
   ipcMain.handle("open-system-uninstall", async () => {
-    const displayName = "VOR";
+    const displayName = PRODUCT_NAME;
     try {
       if (process.platform === "win32") {
         if (isDev) {
@@ -4925,11 +4925,11 @@ app.whenReady().then(async () => {
         const esc = (s) => String(s).replace(/'/g, "''");
         const ps = [
           "$ErrorActionPreference='SilentlyContinue'",
-          `$n='${esc(displayName)}'`,
+          `$names=@('${esc(displayName)}','VOR')`,
           "$roots=@('HKLM:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall','HKLM:\\SOFTWARE\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall','HKCU:\\SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall')",
           "foreach($r in $roots){",
           "if(-not(Test-Path $r)){continue};",
-          "$hit=Get-ChildItem $r -EA 0 | ForEach-Object { Get-ItemProperty $_.PSPath -EA 0 } | Where-Object { $_.DisplayName -eq $n -and $_.UninstallString } | Select-Object -First 1;",
+          "$hit=Get-ChildItem $r -EA 0 | ForEach-Object { Get-ItemProperty $_.PSPath -EA 0 } | Where-Object { $names -contains $_.DisplayName -and $_.UninstallString } | Select-Object -First 1;",
           "if($hit){ [Console]::Out.Write($hit.UninstallString); exit 0 }",
           "}",
           "exit 1",
@@ -5136,7 +5136,7 @@ app.whenReady().then(async () => {
     const endpoint = process.env.ROVYL_LICENSE_API_URL || "https://rovyl-red.vercel.app/api/license/activate";
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "User-Agent": `VOR/${app.getVersion()}` },
+      headers: { "Content-Type": "application/json", "User-Agent": `${PRODUCT_NAME}/${app.getVersion()}` },
       body: JSON.stringify({
         idToken,
         deviceId: getOrCreateLicenseDeviceId(),
@@ -5145,7 +5145,7 @@ app.whenReady().then(async () => {
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok || result.licensed !== true) {
-      const error = new Error(result.error || "VOR purchase could not be verified.");
+      const error = new Error(result.error || "SwiftWheel purchase could not be verified.");
       error.code = result.code || "LICENSE_DENIED";
       throw error;
     }
@@ -5156,7 +5156,7 @@ app.whenReady().then(async () => {
     const endpoint = process.env.ROVYL_LICENSE_KEY_API_URL || "https://rovyl-red.vercel.app/api/license/activate-key";
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "User-Agent": `VOR/${app.getVersion()}` },
+      headers: { "Content-Type": "application/json", "User-Agent": `${PRODUCT_NAME}/${app.getVersion()}` },
       body: JSON.stringify({
         licenseKey,
         deviceId: getOrCreateLicenseDeviceId(),
@@ -5165,7 +5165,7 @@ app.whenReady().then(async () => {
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok || result.licensed !== true) {
-      const error = new Error(result.error || "This VOR license could not be activated.");
+      const error = new Error(result.error || "This SwiftWheel license could not be activated.");
       error.code = result.code || "LICENSE_DENIED";
       throw error;
     }
@@ -5186,7 +5186,7 @@ app.whenReady().then(async () => {
       "https://rovyl-red.vercel.app/api/license/deactivate";
     const response = await fetch(endpoint, {
       method: "POST",
-      headers: { "Content-Type": "application/json", "User-Agent": `VOR/${app.getVersion()}` },
+      headers: { "Content-Type": "application/json", "User-Agent": `${PRODUCT_NAME}/${app.getVersion()}` },
       body: JSON.stringify({ deviceId: getOrCreateLicenseDeviceId() }),
     });
     if (response.status === 404) {
@@ -5247,7 +5247,7 @@ app.whenReady().then(async () => {
       return {
         ok: true,
         license: {
-          name: "VOR Dev",
+          name: "SwiftWheel Dev",
           email: "dev@rovyl.app",
           isPremium: true,
           isAdmin: true,
@@ -5282,7 +5282,7 @@ app.whenReady().then(async () => {
   function sendZenithAuthSuccessHtml(res) {
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(`<!DOCTYPE html>
-<html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>VOR — signed in</title>
+<html><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/><title>SwiftWheel — signed in</title>
 <style>
   *{box-sizing:border-box}
   body{font-family:system-ui,-apple-system,Segoe UI,sans-serif;display:flex;flex-direction:column;align-items:center;justify-content:center;min-height:100vh;margin:0;background:#0a0a0a;color:#e8e8e8;-webkit-font-smoothing:antialiased}
@@ -5305,8 +5305,8 @@ app.whenReady().then(async () => {
     <div class="card-inner">
       <div class="strip" aria-hidden="true"></div>
       <div class="icon-wrap" aria-hidden="true"><div class="icon-in"><svg viewBox="0 0 24 24" stroke-linecap="round" stroke-linejoin="round"><path d="M22 11.08V12a10 10 0 1 1-5.93-9.14"/><polyline points="22 4 12 14.01 9 11.01"/></svg></div></div>
-      <h1>Signed in to VOR</h1>
-      <p>This page finished linking your account. Return to the VOR window &mdash; it should already be signed in.</p>
+      <h1>Signed in to SwiftWheel</h1>
+      <p>This page finished linking your account. Return to the SwiftWheel window &mdash; it should already be signed in.</p>
       <p class="sub">You can close this tab.</p>
     </div>
   </div>
@@ -5343,8 +5343,8 @@ app.whenReady().then(async () => {
       const msg =
         "Google sign-in needs an OAuth client ID. Add GOOGLE_WEB_CLIENT_ID (same as the website / VITE_GOOGLE_CLIENT_ID) or GOOGLE_CLIENT_ID to .env.local in:\n\n" +
         (userDataHint || "AppData") +
-        "\n\nThen restart VOR.";
-      dialog.showErrorBox("VOR — Google sign-in", msg);
+        "\n\nThen restart SwiftWheel.";
+      dialog.showErrorBox("SwiftWheel — Google sign-in", msg);
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("google-auth-error", {
           code: "MISSING_OAUTH_CONFIG",
@@ -5402,9 +5402,9 @@ app.whenReady().then(async () => {
             if (mainWindow && !mainWindow.isDestroyed()) {
               mainWindow.webContents.send("google-auth-error", { code: e.code || "LICENSE_DENIED", message: e.message });
             }
-            dialog.showErrorBox("VOR — license required", e.message);
+            dialog.showErrorBox("SwiftWheel — license required", e.message);
             res.writeHead(e.code === "PURCHASE_REQUIRED" ? 403 : 400, { "Content-Type": "text/plain; charset=utf-8" });
-            res.end(e.code === "PURCHASE_REQUIRED" ? "No VOR purchase was found for this Google account." : "Could not verify your VOR license.");
+            res.end(e.code === "PURCHASE_REQUIRED" ? "No SwiftWheel purchase was found for this Google account." : "Could not verify your SwiftWheel license.");
           });
         return;
       }
@@ -5474,9 +5474,9 @@ app.whenReady().then(async () => {
                               sendZenithAuthSuccessHtml(res);
                             } catch (e) {
                               diagLog(`[Auth] Legacy license failed (${e.code || "LICENSE_DENIED"}): ${e.message}`);
-                              dialog.showErrorBox("VOR — license required", e.message);
+                              dialog.showErrorBox("SwiftWheel — license required", e.message);
                               res.writeHead(403, { "Content-Type": "text/plain; charset=utf-8" });
-                              res.end("No active VOR license was found for this account.");
+                              res.end("No active SwiftWheel license was found for this account.");
                             }
                             
                             if (authServer) {
@@ -5510,9 +5510,9 @@ app.whenReady().then(async () => {
       diagLog(`[Auth] HTTP server error: ${err.code || ""} ${err.message}`);
       const detail =
         err.code === "EADDRINUSE"
-          ? "Port 3892 is already in use. Close another VOR instance or any app using that port, then try again."
+          ? "Port 3892 is already in use. Close another SwiftWheel instance or any app using that port, then try again."
           : err.message;
-      dialog.showErrorBox("VOR — Google sign-in", detail);
+      dialog.showErrorBox("SwiftWheel — Google sign-in", detail);
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("google-auth-error", {
           code: err.code,
@@ -6126,13 +6126,13 @@ const escapeCommand = (cmd) => {
   return cmd;
 };
 
-/** #17: o único aviso de erro é a notificação do Windows, em PT-BR e com o nome VOR. */
+/** #17: o único aviso de erro é a notificação do Windows, em PT-BR e com o nome SwiftWheel. */
 const notifyErrorOs = (message) => {
   const body = String(message || "").trim();
   if (!body || /^(Cancelado|Senha cancelada)$/i.test(body)) return;
   try {
     const { Notification } = require("electron");
-    if (Notification.isSupported()) new Notification({ title: "VOR", body: body.slice(0, 240) }).show();
+    if (Notification.isSupported()) new Notification({ title: PRODUCT_NAME, body: body.slice(0, 240) }).show();
   } catch { /* ignore */ }
 };
   /** Tema/acento/vidro vindos da Aparência (renderer). As janelas HTML do ShiftDrop leem daqui, ao vivo. */
@@ -7814,7 +7814,7 @@ function fetchUrlBodyBuffer(targetUrl, maxBytes = 524288, redirectDepth = 0) {
       {
         headers: {
           "User-Agent":
-            "Mozilla/5.0 (compatible; VOR/1.0; +https://github.com)",
+            "Mozilla/5.0 (compatible; SwiftWheel/1.0; +https://github.com/vitorkloy/swiftwheel)",
           Accept: "image/avif,image/webp,image/apng,image/*,*/*;q=0.8",
         },
         timeout: 12000,
