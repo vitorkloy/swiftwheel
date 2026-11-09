@@ -12,7 +12,7 @@ import {
   withScreenshotWheel,
   workspaceContainsBundledDemoApp,
 } from './defaults';
-import { Minus, X, Maximize, Square, AlertTriangle, ArrowLeft, ArrowRight, PanelLeftClose } from 'lucide-react';
+import { Minus, X, Maximize, Square, ArrowLeft, ArrowRight, PanelLeftClose } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { isLikelyWebUrl, resolveWebsiteIconFields } from './siteFavicon';
 
@@ -180,6 +180,8 @@ export default function App() {
     mode: string;
     format: string;
     path: string;
+    /** Vários arquivos/pastas no mesmo arrasto; `path` é o primeiro. */
+    paths?: string[];
     items: { id: string; title: string; available: boolean; reason: string | null }[];
   } | null>(null);
   const fileWheelRef = useRef(fileWheel);
@@ -628,10 +630,11 @@ export default function App() {
     // console.log('[Icons] Cache-busted: re-fetching icons with new normalization.');
   }, [isLoaded]);
 
+  /** Erros só pela notificação do sistema (#17): nada de toast vermelho dentro do VOR. */
   useEffect(() => {
     if (!executionError) return;
-    const timer = window.setTimeout(() => setExecutionError(null), 4000);
-    return () => window.clearTimeout(timer);
+    window.electron?.notifyError?.(executionError);
+    setExecutionError(null);
   }, [executionError]);
 
   // Listen for execution errors from backend
@@ -952,7 +955,7 @@ export default function App() {
           `Hydration: no payload but disk has data (primary=${persistenceMeta.primaryBytes} bak=${persistenceMeta.backupBytes} quarantine=${quarantineBytes}) — blocking saves`,
         );
         setExecutionError(
-          'VOR could not read the configuration stored in AppData. Saving is blocked to protect your data. Check rovyl-persistence.log in the app data folder, look for config-v2.json.broken-* files, or restore config-v2.json / .bak.',
+          'O VOR não conseguiu ler a configuração salva. Para proteger seus dados, salvar está bloqueado até restaurar config-v2.json (ou .bak) na pasta de dados do app.',
         );
       } else {
         persistenceSaveBlockedRef.current = false;
@@ -2089,6 +2092,7 @@ export default function App() {
         mode: payload.mode,
         format: payload.format,
         path: payload.path,
+        paths: payload.paths,
         items: payload.items,
       });
     });
@@ -2208,16 +2212,7 @@ export default function App() {
         window.electron?.savePersistenceLog?.(`suppressed global shortcut toast: ${errorMsg}`);
         return;
       }
-      const isShortcutError = errorMsg.toLowerCase().includes('shortcut');
-
-      setLastLaunched({
-        id: 'error',
-        label: isShortcutError ? 'Shortcut Error' : 'Execution Error',
-        command: '',
-        iconName: 'AlertTriangle',
-        description: errorMsg
-      });
-      setTimeout(() => setLastLaunched(null), 6000);
+      // O aviso já sai pela notificação do sistema (ver efeito de executionError); sem cartão de erro no radial.
     });
 
     const cleanupWindowHidToTray = window.electron?.onWindowHidToTray(() => {
@@ -2498,7 +2493,7 @@ export default function App() {
         if (!slice || slice.available === false) {
           setExecutionError(selectedApp?.description || slice?.reason || 'Indisponível');
         } else {
-          void window.electron?.runFileSlice?.(selectedId, dragged.path);
+          void window.electron?.runFileSlice?.(selectedId, dragged.paths && dragged.paths.length > 1 ? dragged.paths : dragged.path);
         }
       }
       if (isDesktopMode && !panelSurfaceOpen) {
@@ -2618,8 +2613,8 @@ export default function App() {
     if (fileWheel) {
       const pt = (config.language || 'en') === 'pt';
       const names: Record<string, string> = pt
-        ? { compress: 'Comprimir', removeMetadata: 'Metadados', editImage: 'Editar', annotateImage: 'Anotar', frameImage: 'Fundo', cropImage: 'Cortar', cropVideo: 'Cortar', redactImage: 'Redigir', redactVideo: 'Redigir', normalizeAudio: 'Normalizar', muteVideo: 'Silenciar', trimVideo: 'Cortar tempo', trimAudio: 'Cortar tempo', splitPDF: 'Dividir', splitVideo: 'Dividir', organizePDF: 'Organizar', extractArchive: 'Extrair', createPDF: 'Criar PDF', mergePDF: 'Juntar PDF', changeVideoSpeed: 'Velocidade', joinVideos: 'Juntar', videoSnapshots: 'Instantâneo', audioToVideo: 'Visualizar', audioChannels: 'Canais', createCollage: 'Colagem', redactAudio: 'Censurar', airDrop: 'Partilhar', float: 'Flutuar', copy: 'Copiar', move: 'Mover', copyPath: 'Copiar caminho', openTerminal: 'Terminal' }
-        : { compress: 'Compress', removeMetadata: 'Metadata', editImage: 'Edit', annotateImage: 'Annotate', frameImage: 'Add background', cropImage: 'Crop', cropVideo: 'Crop', redactImage: 'Redact', redactVideo: 'Redact', normalizeAudio: 'Normalize', muteVideo: 'Mute', trimVideo: 'Trim', trimAudio: 'Trim', splitPDF: 'Split', splitVideo: 'Split', organizePDF: 'Organize', extractArchive: 'Extract', createPDF: 'Create PDF', mergePDF: 'Merge PDF', changeVideoSpeed: 'Speed', joinVideos: 'Join', videoSnapshots: 'Snapshot', audioToVideo: 'Visualize', audioChannels: 'Channels', createCollage: 'Collage', redactAudio: 'Bleep', airDrop: 'Share', float: 'Float', copy: 'Copy', move: 'Move', copyPath: 'Copy path', openTerminal: 'Terminal' };
+        ? { compress: 'Comprimir', removeMetadata: 'Metadados', editImage: 'Editar', annotateImage: 'Anotar', frameImage: 'Fundo', cropImage: 'Cortar', cropVideo: 'Cortar', redactImage: 'Ocultar', redactVideo: 'Ocultar', normalizeAudio: 'Normalizar', muteVideo: 'Silenciar', trimVideo: 'Aparar', trimAudio: 'Aparar', splitPDF: 'Dividir', splitVideo: 'Dividir', organizePDF: 'Organizar', extractArchive: 'Extrair', createPDF: 'Criar PDF', mergePDF: 'Juntar PDF', changeVideoSpeed: 'Velocidade', joinVideos: 'Juntar', videoSnapshots: 'Captura', audioToVideo: 'Visualizar', audioChannels: 'Canais', createCollage: 'Colagem', redactAudio: 'Bipar', zipFiles: 'Compactar', airDrop: 'Compartilhar', float: 'Flutuar', copy: 'Copiar', move: 'Mover', copyPath: 'Copiar caminho', openTerminal: 'Terminal', resize50: 'Reduzir 50%', resize1080: '1080p', rotate90: 'Girar' }
+        : { compress: 'Compress', removeMetadata: 'Metadata', editImage: 'Edit', annotateImage: 'Annotate', frameImage: 'Add background', cropImage: 'Crop', cropVideo: 'Crop', redactImage: 'Redact', redactVideo: 'Redact', normalizeAudio: 'Normalize', muteVideo: 'Mute', trimVideo: 'Trim', trimAudio: 'Trim', splitPDF: 'Split', splitVideo: 'Split', organizePDF: 'Organize', extractArchive: 'Extract', createPDF: 'Create PDF', mergePDF: 'Merge PDF', changeVideoSpeed: 'Speed', joinVideos: 'Join', videoSnapshots: 'Snapshot', audioToVideo: 'Visualize', audioChannels: 'Channels', createCollage: 'Collage', redactAudio: 'Bleep', zipFiles: 'Zip', airDrop: 'Share', float: 'Float', copy: 'Copy', move: 'Move', copyPath: 'Copy path', openTerminal: 'Terminal' };
       const reasons: Record<string, string> = pt
         ? { imagemagick: 'Requer ImageMagick', ffmpeg: 'Requer FFmpeg', libreoffice: 'Requer LibreOffice', ghostscript: 'Requer Ghostscript', pandoc: 'Requer Pandoc', tar: 'Requer tar.exe', soon: 'Em breve no ShiftDrop', pages: 'Pages é formato da Apple', unsupported: 'Não suportado' }
         : { imagemagick: 'Requires ImageMagick', ffmpeg: 'Requires FFmpeg', libreoffice: 'Requires LibreOffice', ghostscript: 'Requires Ghostscript', pandoc: 'Requires Pandoc', tar: 'Requires tar.exe', soon: 'Coming soon in ShiftDrop', pages: 'Pages is an Apple format', unsupported: 'Not supported' };
@@ -2628,7 +2623,7 @@ export default function App() {
         const title = names[key] || item.title;
         const reason = item.reason ? (reasons[item.reason] || item.reason) : '';
         const short: Record<string, string> = {
-          resize50: '50%', resize1080: '1080P', rotate90: pt ? 'GIRAR' : 'ROTATE',
+          resize50: '50%', resize1080: '1080P',
         };
         const icons: Record<string, string> = {
           compress: 'Minimize2', removeMetadata: 'Eraser', editImage: 'PenLine', annotateImage: 'MessageSquare',
@@ -2637,7 +2632,7 @@ export default function App() {
           splitPDF: 'SplitSquareHorizontal', splitVideo: 'SplitSquareHorizontal', organizePDF: 'ListOrdered',
           extractArchive: 'Archive', createPDF: 'FilePlus', mergePDF: 'Files', changeVideoSpeed: 'Gauge',
           joinVideos: 'Link', videoSnapshots: 'Camera', audioToVideo: 'Clapperboard', audioChannels: 'Headphones',
-          createCollage: 'LayoutGrid', redactAudio: 'AudioLines', airDrop: 'Share2', float: 'PictureInPicture2',
+          createCollage: 'LayoutGrid', redactAudio: 'AudioLines', zipFiles: 'FileArchive', airDrop: 'Share2', float: 'PictureInPicture2',
           copy: 'Copy', move: 'FolderInput', copyPath: 'Clipboard', openTerminal: 'Terminal',
           resize50: 'Scaling', resize1080: 'Monitor', rotate90: 'RotateCw',
         };
@@ -2696,6 +2691,15 @@ export default function App() {
 
   /** Tema das superfícies opacas (titlebar + painéis). O radial nunca é temado: é overlay do ambiente de trabalho. */
   const panelTheme = config.appearanceTheme === 'white' ? 'white' : 'black';
+  /** As janelas do ShiftDrop (HTML puro no main) seguem o mesmo tema/acento/vidro, ao vivo. */
+  useEffect(() => {
+    window.electron?.setAppearance?.({
+      theme: panelTheme,
+      accent: /^#[0-9a-f]{6}$/i.test(config.radialHoverColor ?? '') ? config.radialHoverColor! : '#FFFFFF',
+      glass: config.glassEffect !== false,
+      opacity: config.menuOpacity ?? 0.8,
+    });
+  }, [panelTheme, config.radialHoverColor, config.glassEffect, config.menuOpacity]);
 
   return (
     <div
@@ -2983,27 +2987,6 @@ export default function App() {
         <Toast app={lastLaunched} />
         
         <AnimatePresence>
-          {executionError && (
-            <div className="fixed bottom-8 left-1/2 -translate-x-1/2 z-[1000]">
-              <motion.div
-                initial={{ opacity: 0, y: 20 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: 20 }}
-                className="px-6 py-4 bg-red-500/90 backdrop-blur-xl border border-red-400/50 rounded-2xl shadow-2xl flex items-center gap-4 min-w-[320px]"
-              >
-                <div className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center text-white shrink-0">
-                  <AlertTriangle size={20} />
-                </div>
-                <div className="flex-1">
-                  <div className="text-[10px] font-black uppercase tracking-widest text-white/60 mb-1">Não foi possível</div>
-                  <div className="text-sm font-bold text-white leading-tight">{executionError}</div>
-                </div>
-                <button onClick={() => setExecutionError(null)} className="text-white/40 hover:text-white transition-colors">
-                  <X size={18} />
-                </button>
-              </motion.div>
-            </div>
-          )}
         </AnimatePresence>
 
 

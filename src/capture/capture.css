@@ -424,3 +424,39 @@ html, body, #root {
   font-family: "Segoe UI", sans-serif;
   color: currentColor;
 }
+
+/* ══ Camada "Tangerine" ══════════════════════════════════════════════════════
+   O véu continua nativo (Win+Shift+S): seleção nítida, alças pequenas. Só o
+   cromado (barra, pop-overs, rótulo de medidas) ganha vidro, pílula e mola. */
+:root { --zn-r-panel: 14px; --zn-r-control: 9px; --zn-r-chip: 8px; --cap-spring: cubic-bezier(.2, 1.3, .35, 1); }
+.cap-bar {
+  height: 44px; padding: 0 7px; gap: 3px; border: 0; border-radius: 999px;
+  background: rgba(24, 24, 26, .9);
+  background-image: linear-gradient(180deg, rgba(255,255,255,.07), rgba(255,255,255,0));
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.12), 0 14px 34px rgba(0,0,0,.45);
+  animation: cap-pop .18s var(--cap-spring) both;
+}
+.cap-bar button { width: 30px; height: 30px; border-radius: 999px; transition: background-color .1s, transform .14s var(--cap-spring); }
+.cap-bar button:active { transform: scale(.92); }
+.cap-bar button.is-on { background: #fff; color: #0a0a0b; }
+.cap-bar button:hover:not(.is-on) { background: rgba(255,255,255,.1); }
+.cap-color-pop, .cap-shape-pop, .cap-text-tools, .cap-text-wrap {
+  border: 0; border-radius: 14px; background: rgba(24,24,26,.94);
+  box-shadow: inset 0 0 0 1px rgba(255,255,255,.12), 0 14px 34px rgba(0,0,0,.45);
+  animation: cap-pop .16s var(--cap-spring) both;
+}
+.cap-tip, .cap-size { padding: 3px 8px; border-radius: 999px; background: rgba(20,20,22,.86); box-shadow: inset 0 0 0 1px rgba(255,255,255,.12); font-weight: 500; }
+@keyframes cap-pop { from { transform: scale(.94); opacity: 0; } }
+
+/* The frozen frame never changes during a gesture; keep it off the raster invalidation path. */
+.cap-stage img, .cap-stage canvas { will-change: transform; }
+.cap-dim { left: 0; top: 0; width: 1px; height: 1px; transform-origin: 0 0; will-change: transform; }
+
+/* Four thin composited strips, not a promoted desktop-sized bordered transparent bitmap. */
+.cap-sel { will-change: auto; border: 0; box-shadow: none; }
+.cap-edge { position: absolute; transform-origin: 0 0; will-change: transform; background: #000; pointer-events: none; }
+.cap-edge::after { content: ''; position: absolute; background: #fff; }
+.cap-edge.is-horizontal { left: 0; top: -1px; width: 1px; height: 3px; }
+.cap-edge.is-horizontal::after { left: 0; top: 1px; width: 100%; height: 1px; }
+.cap-edge.is-vertical { left: -1px; top: 0; width: 3px; height: 1px; }
+.cap-edge.is-vertical::after { left: 1px; top: 0; width: 1px; height: 100%; }

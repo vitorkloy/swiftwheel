@@ -12,6 +12,9 @@ const {
   session,
   protocol,
 } = require("electron");
+/** Aparência atual (Definições → Aparência), espelhada do renderer para as janelas do ShiftDrop. */
+let vorAppearance = { theme: "black", accent: "#FFFFFF", glass: true, opacity: 0.8 };
+const vorAppearanceHooks = new Set();
 const { autoUpdater } = require("electron-updater");
 const { Notification: UpdateNotification } = require("electron");
 const path = require("path");
@@ -52,6 +55,7 @@ const isDev = !app.isPackaged;
 /** Enquanto o frame está a ser lido, show/resize do painel não pode voltar a pintar o VOR na foto. */
 let screenshotGrabbing = false;
 let startScreenshot = async () => {};
+let restartCaptureShortcut = () => {};
 
 /**
  * Canal de distribuição. A Microsoft Store proíbe mecanismos próprios de atualização — quem
@@ -3869,6 +3873,10 @@ app.whenReady().then(async () => {
             }
           },
         },
+        {
+          label: pt ? "Reiniciar atalho de captura" : "Restart capture shortcut",
+          click: () => restartCaptureShortcut(),
+        },
         { label: `v${app.getVersion()}`, enabled: false },
         { label: pt ? "Sair" : "Quit", click: () => app.quit() },
       ]));
@@ -3894,6 +3902,8 @@ app.whenReady().then(async () => {
       let fileDragOrigin = null;
       let fileDragMode = null;
       let fileDragPath = "";
+      /** Todos os itens do arrasto (arquivo, pasta, vários ou mistos). `fileDragPath` é o primeiro. */
+      let fileDragPaths = [];
       let fileSourceOk = false;
       let fileButtonDown = false;
       let fileMods = { shift: false, ctrl: false, alt: false };
@@ -3975,9 +3985,11 @@ app.whenReady().then(async () => {
             try { fileDropHelper.stdin.write("hide\n"); } catch { /* ignore */ }
             continue;
           }
-          if (!line.startsWith("path ")) continue;
-          const dragged = line.slice(5).trim();
-          if (!dragged || dragged === fileDragPath || !fileDragOpen || !fileDragMode) continue;
+          let dragged = [];
+          if (line.startsWith("files ")) dragged = line.slice(6).split("|").map((p) => p.trim()).filter(Boolean);
+          else if (line.startsWith("path ")) dragged = [line.slice(5).trim()].filter(Boolean);
+          if (!dragged.length || !fileDragOpen || !fileDragMode) continue;
+          if (dragged.join("|") === fileDragPaths.join("|")) continue;
           const point = screen.getCursorScreenPoint();
           revealFileWheel(point.x, point.y, fileDragMode, dragged);
         }
@@ -4032,6 +4044,7 @@ app.whenReady().then(async () => {
       const releaseFileOverlay = (confirmSelection) => {
         fileDragOpen = false;
         fileDragPath = "";
+        fileDragPaths = [];
         fileGestureActive = false;
         fileDragMode = null;
         fileDragOrigin = null;
@@ -4052,18 +4065,22 @@ app.whenReady().then(async () => {
         const switching = fileDragOpen && mode !== fileDragMode;
         fileDragOpen = true;
         fileDragMode = mode;
-        if (filePath) fileDragPath = filePath;
+        const dropped = (Array.isArray(filePath) ? filePath : [filePath]).filter(Boolean);
+        if (dropped.length) {
+          fileDragPaths = dropped;
+          fileDragPath = dropped[0];
+        }
         const built = fileDragPath
-          ? shiftWheels.build(fileDragPath, mode)
+          ? shiftWheels.build(fileDragPaths.length ? fileDragPaths : [fileDragPath], mode)
           : shiftWheels.pending(mode);
         mainWindow.webContents.send("file-wheel", { ...built, x, y });
-        if (!switching && !filePath) {
+        if (!switching && !dropped.length) {
           fileGestureActive = true;
           startFileCursor();
           try { if (mainWindow.isVisible()) mainWindow.hide(); } catch { /* ignore */ }
           showFileWheelAtCursor(built, x, y);
         }
-        if (!filePath) placeFileCatcher(x, y);
+        if (!dropped.length) placeFileCatcher(x, y);
       };
       const noteFileMods = (ev) => {
         fileMods = {
@@ -4085,29 +4102,130 @@ app.whenReady().then(async () => {
         if (!mode) return;
         revealFileWheel(point.x, point.y, mode, "");
       };
+      /** Copia como arquivos (CF_HDROP): colar no Explorer/WhatsApp/e-mail cola os próprios arquivos. */
       const copyFileToClipboard = (target) => {
         const { execFileSync } = require("child_process");
-        const escaped = String(target).replace(/'/g, "''");
+        const list = (Array.isArray(target) ? target : [target]).map(String).filter(Boolean);
         execFileSync("powershell.exe", ["-NoProfile", "-STA", "-Command",
           "Add-Type -AssemblyName System.Windows.Forms; $c = New-Object System.Collections.Specialized.StringCollection; " +
-          `$c.Add('${escaped}'); [System.Windows.Forms.Clipboard]::SetFileDropList($c)`],
-          { windowsHide: true });
+          "foreach ($p in ($env:VOR_FILES -split '\\|')) { if ($p) { [void]$c.Add($p) } }; [System.Windows.Forms.Clipboard]::SetFileDropList($c)"],
+          { windowsHide: true, env: { ...process.env, VOR_FILES: list.join("|") } });
       };
-      const openFloatShelf = (target) => {
+      /**
+       * Prateleira flutuante (Float): uma janela só, reaproveitada; acumula itens, gruda na borda
+       * da tela ao soltar perto dela e arrasta os arquivos para outros apps (startDrag nativo).
+       * Fechar destrói a janela — nada fica em memória.
+       */
+      let floatShelf = null;
+      const pushShelfTheme = () => {
+        if (floatShelf && !floatShelf.isDestroyed()) floatShelf.webContents.send("shelf-theme", vorAppearance);
+      };
+      let floatItems = [];
+      const shelfIcons = new Map();
+      const pushShelf = async () => {
+        if (!floatShelf || floatShelf.isDestroyed()) return;
+        const { app: electronApp } = require("electron");
+        const items = [];
+        for (const p of floatItems) {
+          let icon = shelfIcons.get(p);
+          if (icon === undefined) {
+            try { icon = (await electronApp.getFileIcon(p, { size: "normal" })).toDataURL(); } catch { icon = ""; }
+            shelfIcons.set(p, icon);
+          }
+          items.push({ path: p, name: path.basename(p), icon });
+        }
+        if (!floatShelf || floatShelf.isDestroyed()) return;
+        floatShelf.webContents.send("shelf-theme", vorAppearance);
+        floatShelf.webContents.send("shelf-items", items);
+        const height = Math.min(440, 54 + Math.max(1, items.length) * 41 + (items.length > 1 ? 42 : 0) + 16);
+        const [w] = floatShelf.getSize();
+        floatShelf.setSize(w, height);
+        snapShelf();
+      };
+      const snapShelf = () => {
+        if (!floatShelf || floatShelf.isDestroyed()) return;
+        const b = floatShelf.getBounds();
+        const area = screen.getDisplayMatching(b).workArea;
+        const SNAP = 28;
+        let { x, y } = b;
+        if (Math.abs(b.x - area.x) < SNAP) x = area.x;
+        if (Math.abs(area.x + area.width - (b.x + b.width)) < SNAP) x = area.x + area.width - b.width;
+        if (Math.abs(b.y - area.y) < SNAP) y = area.y;
+        if (Math.abs(area.y + area.height - (b.y + b.height)) < SNAP) y = area.y + area.height - b.height;
+        x = Math.min(Math.max(x, area.x), area.x + area.width - b.width);
+        y = Math.min(Math.max(y, area.y), area.y + area.height - b.height);
+        if (x !== b.x || y !== b.y) floatShelf.setPosition(x, y);
+      };
+      vorAppearanceHooks.add(pushShelfTheme);
+      const openFloatShelf = (targets) => {
         const { BrowserWindow } = require("electron");
-        const shelf = new BrowserWindow({
-          width: 280,
-          height: 64,
-          frame: false,
-          transparent: true,
-          alwaysOnTop: true,
-          skipTaskbar: true,
-          resizable: false,
-          webPreferences: { preload: path.join(__dirname, "studio-preload.js"), contextIsolation: true },
+        const list = (Array.isArray(targets) ? targets : [targets]).map(String).filter(Boolean);
+        list.forEach((p) => { if (!floatItems.includes(p)) floatItems.push(p); });
+        if (floatShelf && !floatShelf.isDestroyed()) {
+          floatShelf.showInactive();
+          pushShelf();
+          return;
+        }
+        const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+        const w = 260;
+        floatShelf = new BrowserWindow({
+          width: w, height: 120, x: area.x + area.width - w, y: area.y + Math.round(area.height * 0.25),
+          frame: false, transparent: true, alwaysOnTop: true, skipTaskbar: true, resizable: false,
+          show: false, hasShadow: false, maximizable: false, minimizable: false, fullscreenable: false,
+          webPreferences: { preload: path.join(__dirname, "float-shelf-preload.js"), contextIsolation: true, sandbox: false },
         });
-        const name = path.basename(target).replace(/[&<>]/g, "");
-        const html = `<!doctype html><meta charset="utf-8"><body draggable="true" style="margin:8px;background:#151515;color:#f4f4f5;font:13px Segoe UI;border:1px solid rgba(255,255,255,.16);border-radius:12px;height:48px;display:flex;align-items:center;padding:0 14px;cursor:grab">${name}<script>document.body.addEventListener('dragstart',(e)=>{e.preventDefault();window.studio.drag(${JSON.stringify(target)});});</script></body>`;
-        shelf.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(html)}`);
+        floatShelf.setAlwaysOnTop(true, "floating");
+        let snapTimer = null;
+        floatShelf.on("moved", snapShelf);
+        floatShelf.on("move", () => { clearTimeout(snapTimer); snapTimer = setTimeout(snapShelf, 250); });
+        floatShelf.on("closed", () => { floatShelf = null; floatItems = []; shelfIcons.clear(); });
+        floatShelf.loadFile(path.join(__dirname, "float-shelf.html")).then(() => {
+          if (!floatShelf || floatShelf.isDestroyed()) return;
+          floatShelf.showInactive();
+          pushShelf();
+        }).catch(() => {});
+      };
+      const fromShelf = (event) => floatShelf && !floatShelf.isDestroyed() && event.sender === floatShelf.webContents;
+      ipcMain.on("shelf-drag", (event, files) => {
+        if (!fromShelf(event)) return;
+        const list = (Array.isArray(files) ? files : [files]).map(String).filter((p) => fs.existsSync(p));
+        if (!list.length) return;
+        try {
+          const { nativeImage } = require("electron");
+          const icon = nativeImage.createFromPath(path.join(__dirname, "..", "build", "icon.ico"));
+          event.sender.startDrag({ file: list[0], files: list, icon: icon.isEmpty() ? nativeImage.createEmpty() : icon.resize({ width: 32 }) });
+        } catch { /* o arrasto nativo falhou */ }
+      });
+      ipcMain.on("shelf-add", (event, files) => { if (fromShelf(event)) openFloatShelf(files); });
+      ipcMain.on("shelf-remove", (event, file) => {
+        if (!fromShelf(event)) return;
+        floatItems = floatItems.filter((p) => p !== file);
+        pushShelf();
+      });
+      ipcMain.on("shelf-open", (event, file) => { if (fromShelf(event)) require("electron").shell.openPath(String(file)).catch(() => {}); });
+      ipcMain.on("shelf-clear", (event) => { if (fromShelf(event)) { floatItems = []; pushShelf(); } });
+      ipcMain.on("shelf-close", (event) => { if (fromShelf(event)) floatShelf.close(); });
+      /**
+       * Compartilhar: abre o painel nativo de compartilhamento do Windows pelo verbo do Explorer
+       * (Windows.ModernShare). Seleção múltipla ou sistema sem o verbo: copia os arquivos e avisa.
+       */
+      const shareFiles = (list) => {
+        const { execFile } = require("child_process");
+        const fallback = () => {
+          copyFileToClipboard(list);
+          try {
+            const { Notification } = require("electron");
+            if (Notification.isSupported()) new Notification({ title: "VOR", body: list.length > 1 ? `${list.length} itens copiados — cole no app para compartilhar.` : "Arquivo copiado — cole no app para compartilhar." }).show();
+          } catch { /* ignore */ }
+        };
+        if (list.length !== 1) { fallback(); return; }
+        const script = "$f = $env:VOR_FILE; $sh = New-Object -ComObject Shell.Application; " +
+          "$item = $sh.Namespace([IO.Path]::GetDirectoryName($f)).ParseName([IO.Path]::GetFileName($f)); " +
+          "if (-not $item) { exit 2 }; " +
+          "try { $item.InvokeVerb('Windows.ModernShare'); Start-Sleep -Milliseconds 1500; exit 0 } catch { exit 3 }";
+        execFile("powershell.exe", ["-NoProfile", "-STA", "-Command", script], { windowsHide: true, env: { ...process.env, VOR_FILE: list[0] }, timeout: 15000 }, (err) => {
+          if (err) fallback();
+        });
       };
       ipcMain.on("studio-drag", (event, target) => {
         try {
@@ -4116,13 +4234,24 @@ app.whenReady().then(async () => {
           event.sender.startDrag({ file: String(target), icon: icon.isEmpty() ? nativeImage.createEmpty() : icon });
         } catch { /* o arrasto nativo falhou */ }
       });
-      const openFileStudio = (sliceId, target) => new Promise((resolve, reject) => {
+      const openFileStudio = (sliceId, target, batch = {}) => new Promise((resolve, reject) => {
         const { BrowserWindow, ipcMain: bus } = require("electron");
+        const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+        const formOnly = !!shiftWheels.studioForm(sliceId, target);
+        const width = Math.min(area.width, formOnly ? 640 : 1000);
+        const height = Math.min(area.height, formOnly ? 560 : 720);
+        // Sem moldura do Windows: o cartão arredondado de vidro é desenhado no HTML (margem de 14px para a sombra).
         const win = new BrowserWindow({
-          width: 960,
-          height: 680,
+          width,
+          height,
+          x: Math.round(area.x + (area.width - width) / 2),
+          y: Math.round(area.y + (area.height - height) / 2),
+          frame: false,
+          transparent: true,
+          hasShadow: false,
+          backgroundColor: "#00000000",
           autoHideMenuBar: true,
-          backgroundColor: "#111111",
+          resizable: true,
           alwaysOnTop: true,
           webPreferences: {
             preload: path.join(__dirname, "studio-preload.js"),
@@ -4159,7 +4288,8 @@ app.whenReady().then(async () => {
             pages = prep.pages;
           }
           try { bus.removeHandler("studio-job"); } catch { /* ignore */ }
-          bus.handle("studio-job", () => ({ id: sliceId, filePath: target, pages }));
+          const form = shiftWheels.studioForm(sliceId, target);
+          bus.handle("studio-job", () => ({ id: sliceId, filePath: target, pages, form, appearance: vorAppearance, ...batch }));
           await win.loadFile(path.join(__dirname, "studio.html"));
         })().catch((err) => {
           if (!settled) {
@@ -4170,60 +4300,200 @@ app.whenReady().then(async () => {
           }
         });
       });
-      ipcMain.handle("run-file-slice", async (_event, id, filePath) => {
+      /**
+       * Toast de progresso do ShiftDrop ("Convertendo 2 de 3"), numa janela leve reaproveitada.
+       * Criada só no primeiro uso e destruída após 60 s sem trabalho, para não ficar com RAM parada.
+       */
+      let shiftToast = null;
+      let shiftToastHide = null;
+      let shiftToastKill = null;
+      /** Toast no estilo Tangerine: cartão de vidro pequeno, ação + arquivo + "N de M" e barra fina no acento. */
+      const SHIFT_TOAST_HTML = `<!doctype html><meta charset="utf-8"><style>
+        :root{--bg:rgba(24,24,26,.9);--line:rgba(255,255,255,.12);--text:rgba(255,255,255,.94);--text2:rgba(255,255,255,.55);--track:rgba(255,255,255,.12);--accent:#fff;--elev:0 14px 34px rgba(0,0,0,.45)}
+        [data-theme=white]{--bg:rgba(250,250,251,.94);--line:rgba(0,0,0,.09);--text:rgba(0,0,0,.88);--text2:rgba(0,0,0,.52);--track:rgba(0,0,0,.08);--elev:0 14px 34px rgba(0,0,0,.16)}
+        html,body{margin:0;background:transparent;overflow:hidden;font:12.5px/1.3 "Segoe UI Variable Text","Segoe UI",sans-serif;color:var(--text);-webkit-font-smoothing:antialiased}
+        .t{margin:10px;padding:11px 14px 12px;border-radius:14px;background:var(--bg);background-image:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,0));
+           box-shadow:inset 0 0 0 1px var(--line),var(--elev);opacity:0;transform:translateY(8px) scale(.97);transition:opacity .14s,transform .22s cubic-bezier(.2,1.3,.35,1)}
+        .t.on{opacity:1;transform:none}
+        .r{display:flex;align-items:baseline;gap:8px}
+        .l{flex:1;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .n{color:var(--text2);font-variant-numeric:tabular-nums;font-size:11.5px;white-space:nowrap}
+        .b{margin-top:9px;height:3px;border-radius:2px;background:var(--track);overflow:hidden}
+        .f{height:100%;width:100%;background:var(--accent);border-radius:2px;transform-origin:0 50%;transform:scaleX(0);transition:transform .2s cubic-bezier(.22,1,.36,1)}
+        .f.i{width:30%;transform:none;animation:k 1.1s cubic-bezier(.45,0,.55,1) infinite}
+        @keyframes k{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}
+      </style><div class="t" id="t"><div class="r"><div class="l" id="l"></div><div class="n" id="n"></div></div><div class="b"><div class="f" id="f"></div></div></div>
+      <script>window.theme=function(a){document.documentElement.dataset.theme=a.theme==='white'?'white':'black';var c=/^#ffffff$/i.test(a.accent||'#ffffff')?(a.theme==='white'?'#101012':'#ffffff'):a.accent;document.documentElement.style.setProperty('--accent',c);};
+      window.set=function(text,pct,on){var m=String(text).match(/^(.*?)\s(\d+ de \d+)$/);document.getElementById('l').textContent=m?m[1]:text;document.getElementById('n').textContent=m?m[2]:'';var f=document.getElementById('f');
+      if(pct<0){f.className='f i';f.style.transform='';}else{f.className='f';f.style.transform='scaleX('+Math.max(0,Math.min(1,pct))+')';}
+      document.getElementById('t').className=on?'t on':'t';};</script>`;
+      const showShiftToast = (text, pct) => {
         try {
-          await shiftWheels.prepare(id, filePath, (status) => {
-            try {
-              const { Notification } = require("electron");
-              if (Notification.isSupported()) new Notification({ title: "VOR", body: status }).show();
-            } catch { /* ignore */ }
-          });
+          const { BrowserWindow } = require("electron");
+          if (shiftToastHide) { clearTimeout(shiftToastHide); shiftToastHide = null; }
+          if (shiftToastKill) { clearTimeout(shiftToastKill); shiftToastKill = null; }
+          const push = () => {
+            if (!shiftToast || shiftToast.isDestroyed()) return;
+            shiftToast.webContents.executeJavaScript(`window.theme && window.theme(${JSON.stringify(vorAppearance)}); window.set && window.set(${JSON.stringify(text)}, ${Number(pct)}, true)`).catch(() => {});
+            if (!shiftToast.isVisible()) shiftToast.showInactive();
+          };
+          if (!shiftToast || shiftToast.isDestroyed()) {
+            const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
+            const w = 320;
+            const h = 80;
+            shiftToast = new BrowserWindow({
+              width: w, height: h, x: area.x + area.width - w - 12, y: area.y + area.height - h - 12,
+              frame: false, transparent: true, resizable: false, movable: false, focusable: false,
+              alwaysOnTop: true, skipTaskbar: true, show: false, hasShadow: false,
+              webPreferences: { contextIsolation: true, sandbox: true },
+            });
+            shiftToast.setIgnoreMouseEvents(true);
+            shiftToast.setAlwaysOnTop(true, "screen-saver");
+            shiftToast.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(SHIFT_TOAST_HTML)}`).then(push).catch(() => {});
+          } else push();
+        } catch { /* toast é só cosmético */ }
+      };
+      const hideShiftToast = (delay = 0) => {
+        if (shiftToastHide) clearTimeout(shiftToastHide);
+        shiftToastHide = setTimeout(() => {
+          shiftToastHide = null;
+          if (!shiftToast || shiftToast.isDestroyed()) return;
+          shiftToast.webContents.executeJavaScript("window.set && window.set(document.getElementById('l').textContent, 1, false)").catch(() => {});
+          setTimeout(() => { try { if (shiftToast && !shiftToast.isDestroyed()) shiftToast.hide(); } catch { /* ignore */ } }, 180);
+          if (shiftToastKill) clearTimeout(shiftToastKill);
+          shiftToastKill = setTimeout(() => {
+            shiftToastKill = null;
+            try { if (shiftToast && !shiftToast.isDestroyed()) shiftToast.destroy(); } catch { /* ignore */ }
+            shiftToast = null;
+          }, 60000);
+        }, delay);
+      };
+      const SHIFT_VERB = {
+        compress: "Comprimindo", removeMetadata: "Limpando metadados", normalizeAudio: "Normalizando", audioChannels: "Ajustando canais",
+        muteVideo: "Silenciando", videoSnapshots: "Capturando quadros", resize50: "Redimensionando", resize1080: "Redimensionando",
+        rotate90: "Girando", extractArchive: "Extraindo", splitPDF: "Dividindo", organizePDF: "Organizando", createPDF: "Criando PDF",
+        createCollage: "Montando colagem", mergePDF: "Juntando PDFs", zipFiles: "Compactando", cropImage: "Recortando",
+        redactImage: "Ocultando", editImage: "Salvando", annotateImage: "Salvando", frameImage: "Adicionando fundo",
+        cropVideo: "Recortando", redactVideo: "Ocultando", trimVideo: "Aparando", trimAudio: "Aparando", splitVideo: "Dividindo",
+        changeVideoSpeed: "Mudando velocidade", redactAudio: "Bipando", audioToVideo: "Gerando forma de onda",
+      };
+      const shiftVerb = (id) => (id.startsWith("conv:") ? `Convertendo para ${id.slice(5).toUpperCase()}` : (SHIFT_VERB[id.slice(5)] || "Processando"));
+      /** Fila única: um gesto por vez, para não disputar CPU entre ffmpeg/LibreOffice. */
+      let shiftQueue = Promise.resolve();
+      const notifyShiftError = (message) => {
+        const body = /senha|otimizado|protegido|Não foi possível|não está disponível|Indisponível|instala|não tem/i.test(message)
+          ? message.replace(/^[\w.-]+\.exe falhou \(código \d+\):\s*/i, "")
+          : "Não foi possível processar este arquivo.";
+        try {
+          const { Notification } = require("electron");
+          if (Notification.isSupported()) new Notification({ title: "VOR", body }).show();
+        } catch { /* ignore */ }
+        return body;
+      };
+      const runFileSliceNow = async (id, list) => {
+        const filePath = list[0] || "";
+        try {
+          for (const p of shiftWheels.isBatch(id) ? list.slice(0, 1) : list) {
+            await shiftWheels.prepare(id, p, (status) => showShiftToast(status, -1));
+          }
           if (id === "act:airDrop") {
-            copyFileToClipboard(filePath);
-            const { Notification } = require("electron");
-            if (Notification.isSupported()) new Notification({ title: "VOR", body: "Arquivo pronto para colar." }).show();
+            shareFiles(list);
+            return { ok: true, out: filePath };
+          }
+          if (id === "act:copy") {
+            copyFileToClipboard(list);
             return { ok: true, out: filePath };
           }
           if (id === "act:float") {
-            openFloatShelf(filePath);
+            openFloatShelf(list);
+            return { ok: true, out: filePath };
+          }
+          if (id === "act:copyPath") {
+            const { clipboard } = require("electron");
+            clipboard.writeText(list.join("\r\n"));
             return { ok: true, out: filePath };
           }
           if (id === "act:move") {
             const { dialog } = require("electron");
-            const picked = await dialog.showOpenDialog({ properties: ["openDirectory"], title: "Mover para" });
+            const picked = await dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"], title: "Mover para" });
             if (picked.canceled || !picked.filePaths[0]) throw new Error("Cancelado");
-            const dest = path.join(picked.filePaths[0], path.basename(filePath));
-            fs.renameSync(filePath, dest);
-            return { ok: true, out: dest };
-          }
-          const out = shiftWheels.needsStudio(id)
-            ? await shiftWheels.applyStudio(id, filePath, await openFileStudio(id, filePath))
-            : await shiftWheels.run(id, filePath);
-          try {
-            const { Notification } = require("electron");
-            if (Notification.isSupported() && !id.startsWith("act:")) {
-              new Notification({ title: "VOR", body: `Pronto: ${path.basename(String(out))}` }).show();
+            let last = "";
+            for (const p of list) {
+              last = shiftWheels.uniqueTarget(picked.filePaths[0], path.basename(p));
+              try { fs.renameSync(p, last); } catch (err) {
+                if (err && err.code !== "EXDEV") throw err;
+                fs.cpSync(p, last, { recursive: true });
+                fs.rmSync(p, { recursive: true, force: true });
+              }
             }
-          } catch { /* ignore */ }
-          if (id === "act:copyPath") {
-            const { clipboard } = require("electron");
-            clipboard.writeText(String(filePath));
+            return { ok: true, out: last };
           }
-          return { ok: true, out };
+          if (id === "act:openTerminal") return { ok: true, out: await shiftWheels.run(id, filePath) };
+          if (shiftWheels.isBatch(id)) {
+            showShiftToast(`${shiftVerb(id)}…`, -1);
+            const out = await shiftWheels.runMany(id, list, { onProgress: (f) => showShiftToast(`${shiftVerb(id)}…`, f) });
+            showShiftToast(`Pronto: ${path.basename(String(out))}`, 1);
+            hideShiftToast(1400);
+            return { ok: true, out };
+          }
+          let out = "";
+          let failed = 0;
+          let lastError = "";
+          let studioState = null;
+          for (let i = 0; i < list.length; i += 1) {
+            const p = list[i];
+            const label = list.length > 1 ? `${shiftVerb(id)} ${i + 1} de ${list.length}` : `${shiftVerb(id)}…`;
+            if (shiftWheels.needsStudio(id)) {
+              // Uma janela por arquivo; o ajuste anterior vem como estado inicial do próximo.
+              const spec = await openFileStudio(id, p, { files: list, index: i, total: list.length, rest: list.slice(i + 1), state: studioState });
+              if (spec.state) studioState = spec.state;
+              showShiftToast(label, list.length > 1 ? i / list.length : -1);
+              const tick = (f) => showShiftToast(label, list.length > 1 ? (i + f) / list.length : f);
+              out = await shiftWheels.applyStudio(id, p, { ...spec, onProgress: tick });
+              if (spec.all) {
+                // "Aplicar a Todos": mesmo ajuste nos arquivos restantes, sem reabrir a janela.
+                for (let j = i + 1; j < list.length; j += 1) {
+                  showShiftToast(`${shiftVerb(id)} ${j + 1} de ${list.length}`, j / list.length);
+                  const each = Array.isArray(spec.pngs) ? { ...spec, png: spec.pngs[j - i] } : spec;
+                  if (Array.isArray(spec.pngs) && !each.png) { failed += 1; continue; }
+                  const tickJ = (f) => showShiftToast(`${shiftVerb(id)} ${j + 1} de ${list.length}`, (j + f) / list.length);
+                  try { out = await shiftWheels.applyStudio(id, list[j], { ...each, onProgress: tickJ }); } catch (err) {
+                    failed += 1;
+                    lastError = err && err.message ? err.message : String(err);
+                  }
+                }
+                break;
+              }
+              continue;
+            }
+            showShiftToast(label, list.length > 1 ? i / list.length : -1);
+            try {
+              out = await shiftWheels.run(id, p, { onProgress: (f) => showShiftToast(label, list.length > 1 ? (i + f) / list.length : f) });
+            } catch (err) {
+              if (list.length === 1) throw err;
+              failed += 1;
+              lastError = err && err.message ? err.message : String(err);
+              diagLog(`[FileWheels] ${id} ${p}: ${lastError}`);
+            }
+          }
+          if (failed) notifyShiftError(failed === list.length ? lastError : `${failed} de ${list.length} itens falharam: ${lastError}`);
+          showShiftToast(list.length > 1 ? `Pronto: ${list.length - failed} de ${list.length}` : `Pronto: ${path.basename(String(out))}`, 1);
+          hideShiftToast(1400);
+          return { ok: failed < list.length, out };
         } catch (err) {
+          hideShiftToast(0);
           const message = err && err.message ? err.message : String(err);
           diagLog(`[FileWheels] ${id}: ${message}`);
           // Cancelar (fechar o estúdio, a senha ou a escolha de pasta) não é erro: nada de aviso.
           if (/^(Cancelado|Senha cancelada)$/i.test(message.trim())) return { ok: false, canceled: true };
-          const body = /senha|otimizado|protegido|Não foi possível|não está disponível|Indisponível/i.test(message)
-            ? message.replace(/^[\w.-]+\.exe falhou \(código \d+\):\s*/i, "")
-            : "Não foi possível converter este arquivo.";
-          try {
-            const { Notification } = require("electron");
-            if (Notification.isSupported()) new Notification({ title: "Não foi possível converter", body }).show();
-          } catch { /* ignore */ }
-          return { ok: false, error: body };
+          return { ok: false, error: notifyShiftError(message) };
         }
+      };
+      ipcMain.handle("run-file-slice", (_event, id, target) => {
+        const list = (Array.isArray(target) ? target : [target]).map(String).filter(Boolean);
+        const job = shiftQueue.then(() => runFileSliceNow(String(id), list));
+        shiftQueue = job.catch(() => {});
+        return job;
       });
       ipcMain.handle("note-file-drag-path", (_event, filePath) => {
         if (!fileDragOpen || !filePath || !fileDragMode) return { ok: false };
@@ -4246,6 +4516,7 @@ app.whenReady().then(async () => {
         fileDragOpen = false;
         fileDragMode = null;
         fileDragPath = "";
+        fileDragPaths = [];
         fileSourceOk = false;
         const token = ++fileSourceToken;
         queryFileSource(e.x, e.y).then((name) => {
@@ -4285,7 +4556,7 @@ app.whenReady().then(async () => {
           revealFileWheel(point.x, point.y, mode, "");
           return;
         }
-        if (mode !== fileDragMode) revealFileWheel(point.x, point.y, mode, fileDragPath);
+        if (mode !== fileDragMode) revealFileWheel(point.x, point.y, mode, fileDragPaths.length ? fileDragPaths : fileDragPath);
       });
       uIOhook.on("keyup", (e) => {
         const slot = modifierFromEvent(e);
@@ -4362,6 +4633,7 @@ app.whenReady().then(async () => {
     isDev,
     preloadPath: path.join(__dirname, "electron-preload.js"),
     captureHtmlPath: path.join(__dirname, "../dist/capture.html"),
+    captureHelperPath: path.join(__dirname, "bin", "vor-capture.exe").replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`),
     getMainWindow: () => mainWindow,
     getScreenshotSettings: () => currentSettings.screenshot,
     getActiveWin: getActiveWinModule,
@@ -4389,6 +4661,10 @@ app.whenReady().then(async () => {
     },
   });
   startScreenshot = shotApi.capture;
+  restartCaptureShortcut = () => {
+    shotApi.restartShortcut();
+    registerGlobalShortcut(true);
+  };
 
   const registerGlobalShortcut = (force = false) => {
     const registrationSignature = shortcutRegistrationSignature();
@@ -4711,14 +4987,27 @@ app.whenReady().then(async () => {
     console.log("[Shortcuts] Pausing global shortcuts for recording...");
     lastShortcutRegistrationSignature = null;
     globalShortcut.unregisterAll();
-    shotApi.setShortcutsPaused(true);
+    shotApi.setShortcutsPaused(true, "gravar atalho");
   });
 
   ipcMain.on("resume-global-shortcut", () => {
     console.log("[Shortcuts] Resuming global shortcuts...");
-    shotApi.setShortcutsPaused(false);
+    shotApi.setShortcutsPaused(false, "fim da gravação");
     registerGlobalShortcut();
     // (though recording is usually done in settings where menu is not 'open-radial' but 'open-settings')
+  });
+
+  // Se as Configurações perderem o foco / fecharem a meio da gravação, o resume nunca chegava.
+  const resumeIfPaused = (why) => {
+    if (lastShortcutRegistrationSignature !== null) return;
+    shotApi.setShortcutsPaused(false, why);
+    registerGlobalShortcut();
+  };
+  app.on("browser-window-blur", (_event, win) => {
+    if (win === mainWindow) resumeIfPaused("Configurações sem foco");
+  });
+  app.on("browser-window-created", (_event, win) => {
+    win.on("hide", () => { if (win === mainWindow) resumeIfPaused("Configurações escondidas"); });
   });
 
   ipcMain.on("start-shortcut-recording", () => {
@@ -5837,6 +6126,28 @@ const escapeCommand = (cmd) => {
   return cmd;
 };
 
+/** #17: o único aviso de erro é a notificação do Windows, em PT-BR e com o nome VOR. */
+const notifyErrorOs = (message) => {
+  const body = String(message || "").trim();
+  if (!body || /^(Cancelado|Senha cancelada)$/i.test(body)) return;
+  try {
+    const { Notification } = require("electron");
+    if (Notification.isSupported()) new Notification({ title: "VOR", body: body.slice(0, 240) }).show();
+  } catch { /* ignore */ }
+};
+  /** Tema/acento/vidro vindos da Aparência (renderer). As janelas HTML do ShiftDrop leem daqui, ao vivo. */
+  ipcMain.on("vor-appearance", (_event, next) => {
+    const a = next && typeof next === "object" ? next : {};
+    vorAppearance = {
+      theme: a.theme === "white" ? "white" : "black",
+      accent: /^#[0-9a-f]{6}$/i.test(String(a.accent || "")) ? String(a.accent) : "#FFFFFF",
+      glass: a.glass !== false,
+      opacity: Math.min(1, Math.max(0.35, Number(a.opacity) || 0.8)),
+    };
+    for (const hook of vorAppearanceHooks) { try { hook(); } catch { /* ignore */ } }
+  });
+ipcMain.on("vor-notify-error", (_event, message) => notifyErrorOs(message));
+
 // IPC: Recebe comando do React para executar app
 ipcMain.on("execute-command", async (event, command, commandType, options = {}) => {
   if (!command || typeof command !== "string" || command.trim() === "") {
@@ -5844,7 +6155,7 @@ ipcMain.on("execute-command", async (event, command, commandType, options = {}) 
     if (mainWindow) {
       mainWindow.webContents.send(
         "execution-error",
-        "Empty or invalid command",
+        "Comando vazio ou inválido.",
       );
     }
     return;
@@ -5965,7 +6276,7 @@ ipcMain.on("execute-command", async (event, command, commandType, options = {}) 
       if (mainWindow) {
         mainWindow.webContents.send(
           "execution-error",
-          "Failed to start key simulator",
+          "Não foi possível simular o atalho de teclado.",
         );
       }
     });
@@ -6278,7 +6589,7 @@ ipcMain.on("execute-command", async (event, command, commandType, options = {}) 
         await unixPlatform.launch(resolvedCommand);
         diagLog(`[Exec] Unix launch ok: ${resolvedCommand}`);
       } catch (err) {
-        const finalError = `Failed to run "${resolvedCommand.substring(0, 50)}". Error: ${err.message}`;
+        const finalError = `Não foi possível abrir "${resolvedCommand.substring(0, 50)}".`;
         diagLog(`[Exec] ${finalError}`);
         if (mainWindow) mainWindow.webContents.send("execution-error", finalError);
       }
@@ -6422,13 +6733,13 @@ ipcMain.on("execute-command", async (event, command, commandType, options = {}) 
     }
 
     // If we get here, all methods failed
-    const finalError = `Failed to run "${resolvedCommand.substring(0, 50)}${resolvedCommand.length > 50 ? "..." : ""}". Error: ${lastError?.message || "Unknown"}`;
+    const finalError = `Não foi possível abrir "${resolvedCommand.substring(0, 50)}${resolvedCommand.length > 50 ? "…" : ""}".`;
     console.error(`\n✗✗✗ EXEC_ABORT: ${finalError} ✗✗✗\n`);
     if (mainWindow) {
       mainWindow.webContents.send("execution-error", finalError);
     }
   } catch (err) {
-    const finalError = `Unexpected error while running command: ${err.message}`;
+    const finalError = "Não foi possível abrir este item.";
     console.error(`\n✗✗✗ EXEC_ABORT: ${finalError} ✗✗✗\n`);
     if (mainWindow) {
       mainWindow.webContents.send("execution-error", finalError);

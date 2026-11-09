@@ -119,6 +119,8 @@ export interface UIConfig {
   fixedPosition: boolean;
   backdropOpacity: number;
   menuOpacity: number;
+  /** Vidro: superfícies da roda translúcidas (alfa = menuOpacity) com brilho superior. Desligado = sólido. */
+  glassEffect?: boolean;
   menuBackgroundStyle: "circle" | "fullscreen";
   appSpacing: number; // New: spacing between apps in radial menu
   activationThreshold: number;
@@ -217,13 +219,18 @@ export interface ElectronAPI {
       mode: string;
       format: string;
       path: string;
+      paths?: string[];
       x: number;
       y: number;
       items: { id: string; title: string; available: boolean; reason: string | null }[];
     }) => void,
   ) => () => void;
-  runFileSlice?: (id: string, filePath: string) => Promise<{ ok: boolean; out?: string; error?: string }>;
+  runFileSlice?: (id: string, filePath: string | string[]) => Promise<{ ok: boolean; out?: string; error?: string; canceled?: boolean }>;
   noteFileDragPath?: (filePath: string) => Promise<{ ok: boolean }>;
+  /** Mostra um erro só como notificação do sistema (PT-BR, título VOR). */
+  notifyError?: (message: string) => void;
+  /** Tema/acento/vidro para as janelas do ShiftDrop (estúdio, toast, prateleira), que não são React. */
+  setAppearance?: (appearance: { theme: 'black' | 'white'; accent: string; glass: boolean; opacity: number }) => void;
   shiftToolStatus?: () => Promise<Record<string, string | null>>;
   filePath?: (file: File) => string;
   onOpenMenu: (
@@ -423,7 +430,7 @@ export interface ElectronAPI {
   ) => () => void;
   onScreenshotVisible?: (callback: () => void) => () => void;
   screenshotAction?: (payload: {
-    action: "copy" | "save" | "pin" | "wheel" | "cancel" | "remember" | "ready";
+    action: "copy" | "save" | "pin" | "wheel" | "cancel" | "remember" | "ready" | "painted";
     dataUrl?: string;
     pngDataUrl?: string;
     width?: number;

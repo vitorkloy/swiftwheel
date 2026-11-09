@@ -131,6 +131,14 @@ function installScreenshot(ctx) {
   let grabMs = 0;
   let openedAt = 0;
   let shortcutsPaused = false;
+  let busySince = 0;
+  let overlayActive = false;
+  let overlayHwnd = "";
+  let helperHideTimer = null;
+  let helper = null;
+  let helperUp = false;
+  let helperRestarts = 0;
+  let helperBindSpec = "";
   /** @type {Map<string, "region" | "full" | "window">} */
   let shortcutBindings = new Map();
   let shortcutListener = null;
@@ -144,7 +152,7 @@ function installScreenshot(ctx) {
     const body = fs.readFileSync(frameFile);
     return new Response(body, {
       headers: {
-        "content-type": "image/png",
+        "content-type": frameFile.endsWith(".bmp") ? "image/bmp" : "image/png",
         "content-length": String(body.length),
         "cache-control": "no-store",
       },
@@ -201,24 +209,52 @@ function installScreenshot(ctx) {
   };
 
   /**
-   * Esconde e reaproveita a janela em vez de a destruir: `close()` + criar outra fazia o DWM animar
-   * a saída e obrigava a recarregar o renderer. O renderer volta ao estado vazio (transparente) com
-   * a sessão `null` e a janela passa a ser a próxima warm shell.
+   * A janela do overlay nunca faz show/hide depois do arranque (#33): o Windows animava o show com
+   * zoom+fade (o "pulo"). Ociosa fica visível mas transparente, atravessável por cliques, sem foco,
+   * fora do Alt+Tab e sem alwaysOnTop (não atrapalha jogos em tela cheia). Na captura sobe ao topo.
    */
+  const parkWindow = (win) => {
+    if (!win || win.isDestroyed()) return;
+    try {
+      // Ociosa = opacidade 0: nada visível mesmo que a superfície do Chromium saia opaca (cinza).
+      win.setOpacity(0);
+      win.setIgnoreMouseEvents(true);
+      win.setAlwaysOnTop(false);
+      win.setFocusable(false);
+      win.webContents.send("screenshot-session", null);
+    } catch (e) { ctx.diagLog(`[Screenshot] park: ${e.message}`); }
+  };
+  const activateWindow = (win) => {
+    win.setFocusable(true);
+    win.setIgnoreMouseEvents(false);
+    // focus() antes do topmost: ao trocar o foreground o shell reergue a Shell_TrayWnd
+    // (também topmost) por cima; por isso o topmost vem depois e é reafirmado.
+    win.focus();
+    win.setAlwaysOnTop(true, "screen-saver");
+    win.moveTop();
+    const reassert = () => {
+      if (!overlayActive || overlay !== win || win.isDestroyed()) return;
+      try { win.moveTop(); } catch { /* ignore */ }
+      if (overlayHwnd) helperSend(`top ${overlayHwnd}`);
+    };
+    for (const ms of [30, 150, 400]) setTimeout(reassert, ms);
+  };
+
   const closeOverlay = () => {
     clearTimeout(revealTimer);
+    clearTimeout(helperHideTimer);
+    helperSend("armed 0");
+    helperSend("hide");
     pendingSession = null;
     revealOverlay = () => {};
+    overlayActive = false;
     const win = overlay;
     overlay = null;
     if (!win || win.isDestroyed()) {
       queueMicrotask(() => { void primeWarmShell(); });
       return;
     }
-    try {
-      win.hide();
-      win.webContents.send("screenshot-session", null);
-    } catch { /* ignore */ }
+    parkWindow(win);
     if (warmShell && warmShell !== win && !warmShell.isDestroyed()) {
       try { warmShell.close(); } catch { /* ignore */ }
     }
@@ -264,9 +300,6 @@ function installScreenshot(ctx) {
     const main = ctx.getMainWindow();
     if (main && !main.isDestroyed() && main.isVisible()) {
       try { main.hide(); } catch { /* ignore */ }
-    }
-    if (overlay && !overlay.isDestroyed() && overlay.isVisible()) {
-      try { overlay.hide(); } catch { /* ignore */ }
     }
   };
 
@@ -412,7 +445,6 @@ function installScreenshot(ctx) {
   };
 
   const attachShellLifecycle = (win) => {
-    win.setAlwaysOnTop(true, "screen-saver");
     win.removeMenu();
     win.on("closed", () => {
       if (overlay === win) overlay = null;
@@ -434,7 +466,7 @@ function installScreenshot(ctx) {
        * primeiro frame podia sair preto/cinza, o "piscar" ao ativar a captura.
        */
       transparent: true,
-      alwaysOnTop: true,
+      alwaysOnTop: false,
       skipTaskbar: true,
       resizable: false,
       movable: false,
@@ -444,7 +476,7 @@ function installScreenshot(ctx) {
       enableLargerThanScreen: true,
       autoHideMenuBar: true,
       backgroundColor: "#00000000",
-      focusable: true,
+      focusable: false,
       webPreferences: {
         preload: ctx.preloadPath,
         contextIsolation: true,
@@ -454,10 +486,26 @@ function installScreenshot(ctx) {
       },
     });
     attachShellLifecycle(win);
-    disableTransitions(win);
     if (ctx.isDev) await win.loadURL("http://localhost:5173/capture.html");
     else await win.loadFile(ctx.captureHtmlPath);
-    if (!win.isDestroyed()) win.setBounds(bounds);
+    if (!win.isDestroyed()) {
+      win.setBounds(bounds);
+      win.setIgnoreMouseEvents(true);
+      // Único show da vida da janela, com opacidade 0: no arranque a superfície do Chromium podia
+      // sair opaca (#2b2b2b) e cobria o PC inteiro até fechar o VOR. Só passa a opacidade 1 quando
+      // o renderer confirma que pintou o frame congelado ("painted"), por baixo do congelado nativo.
+      win.setOpacity(0);
+      win.showInactive();
+      // Uma janela transparente mostrada depois de carregar escondida pode ficar com a superfície
+      // opaca (cinza) até o próximo paint: força um repaint transparente.
+      win.setBackgroundColor("#00000000");
+      win.webContents.invalidate();
+      setTimeout(() => { if (!win.isDestroyed()) win.webContents.invalidate(); }, 250);
+      const handle = win.getNativeWindowHandle();
+      const hwnd = handle.length >= 8 ? handle.readBigUInt64LE(0) : BigInt(handle.readUInt32LE(0));
+      overlayHwnd = hwnd.toString();
+      helperSend(`toolwindow ${overlayHwnd}`);
+    }
     return win;
   };
 
@@ -480,6 +528,15 @@ function installScreenshot(ctx) {
   };
 
   const takeOverlayShell = async (bounds) => {
+    // Reaproveita sempre a mesma janela: criar outra mostrava uma janela nova (com a animação do
+    // Windows) — era o que ainda fazia o pulo quando se carregava no atalho com a captura aberta.
+    if (overlay && !overlay.isDestroyed()) {
+      if (warmShell && warmShell !== overlay && !warmShell.isDestroyed()) {
+        try { warmShell.close(); } catch { /* ignore */ }
+      }
+      warmShell = null;
+      return overlay;
+    }
     const warm = warmShell && !warmShell.isDestroyed() ? warmShell : null;
     warmShell = null;
     if (warm) {
@@ -511,25 +568,55 @@ function installScreenshot(ctx) {
       revealed = true;
       clearTimeout(revealTimer);
       ctx.diagLog(`[Screenshot] grab ${grabMs} ms, revelada ${Date.now() - openedAt} ms depois`);
-      win.setBounds(bounds);
-      win.showInactive();
-      win.focus();
+      const b = win.getBounds();
+      if (b.x !== bounds.x || b.y !== bounds.y || b.width !== bounds.width || b.height !== bounds.height) win.setBounds(bounds);
+      overlayActive = true;
+      activateWindow(win);
       win.webContents.send("screenshot-visible");
       ctx.setGrabbing(false);
+      // O congelado nativo fica por baixo até o renderer confirmar que pintou ("painted").
+      clearTimeout(helperHideTimer);
+      helperHideTimer = setTimeout(() => {
+        ctx.diagLog("[Screenshot] painted não chegou em 800 ms, a esconder o congelado");
+        if (!win.isDestroyed() && overlay === win) win.setOpacity(1);
+        helperSend("hide");
+      }, 800);
     };
     revealOverlay = reveal;
     pendingSession = session;
     win.webContents.send("screenshot-session", session);
-    // Fallback se o frame não disparar "ready". A janela é transparente, logo revelar cedo não pisca.
+    // Fallback se o frame não disparar "ready". O congelado nativo continua por cima, logo não pisca.
     clearTimeout(revealTimer);
-    revealTimer = setTimeout(reveal, 700);
+    revealTimer = setTimeout(() => {
+      ctx.diagLog("[Screenshot] ready não chegou em 700 ms (fallback)");
+      reveal();
+    }, 700);
   };
 
   const capture = async (mode) => {
     const cfg = settings();
-    if (cfg.enabled === false || busy) return;
-    if (overlay && !overlay.isDestroyed()) return;
+    if (cfg.enabled === false) return;
+    if (busy && Date.now() - busySince > 5000) {
+      ctx.diagLog("[Screenshot] busy preso há >5 s, a recuperar");
+      busy = false;
+    }
+    if (busy) return;
+    if (overlay && !overlay.isDestroyed()) {
+      // Overlay visível = sessão ativa. Escondido/preso (ready nunca chegou) = recupera em vez de ignorar.
+      if (overlayActive) return;
+      ctx.diagLog("[Screenshot] overlay preso sem sessão ativa, a recuperar");
+      closeOverlay();
+    }
+    if (helperReady()) {
+      // Caminho nativo: o helper congela a tela e responde com "shot".
+      busy = true;
+      busySince = Date.now();
+      ctx.setGrabbing(true);
+      helperSend(`grab ${mode}`);
+      return;
+    }
     busy = true;
+    busySince = Date.now();
     ctx.setGrabbing(true);
     let shell = null;
     try {
@@ -586,6 +673,185 @@ function installScreenshot(ctx) {
     }
   };
 
+  /**
+   * Helper nativo (backend/bin/vor-capture.exe). Faz o que o Lightshot faz: atalho tratado num
+   * processo próprio que responde ao hook na hora, BitBlt do desktop virtual e uma janela topmost
+   * que mostra o frame congelado sem ativação. O `node-global-key-listener` esperava a resposta do
+   * Node a cada tecla do sistema; com o main ocupado (grab de 300–850 ms) o hook estourava o
+   * LowLevelHooksTimeout e o Windows removia-o em silêncio: o atalho morria e o resto do VOR seguia.
+   */
+  const helperReady = () => !!(helper && helperUp && !helper.killed);
+  const helperSend = (line) => {
+    if (!helperReady()) return;
+    try { helper.stdin.write(`${line}\n`); } catch { /* ignore */ }
+  };
+  const onHelperShot = async (parts) => {
+    // shot <mode> <x> <y> <w> <h> <grabMs> <shownMs> <file...>
+    const mode = parts[1];
+    if (overlayActive) {
+      // Atalho de novo com a captura já aberta: ignora, mantém a sessão atual.
+      ctx.diagLog("[Screenshot] atalho com captura aberta, ignorado");
+      helperSend("hide");
+      return;
+    }
+    grabMs = Number(parts[6]) || 0;
+    const file = parts.slice(8).join(" ");
+    openedAt = Date.now();
+    ctx.diagLog(`[Screenshot] nativo: BitBlt ${grabMs} ms, congelado visível em ${parts[7]} ms`);
+    const cfg = settings();
+    try {
+      hideOurWindows();
+      const virtual = virtualDesktopBounds();
+      const point = screen.getCursorScreenPoint();
+      const cursor = { x: point.x - virtual.origin.x, y: point.y - virtual.origin.y };
+      let preset = null;
+      if (mode === "window") preset = await activeWindowRect(virtual.origin, virtual.bounds);
+      else if (mode === "region" && cfg.rememberRegion && cfg.lastRegion) preset = cfg.lastRegion;
+      const shell = await takeOverlayShell(virtual.bounds);
+      frameFile = file;
+      helperSend("armed 1");
+      await openOverlay(virtual.bounds, {
+        frameUrl: `vor-shot://frame/${Date.now()}`,
+        mode: mode === "window" ? "window" : "region",
+        width: virtual.bounds.width,
+        height: virtual.bounds.height,
+        preset,
+        cursor: cfg.includeCursor ? cursor : null,
+        hintAt: cursor,
+        copyOnSelect: !!cfg.copyOnSelect,
+        format: cfg.format === "jpeg" || cfg.format === "webp" ? cfg.format : "png",
+        quality: Math.min(100, Math.max(50, Number(cfg.quality) || 92)),
+        language: ctx.language() === "pt" ? "pt" : "en",
+      }, shell);
+    } catch (e) {
+      ctx.diagLog(`[Screenshot] nativo: ${e.message}`);
+      helperSend("hide");
+      closeOverlay();
+    } finally {
+      ctx.setGrabbing(false);
+      busy = false;
+    }
+  };
+  const startHelper = () => {
+    if (process.platform !== "win32" || helper) return false;
+    const exe = ctx.captureHelperPath;
+    if (!exe || !fs.existsSync(exe)) {
+      ctx.diagLog(`[Screenshot] helper nativo ausente (${exe}), a usar o listener antigo`);
+      return false;
+    }
+    const { spawn } = require("child_process");
+    const child = spawn(exe, [], { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
+    helper = child;
+    helperUp = false;
+    let buf = "";
+    child.stdout.on("data", (chunk) => {
+      buf += chunk.toString("utf8");
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).trim();
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        const parts = line.split(" ");
+        if (parts[0] === "ready") {
+          helperUp = true;
+          if (helperBindSpec) helperSend(`bind ${shortcutsPaused ? "" : helperBindSpec}`);
+          if (overlayHwnd) helperSend(`toolwindow ${overlayHwnd}`);
+        } else if (parts[0] === "status") {
+          onHelperStatus(line);
+        } else if (parts[0] === "shot") void onHelperShot(parts);
+        else if (parts[0] === "full") {
+          busy = false;
+          ctx.setGrabbing(false);
+          toast(ctx.language() === "pt" ? "Tela copiada." : "Screen copied.");
+        } else if (parts[0] === "esc") {
+          if (overlay && !overlay.isDestroyed()) closeOverlay();
+          else helperSend("hide");
+        } else if (parts[0] === "log") {
+          ctx.diagLog(`[Screenshot] helper: ${parts.slice(1).join(" ")}`);
+          if (parts[1] === "grab-error") { busy = false; ctx.setGrabbing(false); }
+        }
+      }
+    });
+    const onGone = (why) => {
+      if (helper !== child) return;
+      helper = null;
+      helperUp = false;
+      busy = false;
+      ctx.diagLog(`[Screenshot] helper saiu (${why}), a reiniciar`);
+      helperRestarts += 1;
+      if (helperRestarts < 20) setTimeout(() => startHelper(), Math.min(5000, 300 * helperRestarts));
+    };
+    child.on("exit", (code) => onGone(`código ${code}`));
+    child.on("error", (e) => onGone(e.message));
+    child.stdin.on("error", () => {});
+    return true;
+  };
+
+  /**
+   * Saúde do atalho (#33): a cada 30 s o helper reporta hook, nº de bindings e última tecla. Se os
+   * bindings sumiram sem pausa, re-sincroniza; se o helper não responde, é reiniciado.
+   */
+  let statusPending = 0;
+  const expectedBindings = () => (helperBindSpec ? helperBindSpec.split(";").filter(Boolean).length : 0);
+  const onHelperStatus = (line) => {
+    statusPending = 0;
+    const get = (key) => Number((new RegExp(`${key}=(-?\\d+)`).exec(line) || [])[1]);
+    const want = shortcutsPaused ? 0 : expectedBindings();
+    if (get("hook") !== 1) ctx.diagLog(`[Screenshot] helper sem hook: ${line}`);
+    if (get("armed") === 1 && !overlayActive && !busy) {
+      ctx.diagLog("[Screenshot] helper armado sem captura aberta, a desarmar");
+      helperSend("armed 0");
+    }
+    if (get("bindings") !== want) {
+      ctx.diagLog(`[Screenshot] bindings ${get("bindings")} ≠ ${want}, a re-sincronizar`);
+      helperSend(`bind ${shortcutsPaused ? "" : helperBindSpec}`);
+    }
+  };
+  const statusTimer = setInterval(() => {
+    if (!helperReady()) return;
+    if (statusPending && Date.now() - statusPending > 5000) {
+      ctx.diagLog("[Screenshot] helper não respondeu ao status, a reiniciar");
+      statusPending = 0;
+      try { helper.kill(); } catch { /* ignore */ }
+      return;
+    }
+    statusPending = Date.now();
+    helperSend("status");
+  }, 30000);
+  if (statusTimer.unref) statusTimer.unref();
+
+  let pauseTimer = null;
+  const setPaused = (value, why) => {
+    const next = !!value;
+    clearTimeout(pauseTimer);
+    if (next) {
+      // Nunca fica pausado para sempre: se o resume se perder, volta sozinho em 15 s.
+      pauseTimer = setTimeout(() => setPaused(false, "timeout 15 s"), 15000);
+    }
+    if (shortcutsPaused === next) return;
+    shortcutsPaused = next;
+    ctx.diagLog(`[Screenshot] atalhos ${next ? "pausados" : "retomados"} (${why})`);
+    helperSend(`bind ${next ? "" : helperBindSpec}`);
+  };
+
+  const restartShortcut = () => {
+    ctx.diagLog("[Screenshot] reiniciar atalho de captura (manual)");
+    setPaused(false, "manual");
+    busy = false;
+    if (overlay && !overlay.isDestroyed() && !overlayActive) closeOverlay();
+    helperRestarts = 0;
+    if (helper) { try { helper.kill(); } catch { /* ignore */ } } else startHelper();
+  };
+
+  /** Mesma ordem de modificadores que o helper monta: ctrl, alt, shift, super, tecla. */
+  const canonicalAccelerator = (raw) => {
+    const parts = normalizeAccelerator(raw).toLowerCase().split("+").filter(Boolean);
+    const order = ["commandorcontrol", "alt", "shift", "super"];
+    const mods = order.filter((m) => parts.includes(m));
+    const key = parts.filter((p) => !order.includes(p)).pop() || "";
+    return key ? [...mods, key].join("+") : "";
+  };
+
   const ensureShortcutListener = () => {
     if (shortcutListener) return;
     try {
@@ -624,7 +890,11 @@ function installScreenshot(ctx) {
       ctx.replaceScreenshotSettings(cfg);
     }
     shortcutBindings = new Map();
-    if (cfg.enabled === false) return;
+    if (cfg.enabled === false) {
+      helperBindSpec = "";
+      helperSend("bind ");
+      return;
+    }
     const pairs = [
       [cfg.shortcutRegion, "region"],
       [cfg.shortcutFull, "full"],
@@ -635,6 +905,15 @@ function installScreenshot(ctx) {
       if (!accelerator || shortcutBindings.has(accelerator)) continue;
       shortcutBindings.set(accelerator, mode);
       ctx.diagLog(`[Screenshot] atalho ${accelerator} → ${mode}`);
+    }
+    helperBindSpec = pairs
+      .map(([raw, mode]) => [canonicalAccelerator(raw), mode])
+      .filter(([accel]) => accel)
+      .map(([accel, mode]) => `${accel}=${mode}`)
+      .join(";");
+    if (helper || startHelper()) {
+      helperSend(`bind ${shortcutsPaused ? "" : helperBindSpec}`);
+      return;
     }
     ensureShortcutListener();
   };
@@ -647,6 +926,15 @@ function installScreenshot(ctx) {
     try {
       if (action === "ready") {
         revealOverlay();
+        return { ok: true };
+      }
+      if (action === "painted") {
+        clearTimeout(helperHideTimer);
+        ctx.diagLog(`[Screenshot] pintado ${Date.now() - openedAt} ms após o frame`);
+        overlay.setOpacity(1);
+        ctx.diagLog(`[Screenshot] opacidade ${overlay.getOpacity()}`);
+        // Um frame do DWM já opaco antes de tirar o congelado nativo de cima.
+        setTimeout(() => helperSend("hide"), 34);
         return { ok: true };
       }
       if (action === "cancel") {
@@ -709,7 +997,10 @@ function installScreenshot(ctx) {
     capture,
     registerShortcuts,
     normalizeAccelerator,
-    setShortcutsPaused: (value) => { shortcutsPaused = !!value; },
+    // Enquanto o utilizador grava um atalho nas definições, o helper não pode engolir a tecla.
+    setShortcutsPaused: (value, why = "ipc") => setPaused(value, why),
+    restartShortcut,
+    dispose: () => { helperSend("quit"); },
   };
 }
 

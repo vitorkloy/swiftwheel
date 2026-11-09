@@ -4,48 +4,133 @@
 <meta charset="utf-8" />
 <title>VOR</title>
 <style>
-  :root { color-scheme: dark; }
+  /* Tokens Zenith do VOR (src/index.css), aplicados por data-theme; o acento vem da Aparência. */
+  :root {
+    color-scheme: dark;
+    --bg: rgba(21,21,23,var(--alpha,.94)); --raised: rgba(255,255,255,.055); --hover: rgba(255,255,255,.08);
+    --line: rgba(255,255,255,.08); --line-strong: rgba(255,255,255,.14);
+    --text: rgba(255,255,255,.93); --text-2: rgba(255,255,255,.58); --text-3: rgba(255,255,255,.36);
+    --accent: #ffffff; --on-accent: #0a0a0b; --stage: rgba(0,0,0,.28);
+    --elev: 0 24px 60px rgba(0,0,0,.55), 0 2px 8px rgba(0,0,0,.35);
+    --ease: cubic-bezier(.22,1,.36,1); --spring: cubic-bezier(.2,1.3,.35,1);
+    --font: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  }
+  [data-theme="white"] {
+    color-scheme: light;
+    --bg: rgba(250,250,251,var(--alpha,.95)); --raised: rgba(0,0,0,.045); --hover: rgba(0,0,0,.07);
+    --line: rgba(0,0,0,.08); --line-strong: rgba(0,0,0,.14);
+    --text: rgba(0,0,0,.88); --text-2: rgba(0,0,0,.56); --text-3: rgba(0,0,0,.36);
+    --stage: rgba(0,0,0,.04); --elev: 0 22px 54px rgba(0,0,0,.18), 0 2px 8px rgba(0,0,0,.08);
+  }
   * { box-sizing: border-box; }
-  body { margin: 0; background: #111; color: #f4f4f5; font: 13px/1.4 "Segoe UI", sans-serif; height: 100vh; display: flex; flex-direction: column; }
-  header { display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; border-bottom: 1px solid rgba(255,255,255,.12); }
-  header strong { letter-spacing: .04em; font-size: 12px; }
-  main { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; padding: 16px; position: relative; }
-  footer { display: flex; gap: 8px; justify-content: flex-end; padding: 12px 16px; border-top: 1px solid rgba(255,255,255,.12); }
-  button { background: #fff; color: #111; border: 0; border-radius: 8px; padding: 8px 14px; font-weight: 600; cursor: pointer; }
-  button.ghost { background: transparent; color: #f4f4f5; border: 1px solid rgba(255,255,255,.2); }
-  .stage { position: relative; max-width: 100%; max-height: 100%; }
-  canvas, img, video { max-width: 100%; max-height: calc(100vh - 160px); display: block; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  body { padding: 14px; color: var(--text); font: 13px/1.4 var(--font); -webkit-font-smoothing: antialiased; }
+  .win { height: 100%; display: flex; flex-direction: column; border-radius: 18px; background: var(--bg);
+    background-image: linear-gradient(180deg, rgba(255,255,255,.05), rgba(255,255,255,0) 120px);
+    box-shadow: inset 0 0 0 1px var(--line-strong), inset 0 1px 0 rgba(255,255,255,.06), var(--elev);
+    overflow: hidden; transform-origin: 50% 40%; animation: open .2s var(--spring) both; }
+  .win.closing { animation: close .12s cubic-bezier(.4,0,1,1) both; }
+  @keyframes open { from { transform: scale(.94); opacity: 0; } }
+  @keyframes close { to { transform: scale(.96); opacity: 0; } }
+  header { display: flex; align-items: center; gap: 10px; height: 48px; padding: 0 10px 0 18px; -webkit-app-region: drag; }
+  header strong { font-size: 11.5px; font-weight: 700; letter-spacing: .08em; }
+  #hint { flex: 1; color: var(--text-3); font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .x { -webkit-app-region: no-drag; width: 28px; height: 28px; padding: 0; border-radius: 999px; background: transparent; color: var(--text-2);
+    display: grid; place-items: center; font-size: 15px; line-height: 1; }
+  .x:hover { background: var(--hover); color: var(--text); }
+  main.plain { background: transparent; box-shadow: none; align-items: flex-start; overflow: auto; }
+  main { flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; margin: 0 14px; padding: 14px;
+    position: relative; border-radius: 12px; background: var(--stage); box-shadow: inset 0 0 0 1px var(--line); }
+  .bar { display: flex; flex-wrap: wrap; gap: 10px 14px; align-items: center; padding: 12px 18px 0; color: var(--text-2); font-size: 12px; }
+  footer { display: flex; gap: 8px; align-items: center; padding: 12px 14px 14px 18px; }
+  button { font: 600 12.5px/1 var(--font); border: 0; border-radius: 999px; padding: 0 16px; height: 32px; cursor: pointer;
+    background: var(--accent); color: var(--on-accent); transition: transform .12s var(--spring), background-color .12s, opacity .12s; }
+  button:active { transform: scale(.96); }
+  button.ghost { background: transparent; color: var(--text); box-shadow: inset 0 0 0 1px var(--line-strong); }
+  button.ghost:hover { background: var(--hover); }
+  button.text { background: transparent; color: var(--text-2); padding: 0 6px; }
+  button.text:hover { color: var(--text); }
+  #ok { padding: 0 20px; box-shadow: 0 6px 16px color-mix(in srgb, var(--accent) 30%, transparent); }
+  .stage { position: relative; max-width: 100%; max-height: 100%; border-radius: 8px; overflow: hidden; box-shadow: 0 10px 30px rgba(0,0,0,.25); }
+  canvas, img, video { max-width: 100%; max-height: calc(100vh - 230px); display: block; }
   canvas.draw { position: absolute; inset: 0; width: 100%; height: 100%; cursor: crosshair; }
-  .bar { display: flex; gap: 12px; align-items: center; padding: 0 16px 8px; }
-  input[type="range"] { flex: 1; }
-  .pages { display: flex; gap: 8px; overflow: auto; width: 100%; height: 100%; align-items: flex-start; padding: 8px; }
-  .page { width: 120px; flex: none; background: #1b1b1b; border: 1px solid rgba(255,255,255,.12); border-radius: 8px; padding: 6px; }
-  .page img { width: 100%; height: auto; }
-  .page .row { display: flex; gap: 4px; margin-top: 6px; }
-  .page button { padding: 4px 6px; font-size: 11px; }
-  label { display: flex; gap: 8px; align-items: center; }
+  audio { width: min(560px, 100%); }
+  input[type="range"] { flex: 1; min-width: 90px; accent-color: var(--accent); }
+  .pages { display: flex; flex-wrap: wrap; gap: 12px; overflow: auto; width: 100%; height: 100%; align-content: flex-start; padding: 4px; }
+  .page { width: 124px; flex: none; background: var(--raised); border-radius: 12px; padding: 8px; box-shadow: inset 0 0 0 1px var(--line); transition: transform .14s var(--spring); }
+  .page:hover { transform: translateY(-2px); }
+  .page img { width: 100%; height: auto; border-radius: 6px; transition: transform .18s var(--ease); background: #fff; }
+  .page .row { display: flex; gap: 4px; margin-top: 8px; justify-content: center; }
+  .page button { height: 24px; min-width: 24px; padding: 0 6px; font-size: 11px; background: var(--hover); color: var(--text); }
+  label { display: inline-flex; gap: 8px; align-items: center; }
+  .grow { flex: 1; }
+  .strip { display: flex; gap: 6px; max-width: 40%; overflow: hidden; }
+  .strip span { width: 32px; height: 32px; border-radius: 8px; background: var(--raised) center/cover; box-shadow: inset 0 0 0 1px var(--line); flex: none; opacity: .55; transition: opacity .12s; }
+  .strip span.on { opacity: 1; box-shadow: 0 0 0 2px var(--accent); }
+  .seg { display: inline-flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--raised); box-shadow: inset 0 0 0 1px var(--line); }
+  .seg button { height: 26px; padding: 0 12px; background: transparent; color: var(--text-2); font-weight: 600; font-size: 12px; }
+  .seg button:hover { color: var(--text); }
+  .seg button.on { background: var(--accent); color: var(--on-accent); }
+  .muted { color: var(--text-3); }
+  .form { width: min(540px, 100%); display: flex; flex-direction: column; gap: 4px; }
+  .form > .muted { font-size: 12px; margin-bottom: 8px; text-align: center; }
+  .form .row { display: flex; justify-content: space-between; gap: 16px; min-height: 44px; padding: 6px 4px; border-bottom: 1px solid var(--line); }
+  .form .row:last-child { border-bottom: 0; }
+  .form .row > span:first-child { color: var(--text-2); min-width: 150px; font-size: 12.5px; }
+  .form .row b { min-width: 42px; text-align: right; font-variant-numeric: tabular-nums; }
+  .form input.txt { flex: 1; max-width: 300px; }
+  input.txt, input[type="color"], input[type="number"] { background: var(--raised); color: var(--text); border: 0; box-shadow: inset 0 0 0 1px var(--line-strong);
+    border-radius: 8px; padding: 0 10px; height: 30px; font: 12.5px var(--font); outline: none; }
+  input.txt:focus { box-shadow: inset 0 0 0 1.5px var(--accent); }
+  input[type="color"] { width: 34px; padding: 3px; }
+  input[type="checkbox"] { width: 18px; height: 18px; accent-color: var(--accent); }
 </style>
 </head>
 <body>
-<header><strong id="title">VOR</strong><span id="hint"></span></header>
+<div class="win" id="win">
+<header><strong id="title">VOR</strong><span id="hint"></span><button class="x" id="close" type="button" title="Fechar (Esc)">✕</button></header>
 <div class="bar" id="bar" hidden></div>
 <main id="main"></main>
 <footer>
-  <button class="ghost" id="cancel" type="button">Cancelar</button>
-  <button id="ok" type="button">Aplicar</button>
+  <div class="strip" id="strip"></div>
+  <button class="text" id="reset" type="button" title="Redefinir">Redefinir</button>
+  <span class="grow"></span>
+  <button class="ghost" id="all" type="button" hidden>Aplicar a Todos</button>
+  <button id="ok" type="button" title="Enter">Aplicar</button>
 </footer>
+</div>
 <script>
 const $ = (id) => document.getElementById(id);
 const titles = {
-  cropImage: "CROP", redactImage: "REDACT", editImage: "EDIT", annotateImage: "ANNOTATE", frameImage: "ADD BG",
-  cropVideo: "CROP", redactVideo: "REDACT", trimVideo: "TRIM", splitVideo: "SPLIT", changeVideoSpeed: "SPEED", videoSnapshots: "SNAPSHOT",
-  trimAudio: "TRIM", redactAudio: "BLEEP", audioToVideo: "VISUALIZE", organizePDF: "ORGANIZE", splitPDF: "SPLIT",
+  cropImage: "RECORTAR", redactImage: "OCULTAR", editImage: "EDITAR", annotateImage: "ANOTAR", frameImage: "FUNDO",
+  cropVideo: "RECORTAR", redactVideo: "OCULTAR", trimVideo: "APARAR", splitVideo: "DIVIDIR", changeVideoSpeed: "VELOCIDADE", videoSnapshots: "CAPTURA",
+  trimAudio: "APARAR", redactAudio: "BIPAR", audioToVideo: "FORMA DE ONDA", organizePDF: "ORGANIZAR", splitPDF: "DIVIDIR",
+  compress: "COMPRIMIR", removeMetadata: "METADADOS", audioChannels: "CANAIS",
 };
 let job = null;
 let rect = null;
 let strokes = [];
 let drawing = false;
 let pages = [];
+let reset = null;
+let applyAll = false;
+/** Fecha com a animação de saída (só transform/opacity) antes de devolver ao main. */
+function leave(fn) { $("win").classList.add("closing"); setTimeout(fn, 110); }
+const done = (spec) => leave(() => window.studio.finish(Object.assign({}, spec, { all: applyAll })));
+function applyTheme(a) {
+  if (!a) return;
+  const root = document.documentElement;
+  root.dataset.theme = a.theme === "white" ? "white" : "black";
+  const white = /^#ffffff$/i.test(a.accent || "#ffffff");
+  const accent = white ? (a.theme === "white" ? "#101012" : "#ffffff") : a.accent;
+  const h = accent.replace("#", "");
+  const lum = (0.2126 * parseInt(h.slice(0, 2), 16) + 0.7152 * parseInt(h.slice(2, 4), 16) + 0.0722 * parseInt(h.slice(4, 6), 16)) / 255;
+  root.style.setProperty("--accent", accent);
+  root.style.setProperty("--on-accent", lum > 0.56 ? "#0a0a0b" : "#ffffff");
+  root.style.setProperty("--alpha", a.glass === false ? "1" : String(Math.min(0.97, Math.max(0.82, 0.62 + (a.opacity || 0.8) * 0.35))));
+}
+let apply = null;
 
 function fileUrl(p) {
   return "file:///" + String(p).replace(/\\/g, "/");
@@ -113,50 +198,306 @@ function bindDrag(c, mode) {
   window.addEventListener("pointerup", () => { drawing = false; });
 }
 
-function imageTool(tool) {
-  const img = new Image();
-  img.src = fileUrl(job.filePath);
-  const stage = mediaBox(img);
-  const c = overlay(stage);
-  if (tool === "cropImage" || tool === "redactImage") bindDrag(c, "rect");
-  if (tool === "editImage" || tool === "annotateImage") bindDrag(c, "draw");
-  if (tool === "frameImage") {
-    $("bar").hidden = false;
-    $("bar").innerHTML = '<label>Fundo <input id="color" type="color" value="#111111"></label><label>Margem <input id="pad" type="range" min="0" max="160" value="32"></label>';
-  }
-  $("ok").onclick = () => {
-    const out = document.createElement("canvas");
-    const natW = img.naturalWidth || img.width;
-    const natH = img.naturalHeight || img.height;
-    const box = stage.getBoundingClientRect();
-    const sx = natW / box.width;
-    const sy = natH / box.height;
-    const ctx = out.getContext("2d");
-    if (tool === "cropImage" && rect && rect.w > 4) {
-      const x = Math.round(rect.x * sx), y = Math.round(rect.y * sy), w = Math.round(rect.w * sx), h = Math.round(rect.h * sy);
-      out.width = Math.max(1, w); out.height = Math.max(1, h);
-      ctx.drawImage(img, x, y, w, h, 0, 0, w, h);
-    } else if (tool === "frameImage") {
-      const pad = Number(document.getElementById("pad").value) || 0;
-      out.width = natW + pad * 2; out.height = natH + pad * 2;
-      ctx.fillStyle = document.getElementById("color").value || "#111";
-      ctx.fillRect(0, 0, out.width, out.height);
-      ctx.drawImage(img, pad, pad);
-    } else {
-      out.width = natW; out.height = natH;
-      ctx.drawImage(img, 0, 0);
-      if (tool === "redactImage" && rect && rect.w > 4) {
-        const x = Math.round(rect.x * sx), y = Math.round(rect.y * sy), w = Math.round(rect.w * sx), h = Math.round(rect.h * sy);
-        ctx.filter = "blur(16px)";
-        ctx.drawImage(img, x, y, w, h, x, y, w, h);
-        ctx.filter = "none";
-      }
-      if (tool === "editImage" || tool === "annotateImage") {
-        ctx.drawImage(c, 0, 0, natW, natH);
-      }
+/* Estado das ferramentas de imagem em coordenadas normalizadas (0..1): vale para qualquer tamanho de arquivo. */
+let params = null;
+const DEFAULTS = {
+  aspect: "free", rect: null, bright: 100, contrast: 100, sat: 100,
+  shape: "pen", color: "#ff3b30", width: 4, marks: [], text: "Texto",
+  bg: "solid", c1: "#111111", c2: "#3b82f6", pad: 32, radius: 0,
+};
+const ASPECTS = { free: 0, "1:1": 1, "4:3": 4 / 3, "3:2": 3 / 2, "16:9": 16 / 9, "9:16": 9 / 16 };
+
+function loadImage(file) {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => resolve(img);
+    img.onerror = () => reject(new Error("Não foi possível abrir a imagem."));
+    img.src = fileUrl(file);
+  });
+}
+
+function drawMarks(ctx, marks, w, h) {
+  const k = Math.max(w, h) / 1000;
+  marks.forEach((m) => {
+    ctx.strokeStyle = m.color; ctx.fillStyle = m.color;
+    ctx.lineWidth = m.width * k; ctx.lineCap = "round"; ctx.lineJoin = "round";
+    const P = (p) => [p.x * w, p.y * h];
+    if (m.shape === "pen") {
+      ctx.beginPath();
+      m.pts.forEach((p, i) => (i ? ctx.lineTo(...P(p)) : ctx.moveTo(...P(p))));
+      ctx.stroke();
+    } else if (m.shape === "rect" || m.shape === "ellipse") {
+      const [x0, y0] = P(m.a); const [x1, y1] = P(m.b);
+      ctx.beginPath();
+      if (m.shape === "rect") ctx.rect(Math.min(x0, x1), Math.min(y0, y1), Math.abs(x1 - x0), Math.abs(y1 - y0));
+      else ctx.ellipse((x0 + x1) / 2, (y0 + y1) / 2, Math.abs(x1 - x0) / 2, Math.abs(y1 - y0) / 2, 0, 0, Math.PI * 2);
+      ctx.stroke();
+    } else if (m.shape === "arrow") {
+      const [x0, y0] = P(m.a); const [x1, y1] = P(m.b);
+      const ang = Math.atan2(y1 - y0, x1 - x0); const head = 6 * m.width * k;
+      ctx.beginPath(); ctx.moveTo(x0, y0); ctx.lineTo(x1, y1); ctx.stroke();
+      ctx.beginPath(); ctx.moveTo(x1, y1);
+      ctx.lineTo(x1 - head * Math.cos(ang - 0.45), y1 - head * Math.sin(ang - 0.45));
+      ctx.lineTo(x1 - head * Math.cos(ang + 0.45), y1 - head * Math.sin(ang + 0.45));
+      ctx.closePath(); ctx.fill();
+    } else if (m.shape === "text") {
+      const [x, y] = P(m.a);
+      ctx.font = `600 ${Math.round(m.width * 7 * k)}px "Segoe UI", sans-serif`;
+      ctx.textBaseline = "top";
+      ctx.fillText(m.text, x, y);
     }
-    window.studio.finish({ png: out.toDataURL("image/png") });
+  });
+}
+
+/** Render final (resolução cheia) — o mesmo código serve para pré-visualização e para "Aplicar a Todos". */
+function renderImage(tool, img, q) {
+  const W = img.naturalWidth, H = img.naturalHeight;
+  const out = document.createElement("canvas");
+  const ctx = out.getContext("2d");
+  const r = q.rect && q.rect.w > 0.005 && q.rect.h > 0.005 ? q.rect : null;
+  if (tool === "cropImage") {
+    const box = r || fitAspect(q.aspect, W, H);
+    const x = Math.round(box.x * W), y = Math.round(box.y * H), w = Math.max(1, Math.round(box.w * W)), h = Math.max(1, Math.round(box.h * H));
+    out.width = w; out.height = h;
+    ctx.drawImage(img, x, y, w, h, 0, 0, w, h);
+  } else if (tool === "frameImage") {
+    const pad = Math.round(q.pad / 1000 * Math.max(W, H) * 2);
+    out.width = W + pad * 2; out.height = H + pad * 2;
+    if (q.bg === "gradient") {
+      const g = ctx.createLinearGradient(0, 0, out.width, out.height);
+      g.addColorStop(0, q.c1); g.addColorStop(1, q.c2); ctx.fillStyle = g;
+    } else ctx.fillStyle = q.c1;
+    ctx.fillRect(0, 0, out.width, out.height);
+    const rad = q.radius / 100 * Math.min(W, H) / 2;
+    ctx.save();
+    if (rad > 0) { ctx.beginPath(); ctx.roundRect(pad, pad, W, H, rad); ctx.clip(); }
+    if (pad > 0) { ctx.shadowColor = "rgba(0,0,0,.35)"; ctx.shadowBlur = pad / 2; }
+    ctx.drawImage(img, pad, pad);
+    ctx.restore();
+  } else {
+    out.width = W; out.height = H;
+    if (tool === "editImage") ctx.filter = `brightness(${q.bright}%) contrast(${q.contrast}%) saturate(${q.sat}%)`;
+    ctx.drawImage(img, 0, 0);
+    ctx.filter = "none";
+    if (tool === "redactImage" && r) {
+      const x = Math.round(r.x * W), y = Math.round(r.y * H), w = Math.round(r.w * W), h = Math.round(r.h * H);
+      // Pixelização forte + desfoque: irreversível, ao contrário de um blur leve.
+      const cell = Math.max(8, Math.round(Math.max(w, h) / 12));
+      const tiny = document.createElement("canvas");
+      tiny.width = Math.max(1, Math.round(w / cell)); tiny.height = Math.max(1, Math.round(h / cell));
+      tiny.getContext("2d").drawImage(img, x, y, w, h, 0, 0, tiny.width, tiny.height);
+      ctx.imageSmoothingEnabled = false;
+      ctx.drawImage(tiny, 0, 0, tiny.width, tiny.height, x, y, w, h);
+      ctx.imageSmoothingEnabled = true;
+    }
+    if (tool === "editImage" || tool === "annotateImage") drawMarks(ctx, q.marks, W, H);
+  }
+  return out;
+}
+
+function fitAspect(aspect, W, H) {
+  const a = ASPECTS[aspect];
+  if (!a) return { x: 0, y: 0, w: 1, h: 1 };
+  let w = W, h = W / a;
+  if (h > H) { h = H; w = H * a; }
+  return { x: (W - w) / 2 / W, y: (H - h) / 2 / H, w: w / W, h: h / H };
+}
+
+function seg(id, items, value) {
+  return `<span class="seg" data-k="${id}">` + items.map(([v, t]) => `<button type="button" class="${v === value ? "on" : ""}" data-v="${v}">${t}</button>`).join("") + "</span>";
+}
+
+async function imageTool(tool) {
+  params = Object.assign(JSON.parse(JSON.stringify(DEFAULTS)), job.state || {});
+  if (!job.state) { params.rect = null; params.marks = []; }
+  const img = await loadImage(job.filePath);
+  const W = img.naturalWidth, H = img.naturalHeight;
+  // Proxy reduzido para a pré-visualização (RAM/CPU baixos com fotos grandes).
+  const scale = Math.min(1, 1400 / Math.max(W, H));
+  const view = document.createElement("canvas");
+  view.width = Math.round(W * scale); view.height = Math.round(H * scale);
+  const proxy = document.createElement("canvas");
+  proxy.width = view.width; proxy.height = view.height;
+  proxy.getContext("2d").drawImage(img, 0, 0, proxy.width, proxy.height);
+  const fake = { naturalWidth: proxy.width, naturalHeight: proxy.height };
+  const stage = mediaBox(view);
+  const c = overlay(stage);
+  const bar = $("bar");
+  bar.hidden = false;
+  if (tool === "cropImage") bar.innerHTML = "Proporção " + seg("aspect", Object.keys(ASPECTS).map((k) => [k, k === "free" ? "Livre" : k]), params.aspect);
+  if (tool === "redactImage") bar.innerHTML = '<span class="muted">Arraste sobre a área a ocultar (pixelizada de forma irreversível).</span>';
+  if (tool === "editImage") bar.innerHTML = '<label>Brilho <input data-n="bright" type="range" min="40" max="160"></label><label>Contraste <input data-n="contrast" type="range" min="40" max="160"></label><label>Saturação <input data-n="sat" type="range" min="0" max="200"></label>';
+  if (tool === "annotateImage" || tool === "editImage") {
+    bar.innerHTML += seg("shape", [["pen", "Caneta"], ["rect", "Retângulo"], ["ellipse", "Elipse"], ["arrow", "Seta"], ["text", "Texto"]], params.shape)
+      + '<input data-n="color" type="color"><label>Traço <input data-n="width" type="range" min="1" max="20"></label>'
+      + '<input data-n="text" class="txt" placeholder="Texto" style="width:110px">'
+      + '<button type="button" class="ghost" id="undo">Desfazer</button>';
+  }
+  if (tool === "frameImage") {
+    bar.innerHTML = seg("bg", [["solid", "Sólido"], ["gradient", "Gradiente"]], params.bg)
+      + '<input data-n="c1" type="color"><input data-n="c2" type="color"><label>Margem <input data-n="pad" type="range" min="0" max="160"></label><label>Cantos <input data-n="radius" type="range" min="0" max="40"></label>';
+  }
+  bar.querySelectorAll("[data-n]").forEach((el) => {
+    const k = el.dataset.n;
+    el.value = String(params[k]);
+    el.oninput = () => { params[k] = el.type === "range" ? Number(el.value) : el.value; refresh(); };
+  });
+  bar.querySelectorAll(".seg").forEach((g) => g.querySelectorAll("button").forEach((b) => {
+    b.onclick = () => {
+      params[g.dataset.k] = b.dataset.v;
+      g.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b));
+      if (g.dataset.k === "aspect") params.rect = ASPECTS[b.dataset.v] ? fitAspect(b.dataset.v, W, H) : null;
+      refresh();
+    };
+  }));
+  const undo = document.getElementById("undo");
+  if (undo) undo.onclick = () => { params.marks.pop(); refresh(); };
+
+  function refresh() {
+    const ctx = view.getContext("2d");
+    ctx.clearRect(0, 0, view.width, view.height);
+    if (tool === "editImage" || tool === "annotateImage" || tool === "redactImage") {
+      const pre = renderImage(tool, Object.assign(proxy, fake), params);
+      ctx.drawImage(pre, 0, 0);
+    } else if (tool === "frameImage") {
+      const pre = renderImage(tool, Object.assign(proxy, fake), params);
+      const k = Math.min(view.width / pre.width, view.height / pre.height);
+      ctx.fillStyle = "#111"; ctx.fillRect(0, 0, view.width, view.height);
+      ctx.drawImage(pre, (view.width - pre.width * k) / 2, (view.height - pre.height * k) / 2, pre.width * k, pre.height * k);
+    } else ctx.drawImage(proxy, 0, 0);
+    const o = c.getContext("2d");
+    o.clearRect(0, 0, c.width, c.height);
+    if ((tool === "cropImage" || tool === "redactImage") && params.rect) {
+      const R = params.rect;
+      o.fillStyle = "rgba(0,0,0,.5)";
+      if (tool === "cropImage") {
+        o.fillRect(0, 0, c.width, c.height);
+        o.clearRect(R.x * c.width, R.y * c.height, R.w * c.width, R.h * c.height);
+      }
+      o.strokeStyle = "#fff"; o.lineWidth = 1.5;
+      o.strokeRect(R.x * c.width, R.y * c.height, R.w * c.width, R.h * c.height);
+    }
+  }
+  const fit = () => { const r = stage.getBoundingClientRect(); c.width = Math.max(1, Math.round(r.width)); c.height = Math.max(1, Math.round(r.height)); refresh(); };
+  refresh();
+  requestAnimationFrame(fit);
+  window.addEventListener("resize", fit);
+
+  const pt = (ev) => {
+    const r = c.getBoundingClientRect();
+    return { x: Math.min(1, Math.max(0, (ev.clientX - r.left) / r.width)), y: Math.min(1, Math.max(0, (ev.clientY - r.top) / r.height)) };
   };
+  let origin = null;
+  if (tool !== "frameImage") {
+    c.addEventListener("pointerdown", (ev) => {
+      c.setPointerCapture(ev.pointerId);
+      const p = pt(ev);
+      origin = p;
+      if (tool === "editImage" || tool === "annotateImage") {
+        const m = { shape: params.shape, color: params.color, width: params.width, a: p, b: p, pts: [p], text: params.text || "Texto" };
+        params.marks.push(m);
+        if (m.shape === "text") origin = null;
+      }
+      refresh();
+    });
+    c.addEventListener("pointermove", (ev) => {
+      if (!origin) return;
+      const p = pt(ev);
+      if (tool === "cropImage" || tool === "redactImage") {
+        let w = Math.abs(p.x - origin.x), h = Math.abs(p.y - origin.y);
+        const a = tool === "cropImage" ? ASPECTS[params.aspect] : 0;
+        if (a) { const hp = w * W / a / H; if (hp > h) w = h * H * a / W; else h = hp; }
+        params.rect = { x: p.x < origin.x ? origin.x - w : origin.x, y: p.y < origin.y ? origin.y - h : origin.y, w, h };
+      } else {
+        const m = params.marks[params.marks.length - 1];
+        m.b = p;
+        if (m.shape === "pen") m.pts.push(p);
+      }
+      refresh();
+    });
+    c.addEventListener("pointerup", () => { origin = null; });
+  }
+
+  reset = () => {
+    const keep = { aspect: params.aspect };
+    params = Object.assign(JSON.parse(JSON.stringify(DEFAULTS)), tool === "cropImage" ? keep : {});
+    bar.querySelectorAll("[data-n]").forEach((el) => { el.value = String(params[el.dataset.n]); });
+    refresh();
+  };
+  apply = async (all) => {
+    const state = JSON.parse(JSON.stringify(params));
+    const png = renderImage(tool, img, params).toDataURL("image/png");
+    if (!all) return leave(() => window.studio.finish({ png, state }));
+    // "Aplicar a Todos": mesmo ajuste (normalizado) renderizado em cada arquivo restante.
+    const pngs = [png];
+    for (const file of job.rest || []) {
+      $("hint").textContent = `Aplicando ${pngs.length + 1} de ${(job.rest || []).length + 1}…`;
+      try { pngs.push(renderImage(tool, await loadImage(file), params).toDataURL("image/png")); } catch { pngs.push(null); }
+    }
+    leave(() => window.studio.finish({ png, pngs, all: true, state }));
+  };
+}
+
+/** Formulário de opções (Comprimir, Metadados, Canais) na mesma janela base. */
+function formTool(tool) {
+  const box = document.createElement("div");
+  box.className = "form";
+  const values = Object.assign({}, ...(job.form || []).map((f) => ({ [f.k]: f.value })), job.state || {});
+  const name = String(job.filePath).split(/[\\/]/).pop();
+  const head = document.createElement("div");
+  head.className = "muted";
+  head.textContent = name;
+  box.appendChild(head);
+  const rows = [];
+  (job.form || []).forEach((f) => {
+    const row = document.createElement("label");
+    row.className = "row";
+    const cap = document.createElement("span");
+    cap.textContent = f.label;
+    row.appendChild(cap);
+    let input;
+    if (f.type === "seg") {
+      input = document.createElement("span");
+      input.className = "seg";
+      f.options.forEach(([v, t]) => {
+        const b = document.createElement("button");
+        b.type = "button"; b.textContent = t;
+        b.className = String(values[f.k]) === String(v) ? "on" : "";
+        b.onclick = () => { values[f.k] = v; input.querySelectorAll("button").forEach((x) => x.classList.toggle("on", x === b)); sync(); };
+        input.appendChild(b);
+      });
+    } else if (f.type === "check") {
+      input = document.createElement("input");
+      input.type = "checkbox"; input.checked = !!values[f.k];
+      input.onchange = () => { values[f.k] = input.checked; sync(); };
+    } else if (f.type === "file") {
+      input = document.createElement("input");
+      input.type = "file"; input.accept = "image/*";
+      input.onchange = () => { values[f.k] = input.files[0] && input.files[0].path || ""; };
+    } else {
+      input = document.createElement("input");
+      input.type = f.type === "range" ? "range" : f.type === "number" ? "number" : "text";
+      if (f.type !== "range") input.className = "txt";
+      if (f.min != null) input.min = String(f.min);
+      if (f.max != null) input.max = String(f.max);
+      input.value = values[f.k] == null ? "" : String(values[f.k]);
+      const out = document.createElement("b");
+      input.oninput = () => { values[f.k] = input.value; if (f.unit) out.textContent = input.value + f.unit; };
+      if (f.unit) { out.textContent = input.value + f.unit; row.appendChild(input); input = out; }
+    }
+    row.appendChild(input);
+    box.appendChild(row);
+    rows.push([f, row]);
+  });
+  function sync() {
+    rows.forEach(([f, row]) => {
+      row.hidden = !!f.when && Object.entries(f.when).some(([k, v]) => String(values[k]) !== String(v));
+    });
+  }
+  sync();
+  $("main").classList.add("plain");
+  $("main").appendChild(box);
+  $("ok").onclick = () => done({ opts: values, state: values });
 }
 
 function timeBar(kind) {
@@ -209,7 +550,7 @@ function videoTool(tool) {
       spec.w = rect.w / box.width * video.videoWidth;
       spec.h = rect.h / box.height * video.videoHeight;
     }
-    window.studio.finish(spec);
+    done(spec);
   };
 }
 
@@ -221,7 +562,7 @@ function audioTool(tool) {
   armRange(audio);
   if (tool !== "audioToVideo") timeBar("trim");
   else $("hint").textContent = "Exporta a forma de onda";
-  $("ok").onclick = () => window.studio.finish({
+  $("ok").onclick = () => done({
     start: Number((document.getElementById("start") || {}).value || 0),
     end: Number((document.getElementById("end") || {}).value || 0),
   });
@@ -230,9 +571,9 @@ function audioTool(tool) {
 function pdfTool(tool) {
   if (tool === "splitPDF") {
     $("bar").hidden = false;
-    $("bar").innerHTML = `<label>Páginas <input id="range" value="1-${job.pages.length || "N"}" style="background:#1b1b1b;color:#fff;border:1px solid rgba(255,255,255,.2);border-radius:6px;padding:6px 8px"></label>`;
+    $("bar").innerHTML = `<label>Páginas <input id="range" class="txt" value="1-${job.pages.length || "N"}"></label>`;
     $("hint").textContent = `${job.pages.length} páginas · 1-3,5`;
-    $("ok").onclick = () => window.studio.finish({ range: document.getElementById("range").value });
+    $("ok").onclick = () => done({ range: document.getElementById("range").value });
   }
   pages = job.pages.map((file, index) => ({ file, index: index + 1, rotate: 0, drop: false }));
   const box = document.createElement("div");
@@ -260,7 +601,7 @@ function pdfTool(tool) {
   if (tool === "organizePDF") {
     $("main").appendChild(box);
     draw();
-    $("ok").onclick = () => window.studio.finish({
+    $("ok").onclick = () => done({
       pages: pages.filter((p) => !p.drop).map((p) => ({ index: p.index, rotate: p.rotate })),
     });
   } else {
@@ -278,14 +619,27 @@ function pdfTool(tool) {
 
 window.studio.job().then((data) => {
   job = data;
+  applyTheme(job.appearance);
   const tool = String(job.id || "").slice(5);
-  $("title").textContent = titles[tool] || "VOR";
-  if (tool.endsWith("Image") || ["cropImage", "redactImage", "editImage", "annotateImage", "frameImage"].includes(tool)) imageTool(tool);
+  $("title").textContent = (titles[tool] || "VOR") + (job.total > 1 ? ` · ${job.index + 1} de ${job.total}` : "");
+  // Faixa de miniaturas do lote: mostra onde você está; o ajuste anterior é mantido no próximo arquivo.
+  (job.files || []).slice(0, 12).forEach((f, i) => {
+    const t = document.createElement("span");
+    if (/\.(png|jpe?g|webp|gif|bmp)$/i.test(f)) t.style.backgroundImage = `url("${fileUrl(f)}")`;
+    t.title = String(f).split(/[\\/]/).pop();
+    if (i === job.index) t.className = "on";
+    $("strip").appendChild(t);
+  });
+  $("all").hidden = !(job.rest && job.rest.length);
+  if (job.form) formTool(tool);
+  else if (["cropImage", "redactImage", "editImage", "annotateImage", "frameImage"].includes(tool)) imageTool(tool);
   else if (["cropVideo", "redactVideo", "trimVideo", "splitVideo", "changeVideoSpeed", "videoSnapshots"].includes(tool)) videoTool(tool);
   else if (["trimAudio", "redactAudio", "audioToVideo"].includes(tool)) audioTool(tool);
   else pdfTool(tool);
+  if (apply) $("ok").onclick = () => apply(false);
+  else apply = (all) => { applyAll = all; if ($("ok").onclick) $("ok").onclick(); };
+  if (!reset) reset = () => location.reload();
 });
-$("cancel").onclick = () => window.studio.cancel();
 </script>
 </body>
 </html>

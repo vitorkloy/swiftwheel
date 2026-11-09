@@ -1,0 +1,257 @@
+[
+  {
+    "kind": "selection-0",
+    "frames": {
+      "n": 119,
+      "p50": 33.19999999999982,
+      "p95": 33.400000000000546,
+      "max": 50.09999999999991,
+      "over25": 62
+    },
+    "commits": 2,
+    "clearCalls": 0,
+    "clearPixels": 0,
+    "strokes": 0,
+    "drawImages": 0,
+    "canvasMs": 0,
+    "events": 482
+  },
+  {
+    "kind": "selection-1",
+    "frames": {
+      "n": 119,
+      "p50": 33.19999999999891,
+      "p95": 50,
+      "max": 50.100000000000364,
+      "over25": 61
+    },
+    "commits": 2,
+    "clearCalls": 0,
+    "clearPixels": 0,
+    "strokes": 0,
+    "drawImages": 0,
+    "canvasMs": 0,
+    "events": 482
+  },
+  {
+    "kind": "selection-2",
+    "frames": {
+      "n": 119,
+      "p50": 33.19999999999891,
+      "p95": 49.900000000001455,
+      "max": 50.100000000000364,
+      "over25": 62
+    },
+    "commits": 2,
+    "clearCalls": 0,
+    "clearPixels": 0,
+    "strokes": 0,
+    "drawImages": 0,
+    "canvasMs": 0,
+    "events": 482
+  },
+  {
+    "kind": "selection-3",
+    "frames": {
+      "n": 119,
+      "p50": 33.20000000000073,
+      "p95": 33.400000000001455,
+      "max": 50,
+      "over25": 64
+    },
+    "commits": 2,
+    "clearCalls": 0,
+    "clearPixels": 0,
+    "strokes": 0,
+    "drawImages": 0,
+    "canvasMs": 0,
+    "events": 482
+  },
+  {
+    "kind": "selection-4",
+    "frames": {
+      "n": 119,
+      "p50": 33.10000000000218,
+      "p95": 50,
+      "max": 50.20000000000073,
+      "over25": 61
+    },
+    "commits": 2,
+    "clearCalls": 0,
+    "clearPixels": 0,
+    "strokes": 0,
+    "drawImages": 0,
+    "canvasMs": 0,
+    "events": 482
+  },
+  {
+    "kind": "pen-0",
+    "frames": {
+      "n": 119,
+      "p50": 16.69999999999709,
+      "p95": 16.799999999999272,
+      "max": 16.80000000000291,
+      "over25": 0
+    },
+    "commits": 1,
+    "clearCalls": 121,
+    "clearPixels": 11996752,
+    "strokes": 121,
+    "drawImages": 0,
+    "canvasMs": 2.4000000096857548,
+    "events": 482
+  },
+  {
+    "kind": "pen-1",
+    "frames": {
+      "n": 119,
+      "p50": 16.700000000000728,
+      "p95": 16.80000000000291,
+      "max": 16.80000000000291,
+      "over25": 0
+    },
+    "commits": 2,
+    "clearCalls": 121,
+    "clearPixels": 11996752,
+    "strokes": 122,
+    "drawImages": 0,
+    "canvasMs": 2.199999997392297,
+    "events": 482
+  },
+  {
+    "kind": "pen-2",
+    "frames": {
+      "n": 119,
+      "p50": 16.700000000000728,
+      "p95": 16.799999999999272,
+      "max": 16.900000000001455,
+      "over25": 0
+    },
+    "commits": 2,
+    "clearCalls": 121,
+    "clearPixels": 11996752,
+    "strokes": 123,
+    "drawImages": 0,
+    "canvasMs": 2.399999998509884,
+    "events": 482
+  },
+  {
+    "kind": "pen-3",
+    "frames": {
+      "n": 119,
+      "p50": 16.700000000000728,
+      "p95": 16.80000000000291,
+      "max": 16.900000000001455,
+      "over25": 0
+    },
+    "commits": 2,
+    "clearCalls": 121,
+    "clearPixels": 11996752,
+    "strokes": 124,
+    "drawImages": 0,
+    "canvasMs": 2.300000002607703,
+    "events": 482
+  },
+  {
+    "kind": "pen-4",
+    "frames": {
+      "n": 119,
+      "p50": 16.700000000000728,
+      "p95": 16.799999999999272,
+      "max": 16.799999999999272,
+      "over25": 0
+    },
+    "commits": 2,
+    "clearCalls": 121,
+    "clearPixels": 11996752,
+    "strokes": 125,
+    "drawImages": 0,
+    "canvasMs": 2.999999998137355,
+    "events": 482
+  },
+  {
+    "kind": "rect-0",
+    "frames": {
+      "n": 119,
+      "p50": 16.69999999999709,
+      "p95": 16.799999999999272,
+      "max": 16.900000000001455,
+      "over25": 0
+    },
+    "commits": 2,
+    "clearCalls": 121,
+    "clearPixels": 12401957,
+    "strokes": 126,
+    "drawImages": 0,
+    "canvasMs": 2.999999998137355,
+    "events": 482
+  },
+  {
+    "kind": "rect-1",
+    "frames": {
+      "n": 119,
+      "p50": 16.69999999999709,
+      "p95": 16.80000000000291,
+      "max": 16.900000000001455,
+      "over25": 0
+    },
+    "commits": 2,
+    "clearCalls": 121,
+    "clearPixels": 12401957,
+    "strokes": 127,
+    "drawImages": 0,
+    "canvasMs": 1.9999999981373549,
+    "events": 482
+  },
+  {
+    "kind": "rect-2",
+    "frames": {
+      "n": 119,
+      "p50": 16.69999999999709,
+      "p95": 16.80000000000291,
+      "max": 16.900000000001455,
+      "over25": 0
+    },
+    "commits": 2,
+    "clearCalls": 121,
+    "clearPixels": 12401957,
+    "strokes": 128,
+    "drawImages": 0,
+    "canvasMs": 2.5,
+    "events": 482
+  },
+  {
+    "kind": "rect-3",
+    "frames": {
+      "n": 119,
+      "p50": 16.69999999999709,
+      "p95": 16.80000000000291,
+      "max": 16.80000000000291,
+      "over25": 0
+    },
+    "commits": 2,
+    "clearCalls": 121,
+    "clearPixels": 12401957,
+    "strokes": 129,
+    "drawImages": 0,
+    "canvasMs": 2.800000000745058,
+    "events": 482
+  },
+  {
+    "kind": "rect-4",
+    "frames": {
+      "n": 119,
+      "p50": 16.69999999999709,
+      "p95": 16.799999999995634,
+      "max": 16.80000000000291,
+      "over25": 0
+    },
+    "commits": 2,
+    "clearCalls": 121,
+    "clearPixels": 12401957,
+    "strokes": 130,
+    "drawImages": 0,
+    "canvasMs": 3.2000000029802322,
+    "events": 482
+  }
+]
