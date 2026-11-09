@@ -1,7 +1,7 @@
 {
   "name": "swiftwheel",
   "private": true,
-  "version": "0.2.16",
+  "version": "0.2.17",
   "main": "backend/electron-main.js",
   "author": "vitorkloy",
   "description": "SwiftWheel — radial launcher (fork of Rovyl)",
