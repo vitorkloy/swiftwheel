@@ -166,6 +166,7 @@ contextBridge.exposeInMainWorld("electron", {
     return () => ipcRenderer.removeListener("screenshot-visible", listener);
   },
   screenshotAction: (payload) => ipcRenderer.invoke("screenshot-action", payload),
+  startPreview: (filePath) => ipcRenderer.invoke("start-preview", filePath),
   onScreenshotRemember: (callback) => {
     const listener = (_event, region) => callback(region);
     ipcRenderer.on("screenshot-remember", listener);

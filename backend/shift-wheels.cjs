@@ -795,6 +795,7 @@ function toolTitle(id) {
     organizePDF: "ORGANIZE", audioToVideo: "VISUALIZE",
     createPDF: "CRIAR PDF", createCollage: "COLAGEM", mergePDF: "JUNTAR", zipFiles: "ZIP",
     airDrop: "SHARE", float: "FLOAT", copy: "COPY", move: "MOVE", copyPath: "COPY PATH", openTerminal: "TERMINAL",
+    preview: "PREVIEW",
   };
   return map[id] || "?";
 }
@@ -907,7 +908,7 @@ function sizeLabel(p) {
   } catch { return ""; }
 }
 
-const ACTIONS = ["airDrop", "float", "copy", "move", "copyPath", "openTerminal"];
+const ACTIONS = ["preview", "airDrop", "float", "copy", "move", "copyPath", "openTerminal"];
 
 /** Ferramentas que trabalham com o lote inteiro de uma vez (um único resultado). */
 const BATCH = new Set(["createPDF", "createCollage", "mergePDF", "zipFiles"]);

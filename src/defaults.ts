@@ -1,4 +1,4 @@
-import { AppItem, ScreenshotSettings, UIConfig, Workspace } from "./types";
+import { AppItem, PreviewSettings, ScreenshotSettings, UIConfig, Workspace } from "./types";
 
 export const DEFAULT_SCREENSHOT: ScreenshotSettings = {
   enabled: true,
@@ -14,6 +14,11 @@ export const DEFAULT_SCREENSHOT: ScreenshotSettings = {
   saveDirectory: "",
   lastRegion: null,
   wheelSeeded: false,
+};
+
+export const DEFAULT_PREVIEW: PreviewSettings = {
+  enabled: true,
+  shortcut: "Space",
 };
 
 export const SCREENSHOT_WHEEL_APP: AppItem = {
@@ -286,6 +291,7 @@ export const DEFAULT_UI_CONFIG: UIConfig = {
   performanceMode: false,
   mainStartMenuDiscoveryDone: false,
   screenshot: DEFAULT_SCREENSHOT,
+  preview: DEFAULT_PREVIEW,
 };
 
 function workspaceHasScreenshot(items: AppItem[]): boolean {

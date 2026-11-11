@@ -8,13 +8,13 @@
 
 !macro customInit
   ; /T kills the process tree (important for spawned helpers).
-  ExecWait 'cmd.exe /c taskkill /F /T /IM "VOR.exe" /IM "SwiftWheel.exe" /IM "vor-capture.exe"' $0
+  ExecWait 'cmd.exe /c taskkill /F /T /IM "VOR.exe" /IM "SwiftWheel.exe" /IM "vor-capture.exe" /IM "vor-preview.exe"' $0
   Sleep 1000
 !macroend
 
 !macro customUnInit
   ; /T kills the process tree (important for spawned helpers).
-  ExecWait 'cmd.exe /c taskkill /F /T /IM "${APP_EXECUTABLE_FILENAME}" /IM "VOR.exe" /IM "vor-capture.exe"' $0
+  ExecWait 'cmd.exe /c taskkill /F /T /IM "${APP_EXECUTABLE_FILENAME}" /IM "VOR.exe" /IM "vor-capture.exe" /IM "vor-preview.exe"' $0
   Sleep 2000
 !macroend
 

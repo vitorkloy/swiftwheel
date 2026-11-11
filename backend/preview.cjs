@@ -1,0 +1,505 @@
+"use strict";
+
+/**
+ * Módulo Preview: janela Electron sem moldura, pré-aquecida, renderer isolado.
+ * O helper nativo (vor-preview.exe) só existe no Windows; nas outras plataformas
+ * a janela ainda abre pela ação Visualizar do ShiftDrop, sem gancho de teclado.
+ */
+const fs = require("fs");
+const path = require("path");
+const { pathToFileURL } = require("url");
+const { BrowserWindow, app: electronApp, net, protocol, screen, shell } = require("electron");
+const lib = require("./preview-lib.cjs");
+
+const DEFAULT_PREVIEW = {
+  enabled: true,
+  shortcut: "Space",
+};
+
+const DEFAULT_WIDTH = 920;
+const DEFAULT_HEIGHT = 640;
+
+function installPreview(ctx) {
+  let win = null;
+  let helper = null;
+  let helperUp = false;
+  let helperRestarts = 0;
+  let helperBindSpec = "";
+  let shortcutsPaused = false;
+  let visible = false;
+  let pinned = false;
+  let currentPath = "";
+  let currentKind = "fallback";
+  let sanitizedSvg = "";
+  let siblings = { paths: [], index: 0 };
+  let pendingSession = null;
+  let opening = false;
+  let shownAt = 0;
+
+  const settings = () => ({ ...DEFAULT_PREVIEW, ...(ctx.getPreviewSettings() || {}) });
+  const windowsOnly = () => process.platform === "win32";
+
+  protocol.handle("vor-preview", (request) => {
+    try {
+      const url = new URL(request.url);
+      if (url.hostname === "svg") {
+        if (!sanitizedSvg) return new Response("missing", { status: 404 });
+        return new Response(sanitizedSvg, {
+          headers: {
+            "content-type": "image/svg+xml; charset=utf-8",
+            "cache-control": "no-store",
+            "content-security-policy": "default-src 'none'; style-src 'unsafe-inline'; img-src data:",
+          },
+        });
+      }
+      if (url.hostname !== "media" || !currentPath) {
+        return new Response("forbidden", { status: 403 });
+      }
+      if (!fs.existsSync(currentPath) || fs.statSync(currentPath).isDirectory()) {
+        return new Response("missing", { status: 404 });
+      }
+      const mime = lib.mimeFor(lib.extOf(currentPath), currentKind);
+      const range = request.headers.get("range");
+      const fetchHeaders = {};
+      if (range) fetchHeaders.Range = range;
+      return net.fetch(pathToFileURL(currentPath).href, { headers: fetchHeaders }).then((response) => {
+        const headers = new Headers(response.headers);
+        headers.set("content-type", mime);
+        headers.set("cache-control", "no-store");
+        return new Response(response.body, { status: response.status, headers });
+      });
+    } catch (err) {
+      ctx.diagLog(`[Preview] protocol: ${err.message}`);
+      return new Response("error", { status: 500 });
+    }
+  });
+
+  const helperSend = (line) => {
+    if (!helper || !helper.stdin || helper.stdin.destroyed) return;
+    try { helper.stdin.write(`${line}\n`); } catch { /* ignore */ }
+  };
+
+  const setArmed = () => {
+    helperSend(`armed ${visible && !pinned ? 1 : 0}`);
+  };
+
+  const appearance = () => {
+    const a = typeof ctx.getAppearance === "function" ? ctx.getAppearance() : {};
+    return {
+      theme: a.theme === "white" ? "white" : "black",
+      accent: /^#[0-9a-f]{6}$/i.test(String(a.accent || "")) ? String(a.accent) : "#FFFFFF",
+      glass: a.glass !== false,
+      opacity: Math.min(1, Math.max(0.35, Number(a.opacity) || 0.8)),
+    };
+  };
+
+  const language = () => (typeof ctx.language === "function" ? ctx.language() : "pt");
+
+  const sendToPreview = (channel, payload) => {
+    if (!win || win.isDestroyed()) return;
+    try { win.webContents.send(channel, payload); } catch { /* ignore */ }
+  };
+
+  const iconDataUrl = async (filePath) => {
+    try {
+      const img = await electronApp.getFileIcon(filePath, { size: "large" });
+      return img && !img.isEmpty() ? img.toDataURL() : null;
+    } catch {
+      return null;
+    }
+  };
+
+  const buildSession = async (filePath) => {
+    const st = fs.statSync(filePath);
+    let kind = lib.classifyKind(filePath, st);
+    const meta = lib.fileMeta(filePath, st);
+    const session = {
+      kind,
+      path: filePath,
+      mediaUrl: null,
+      mime: lib.mimeFor(meta.ext, kind),
+      languageHint: lib.langFor(meta.ext),
+      text: null,
+      html: null,
+      truncated: false,
+      folder: null,
+      zip: null,
+      iconDataUrl: null,
+      pinned,
+      index: siblings.index,
+      total: siblings.paths.length,
+      appearance: appearance(),
+      uiLanguage: language() === "en" ? "en" : "pt",
+      ...meta,
+    };
+
+    if (kind === "folder") {
+      session.folder = lib.listFolder(filePath);
+      session.sizeLabel = lib.formatBytes(session.folder.totalSize);
+      session.iconDataUrl = await iconDataUrl(filePath);
+    } else if (kind === "zip") {
+      session.zip = lib.listZipEntries(filePath);
+      session.iconDataUrl = await iconDataUrl(filePath);
+    } else if (kind === "markdown") {
+      const preview = lib.readTextPreview(filePath);
+      session.text = preview.text;
+      session.html = preview.text ? lib.renderMarkdown(preview.text) : "";
+      session.truncated = preview.truncated;
+      if (preview.binary) {
+        kind = "fallback";
+        session.kind = kind;
+      }
+    } else if (kind === "html") {
+      const preview = lib.readTextPreview(filePath);
+      session.html = preview.text ? lib.sanitizeHtmlDocument(preview.text) : "";
+      session.truncated = preview.truncated;
+      if (preview.binary) {
+        kind = "fallback";
+        session.kind = kind;
+      }
+    } else if (kind === "text") {
+      const preview = lib.readTextPreview(filePath);
+      session.text = preview.text;
+      session.truncated = preview.truncated;
+      if (preview.binary || preview.text == null) {
+        kind = "fallback";
+        session.kind = kind;
+        session.text = null;
+      }
+    } else if (kind === "svg") {
+      const preview = lib.readTextPreview(filePath, 4 * 1024 * 1024);
+      sanitizedSvg = preview.text ? lib.sanitizeSvg(preview.text) : "";
+      session.mediaUrl = "vor-preview://svg/current";
+      session.truncated = preview.truncated;
+    } else if (kind === "image" || kind === "video" || kind === "audio" || kind === "pdf") {
+      session.mediaUrl = "vor-preview://media/current";
+    } else {
+      // Fallback: se parecer texto pequeno, mostra como texto; senão ícone/metadados.
+      if (!st.isDirectory() && st.size <= lib.MAX_TEXT_BYTES) {
+        try {
+          const preview = lib.readTextPreview(filePath);
+          if (!preview.binary && preview.text != null) {
+            kind = "text";
+            session.kind = kind;
+            session.text = preview.text;
+            session.truncated = preview.truncated;
+            session.languageHint = "text";
+          }
+        } catch { /* binário */ }
+      }
+      if (session.kind === "fallback") session.iconDataUrl = await iconDataUrl(filePath);
+    }
+
+    currentKind = session.kind;
+    if (session.kind !== "svg") sanitizedSvg = "";
+    return session;
+  };
+
+  const targetDisplay = () => screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+
+  const placeWindow = () => {
+    if (!win || win.isDestroyed()) return;
+    const area = targetDisplay().workArea;
+    const width = Math.min(DEFAULT_WIDTH, Math.max(480, area.width - 80));
+    const height = Math.min(DEFAULT_HEIGHT, Math.max(360, area.height - 80));
+    const x = Math.round(area.x + (area.width - width) / 2);
+    const y = Math.round(area.y + (area.height - height) / 2);
+    win.setBounds({ x, y, width, height });
+  };
+
+  const attachLifecycle = (window) => {
+    window.removeMenu();
+    window.on("closed", () => {
+      if (win === window) win = null;
+      visible = false;
+      setArmed();
+    });
+    window.on("blur", () => {
+      if (pinned || !visible) return;
+      // O foco a saltar no instante em que a janela nasce (ShiftDrop a fechar) não pode
+      // engolir a prévia. Um clique fora, depois disso, fecha — excepto se estiver fixada.
+      const opened = shownAt;
+      setTimeout(() => {
+        if (pinned || !visible || opened !== shownAt) return;
+        if (Date.now() - shownAt < 280) return;
+        if (win && !win.isDestroyed() && !win.isFocused()) hidePreview();
+      }, 80);
+    });
+  };
+
+  const loadPreviewPage = async (window) => {
+    if (ctx.isDev) await window.loadURL("http://localhost:5173/preview.html");
+    else await window.loadFile(ctx.previewHtmlPath);
+  };
+
+  const createWindow = async () => {
+    const window = new BrowserWindow({
+      width: DEFAULT_WIDTH,
+      height: DEFAULT_HEIGHT,
+      show: false,
+      frame: false,
+      transparent: true,
+      hasShadow: false,
+      resizable: true,
+      minimizable: false,
+      maximizable: true,
+      fullscreenable: false,
+      skipTaskbar: true,
+      alwaysOnTop: true,
+      autoHideMenuBar: true,
+      backgroundColor: "#00000000",
+      paintWhenInitiallyHidden: true,
+      webPreferences: {
+        preload: ctx.preloadPath,
+        contextIsolation: true,
+        nodeIntegration: false,
+        sandbox: true,
+        webSecurity: true,
+        spellcheck: false,
+        backgroundThrottling: false,
+      },
+    });
+    attachLifecycle(window);
+    window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+    window.webContents.on("will-navigate", (event, url) => {
+      if (/^https?:\/\/localhost:5173\//i.test(url) || url.startsWith("file:")) return;
+      event.preventDefault();
+    });
+    window.webContents.session.setPermissionRequestHandler((_wc, _perm, callback) => callback(false));
+    await loadPreviewPage(window);
+    return window;
+  };
+
+  const ensureWindow = async () => {
+    if (win && !win.isDestroyed()) return win;
+    win = await createWindow();
+    return win;
+  };
+
+  const hidePreview = () => {
+    visible = false;
+    pendingSession = null;
+    currentPath = "";
+    sanitizedSvg = "";
+    setArmed();
+    if (!win || win.isDestroyed()) return;
+    try {
+      win.setSkipTaskbar(true);
+      win.hide();
+    } catch { /* ignore */ }
+  };
+
+  const pushSession = (session) => {
+    pendingSession = session;
+    sendToPreview("preview-session", session);
+  };
+
+  const openPath = async (filePath, { keepPin = false } = {}) => {
+    const target = path.resolve(String(filePath || ""));
+    if (!target || !fs.existsSync(target)) {
+      ctx.diagLog(`[Preview] caminho inválido: ${target}`);
+      return { ok: false, error: "missing" };
+    }
+    if (opening) return { ok: false, error: "busy" };
+    opening = true;
+    try {
+      if (!keepPin) pinned = false;
+      siblings = lib.listSiblings(target);
+      currentPath = target;
+      const session = await buildSession(target);
+      const window = await ensureWindow();
+      placeWindow();
+      window.setAlwaysOnTop(true, "floating");
+      window.setSkipTaskbar(pinned);
+      pushSession(session);
+      visible = true;
+      setArmed();
+      shownAt = Date.now();
+      if (!window.isVisible()) window.show();
+      window.focus();
+      return { ok: true };
+    } catch (err) {
+      ctx.diagLog(`[Preview] open: ${err.message}`);
+      return { ok: false, error: err.message };
+    } finally {
+      opening = false;
+    }
+  };
+
+  const navigate = (delta) => {
+    if (!siblings.paths.length) return Promise.resolve({ ok: false });
+    const next = (siblings.index + delta + siblings.paths.length) % siblings.paths.length;
+    const target = siblings.paths[next];
+    if (!target || !fs.existsSync(target)) return Promise.resolve({ ok: false });
+    return openPath(target, { keepPin: true });
+  };
+
+  const openDefault = async () => {
+    if (!currentPath) return { ok: false };
+    const target = currentPath;
+    hidePreview();
+    try {
+      await shell.openPath(target);
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  };
+
+  const openWith = () => {
+    if (!currentPath || !windowsOnly()) return { ok: false };
+    const target = currentPath;
+    const { spawn } = require("child_process");
+    try {
+      spawn("rundll32.exe", ["shell32.dll,OpenAs_RunDLL", target], { windowsHide: true, detached: true, stdio: "ignore" }).unref();
+      return { ok: true };
+    } catch (err) {
+      return { ok: false, error: err.message };
+    }
+  };
+
+  const reveal = () => {
+    if (!currentPath) return { ok: false };
+    shell.showItemInFolder(currentPath);
+    return { ok: true };
+  };
+
+  const togglePin = () => {
+    pinned = !pinned;
+    if (win && !win.isDestroyed()) {
+      win.setSkipTaskbar(pinned ? false : true);
+      win.setAlwaysOnTop(true, "floating");
+    }
+    setArmed();
+    if (pendingSession) {
+      pendingSession = { ...pendingSession, pinned };
+      sendToPreview("preview-session", pendingSession);
+    }
+    return { ok: true, pinned };
+  };
+
+  const startHelper = () => {
+    if (!windowsOnly() || helper) return false;
+    const exe = ctx.previewHelperPath;
+    if (!exe || !fs.existsSync(exe)) {
+      ctx.diagLog(`[Preview] helper nativo ausente (${exe})`);
+      return false;
+    }
+    const { spawn } = require("child_process");
+    const child = spawn(exe, [], { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
+    helper = child;
+    let buf = "";
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk) => {
+      buf += chunk;
+      let nl;
+      while ((nl = buf.indexOf("\n")) >= 0) {
+        const line = buf.slice(0, nl).replace(/\r$/, "");
+        buf = buf.slice(nl + 1);
+        if (!line) continue;
+        const sp = line.indexOf(" ");
+        const cmd = sp < 0 ? line : line.slice(0, sp);
+        const arg = sp < 0 ? "" : line.slice(sp + 1);
+        if (cmd === "ready") {
+          helperUp = true;
+          helperSend(`bind ${shortcutsPaused ? "" : helperBindSpec}`);
+          setArmed();
+        } else if (cmd === "open") {
+          void openPath(arg);
+        } else if (cmd === "close") {
+          hidePreview();
+        } else if (cmd === "log") {
+          ctx.diagLog(`[Preview] ${arg}`);
+        }
+      }
+    });
+    child.on("exit", () => {
+      helper = null;
+      helperUp = false;
+      if (!windowsOnly() || settings().enabled === false) return;
+      helperRestarts += 1;
+      if (helperRestarts > 20) return;
+      const wait = Math.min(8000, 400 * helperRestarts);
+      setTimeout(() => startHelper(), wait);
+    });
+    return true;
+  };
+
+  const registerShortcuts = () => {
+    const cfg = settings();
+    helperBindSpec = "";
+    if (!windowsOnly() || cfg.enabled === false) {
+      helperSend("bind ");
+      helperSend("armed 0");
+      if (visible && !pinned) hidePreview();
+      return;
+    }
+    helperBindSpec = lib.canonicalAccelerator(cfg.shortcut || DEFAULT_PREVIEW.shortcut);
+    if (helper || startHelper()) {
+      helperSend(`bind ${shortcutsPaused ? "" : helperBindSpec}`);
+      setArmed();
+    }
+    void ensureWindow().catch((err) => ctx.diagLog(`[Preview] warm: ${err.message}`));
+  };
+
+  let pauseTimer = null;
+  const setPaused = (value, why) => {
+    const next = !!value;
+    clearTimeout(pauseTimer);
+    if (next) pauseTimer = setTimeout(() => setPaused(false, "timeout 15 s"), 15000);
+    if (shortcutsPaused === next) return;
+    shortcutsPaused = next;
+    ctx.diagLog(`[Preview] atalhos ${next ? "pausados" : "retomados"} (${why})`);
+    helperSend(`bind ${next ? "" : helperBindSpec}`);
+  };
+
+  const fromPreview = (event) => win && !win.isDestroyed() && event.sender === win.webContents;
+
+  ctx.ipcMain.handle("preview-pending", (event) => (fromPreview(event) ? pendingSession : null));
+  ctx.ipcMain.handle("preview-action", async (event, payload) => {
+    if (!fromPreview(event)) return { ok: false, error: "origem inválida" };
+    const action = payload && payload.action;
+    if (action === "ready") return { ok: true };
+    if (action === "close") { hidePreview(); return { ok: true }; }
+    if (action === "pin") return togglePin();
+    if (action === "open") return openDefault();
+    if (action === "open-with") return openWith();
+    if (action === "reveal") return reveal();
+    if (action === "next") return navigate(1);
+    if (action === "prev") return navigate(-1);
+    return { ok: false, error: "ação desconhecida" };
+  });
+
+  queueMicrotask(() => {
+    if (settings().enabled === false) return;
+    void ensureWindow().catch((err) => ctx.diagLog(`[Preview] warm: ${err.message}`));
+  });
+
+  if (typeof ctx.onAppearance === "function") {
+    ctx.onAppearance(() => {
+      const next = appearance();
+      sendToPreview("preview-appearance", next);
+      if (pendingSession) pendingSession = { ...pendingSession, appearance: next };
+    });
+  }
+
+  return {
+    open: (filePath) => openPath(filePath),
+    hide: hidePreview,
+    registerShortcuts,
+    setShortcutsPaused: (value, why = "ipc") => setPaused(value, why),
+    dispose: () => {
+      helperSend("quit");
+      try { if (helper) helper.kill(); } catch { /* ignore */ }
+      helper = null;
+      if (win && !win.isDestroyed()) {
+        try { win.close(); } catch { /* ignore */ }
+      }
+    },
+  };
+}
+
+module.exports = {
+  DEFAULT_PREVIEW,
+  installPreview,
+};

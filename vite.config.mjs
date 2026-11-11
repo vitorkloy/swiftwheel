@@ -22,6 +22,7 @@ export default defineConfig({
       input: {
         main: resolve(root, "index.html"),
         capture: resolve(root, "capture.html"),
+        preview: resolve(root, "preview.html"),
       },
       output: {
         manualChunks(id) {

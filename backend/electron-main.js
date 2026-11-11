@@ -29,6 +29,7 @@ const unixPlatform = process.platform === "win32" ? null : require("./platform-u
 const { normalizeFullPersistenceBlob } = require("./persistence-normalize.cjs");
 const { detectGameExecutable } = require("./game-detection.cjs");
 const { DEFAULT_SCREENSHOT, installScreenshot, createShortcutTracker } = require("./screenshot.cjs");
+const { DEFAULT_PREVIEW, installPreview } = require("./preview.cjs");
 const crypto = require("crypto");
 const { GlobalKeyboardListener } = require("node-global-key-listener");
 const http = require("http");
@@ -51,6 +52,16 @@ protocol.registerSchemesAsPrivileged([
       bypassCSP: true,
     },
   },
+  {
+    scheme: "vor-preview",
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      stream: true,
+      corsEnabled: true,
+    },
+  },
 ]);
 
 const isDev = !app.isPackaged;
@@ -58,6 +69,8 @@ const isDev = !app.isPackaged;
 let screenshotGrabbing = false;
 let startScreenshot = async () => {};
 let restartCaptureShortcut = () => {};
+let stopPreviewHelper = () => {};
+let startPreviewFile = async () => ({ ok: false });
 
 /**
  * Canal de distribuição. A Microsoft Store proíbe mecanismos próprios de atualização — quem
@@ -2695,6 +2708,7 @@ function beginUpdateInstall() {
   stopMouseHookForShutdown();
   stopRadialMouseBlocker();
   stopForegroundFocusHelper();
+  stopPreviewHelper();
 
   try {
     autoUpdater.quitAndInstall(true, true);
@@ -2878,6 +2892,7 @@ app.whenReady().then(async () => {
     mouseTriggerButton: "middle",
     openAtLogin: true,
     screenshot: { ...DEFAULT_SCREENSHOT },
+    preview: { ...DEFAULT_PREVIEW },
   };
 
   const removeLegacyWindowsLoginItems = () => {
@@ -2976,6 +2991,13 @@ app.whenReady().then(async () => {
         ...DEFAULT_SCREENSHOT,
         ...currentSettings.screenshot,
         ...ui.screenshot,
+      };
+    }
+    if (ui.preview && typeof ui.preview === "object") {
+      currentSettings.preview = {
+        ...DEFAULT_PREVIEW,
+        ...currentSettings.preview,
+        ...ui.preview,
       };
     }
   };
@@ -4428,6 +4450,10 @@ app.whenReady().then(async () => {
             }
             return { ok: true, out: last };
           }
+          if (id === "act:preview") {
+            const result = await startPreviewFile(filePath);
+            return { ok: !!result?.ok, out: filePath, error: result?.error };
+          }
           if (id === "act:openTerminal") return { ok: true, out: await shiftWheels.run(id, filePath) };
           if (shiftWheels.isBatch(id)) {
             showShiftToast(`${shiftVerb(id)}…`, -1);
@@ -4624,6 +4650,8 @@ app.whenReady().then(async () => {
     for (const workspace of currentSettings.workspaces || []) visit(workspace?.apps);
     const shot = currentSettings.screenshot || {};
     entries.push(`shot:${shot.enabled}:${shot.shortcutRegion}:${shot.shortcutFull}:${shot.shortcutWindow}`);
+    const preview = currentSettings.preview || {};
+    entries.push(`preview:${preview.enabled}:${preview.shortcut}`);
     return entries.join("\u0001");
   };
 
@@ -4665,6 +4693,27 @@ app.whenReady().then(async () => {
     shotApi.restartShortcut();
     registerGlobalShortcut(true);
   };
+
+  const unpacked = (file) => file.replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+  const previewApi = installPreview({
+    ipcMain,
+    isDev,
+    preloadPath: path.join(__dirname, "preview-preload.js"),
+    previewHtmlPath: path.join(__dirname, "../dist/preview.html"),
+    previewHelperPath: unpacked(path.join(__dirname, "bin", "vor-preview.exe")),
+    getPreviewSettings: () => currentSettings.preview,
+    getAppearance: () => vorAppearance,
+    onAppearance: (hook) => vorAppearanceHooks.add(hook),
+    language: () => {
+      if (currentSettings.uiLanguage === "pt" || currentSettings.language === "pt") return "pt";
+      if (currentSettings.uiLanguage === "en" || currentSettings.language === "en") return "en";
+      return String(app.getLocale() || "").toLowerCase().startsWith("pt") ? "pt" : "en";
+    },
+    diagLog,
+  });
+  startPreviewFile = (filePath) => previewApi.open(filePath);
+  stopPreviewHelper = () => previewApi.dispose();
+  ipcMain.handle("start-preview", (_event, filePath) => previewApi.open(String(filePath || "")));
 
   const registerGlobalShortcut = (force = false) => {
     const registrationSignature = shortcutRegistrationSignature();
@@ -4788,6 +4837,7 @@ app.whenReady().then(async () => {
       registerWorkspaceShortcuts();
     }
     shotApi.registerShortcuts(globalShortcut);
+    previewApi.registerShortcuts();
   };
 
   const unregisterWorkspaceShortcuts = () => {
@@ -4988,11 +5038,13 @@ app.whenReady().then(async () => {
     lastShortcutRegistrationSignature = null;
     globalShortcut.unregisterAll();
     shotApi.setShortcutsPaused(true, "gravar atalho");
+    previewApi.setShortcutsPaused(true, "gravar atalho");
   });
 
   ipcMain.on("resume-global-shortcut", () => {
     console.log("[Shortcuts] Resuming global shortcuts...");
     shotApi.setShortcutsPaused(false, "fim da gravação");
+    previewApi.setShortcutsPaused(false, "fim da gravação");
     registerGlobalShortcut();
     // (though recording is usually done in settings where menu is not 'open-radial' but 'open-settings')
   });
@@ -5001,6 +5053,7 @@ app.whenReady().then(async () => {
   const resumeIfPaused = (why) => {
     if (lastShortcutRegistrationSignature !== null) return;
     shotApi.setShortcutsPaused(false, why);
+    previewApi.setShortcutsPaused(false, why);
     registerGlobalShortcut();
   };
   app.on("browser-window-blur", (_event, win) => {
@@ -8193,6 +8246,7 @@ app.on("will-quit", () => {
   stopMouseHookForShutdown();
   stopRadialMouseBlocker();
   stopForegroundFocusHelper();
+  stopPreviewHelper();
   saveIconCache({ sync: true });
   globalShortcut.unregisterAll();
 });
