@@ -35,6 +35,8 @@ function installPreview(ctx) {
   let pendingSession = null;
   let opening = false;
   let shownAt = 0;
+  let openWithBusy = false;
+  let openWithBusyTimer = null;
 
   const settings = () => ({ ...DEFAULT_PREVIEW, ...(ctx.getPreviewSettings() || {}) });
   const windowsOnly = () => process.platform === "win32";
@@ -79,8 +81,19 @@ function installPreview(ctx) {
     try { helper.stdin.write(`${line}\n`); } catch { /* ignore */ }
   };
 
+  const sendPreviewHwnd = () => {
+    if (!win || win.isDestroyed()) return;
+    try {
+      const handle = win.getNativeWindowHandle();
+      const hwnd = handle.length >= 8 ? handle.readBigUInt64LE(0) : BigInt(handle.readUInt32LE(0));
+      helperSend(`hwnd ${hwnd.toString()}`);
+    } catch { /* ignore */ }
+  };
+
   const setArmed = () => {
-    helperSend(`armed ${visible && !pinned ? 1 : 0}`);
+    sendPreviewHwnd();
+    helperSend(`pinned ${pinned ? 1 : 0}`);
+    helperSend(`armed ${visible ? 1 : 0}`);
   };
 
   const appearance = () => {
@@ -214,13 +227,27 @@ function installPreview(ctx) {
       visible = false;
       setArmed();
     });
+    // Teclas com a janela realmente em primeiro plano (clique na prévia, PDF, etc.).
+    // O caso Explorer-ainda-focado é o helper nativo: o Windows recusa SetForegroundWindow.
+    window.webContents.on("before-input-event", (event, input) => {
+      if (!visible || input.type !== "keyDown") return;
+      const nav = lib.previewNavCommand(input.key);
+      if (!nav) return;
+      if (nav === "close" && pinned && input.key !== "Escape") return;
+      event.preventDefault();
+      if (nav === "close") hidePreview();
+      else if (nav === "launch") void openDefault();
+      else if (nav === "next") void navigate(1);
+      else if (nav === "prev") void navigate(-1);
+    });
     window.on("blur", () => {
-      if (pinned || !visible) return;
+      if (pinned || !visible || openWithBusy) return;
       // O foco a saltar no instante em que a janela nasce (ShiftDrop a fechar) não pode
       // engolir a prévia. Um clique fora, depois disso, fecha — excepto se estiver fixada.
+      // «Abrir com» também desfoca: sem este guarda o diálogo nativo some com a janela.
       const opened = shownAt;
       setTimeout(() => {
-        if (pinned || !visible || opened !== shownAt) return;
+        if (pinned || !visible || openWithBusy || opened !== shownAt) return;
         if (Date.now() - shownAt < 280) return;
         if (win && !win.isDestroyed() && !win.isFocused()) hidePreview();
       }, 80);
@@ -273,6 +300,7 @@ function installPreview(ctx) {
   const ensureWindow = async () => {
     if (win && !win.isDestroyed()) return win;
     win = await createWindow();
+    sendPreviewHwnd();
     return win;
   };
 
@@ -281,6 +309,9 @@ function installPreview(ctx) {
     pendingSession = null;
     currentPath = "";
     sanitizedSvg = "";
+    openWithBusy = false;
+    clearTimeout(openWithBusyTimer);
+    openWithBusyTimer = null;
     setArmed();
     if (!win || win.isDestroyed()) return;
     try {
@@ -316,7 +347,8 @@ function installPreview(ctx) {
       setArmed();
       shownAt = Date.now();
       if (!window.isVisible()) window.show();
-      window.focus();
+      // Não roubar o foreground: o Windows recusa, o Explorer fica com as teclas, e o helper
+      // trata Esc/setas/Enter enquanto a prévia está armada. Um clique na janela dá-lhe foco.
       return { ok: true };
     } catch (err) {
       ctx.diagLog(`[Preview] open: ${err.message}`);
@@ -346,14 +378,46 @@ function installPreview(ctx) {
     }
   };
 
-  const openWith = () => {
-    if (!currentPath || !windowsOnly()) return { ok: false };
-    const target = currentPath;
-    const { spawn } = require("child_process");
+  const setOpenWithBusy = (value) => {
+    openWithBusy = !!value;
+    clearTimeout(openWithBusyTimer);
+    openWithBusyTimer = null;
+    if (!win || win.isDestroyed()) return;
     try {
-      spawn("rundll32.exe", ["shell32.dll,OpenAs_RunDLL", target], { windowsHide: true, detached: true, stdio: "ignore" }).unref();
+      // Sem alwaysOnTop o diálogo nativo não fica atrás da prévia frameless.
+      win.setAlwaysOnTop(!openWithBusy, "floating");
+    } catch { /* ignore */ }
+  };
+
+  const openWith = () => {
+    if (!currentPath) return { ok: false };
+    if (!windowsOnly()) {
+      ctx.diagLog("[Preview] Abrir com... só existe no Windows");
+      return { ok: false, error: "windows-only" };
+    }
+    const target = currentPath;
+    ctx.diagLog(`[Preview] Abrir com... ${target}`);
+    setOpenWithBusy(true);
+    openWithBusyTimer = setTimeout(() => setOpenWithBusy(false), 120000);
+    // SHOpenWithDialog no helper (STA). rundll32 com windowsHide:true escondia o diálogo.
+    if (helperUp) {
+      helperSend(`openwith ${target}`);
+      return { ok: true };
+    }
+    try {
+      const { spawn } = require("child_process");
+      spawn("rundll32.exe", ["shell32.dll,OpenAs_RunDLL", target], {
+        detached: true,
+        stdio: "ignore",
+        windowsHide: false,
+      }).unref();
+      // O rundll32 não avisa quando o diálogo fecha; liberta o alwaysOnTop assim que ele nascer.
+      clearTimeout(openWithBusyTimer);
+      openWithBusyTimer = setTimeout(() => setOpenWithBusy(false), 1500);
       return { ok: true };
     } catch (err) {
+      setOpenWithBusy(false);
+      ctx.diagLog(`[Preview] Abrir com falhou: ${err.message}`);
       return { ok: false, error: err.message };
     }
   };
@@ -408,6 +472,14 @@ function installPreview(ctx) {
           void openPath(arg);
         } else if (cmd === "close") {
           hidePreview();
+        } else if (cmd === "next") {
+          void navigate(1);
+        } else if (cmd === "prev") {
+          void navigate(-1);
+        } else if (cmd === "launch") {
+          void openDefault();
+        } else if (cmd === "openwith-done") {
+          setOpenWithBusy(false);
         } else if (cmd === "log") {
           ctx.diagLog(`[Preview] ${arg}`);
         }

@@ -22,6 +22,8 @@
   --pv-bg: rgba(252, 252, 253, 0.88);
   --pv-solid: #fcfcfd;
   --pv-code: rgba(0, 0, 0, 0.04);
+  --pv-accent: #101012;
+  --pv-on-accent: #ffffff;
   --pv-elev: 0 18px 44px rgba(0, 0, 0, 0.16);
 }
 
@@ -115,6 +117,14 @@ html, body, #root {
   -webkit-app-region: no-drag;
 }
 
+/* O Electron trata SVG dentro de drag como arraste da janela: o clique no ícone não chega. */
+.pv-actions,
+.pv-actions *,
+.pv-btn,
+.pv-btn * {
+  -webkit-app-region: no-drag;
+}
+
 .pv-btn {
   width: 32px;
   height: 32px;
@@ -125,16 +135,25 @@ html, body, #root {
   background: transparent;
   color: var(--pv-text-2);
   cursor: pointer;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
 }
 
-.pv-btn:hover,
-.pv-btn.is-on {
+/* O clique tem de ir ao <button>, não ao SVG (Electron trata o ícone como drag). */
+.pv-btn svg,
+.pv-btn svg * {
+  pointer-events: none;
+  -webkit-app-region: no-drag;
+}
+
+.pv-btn:hover {
   background: var(--pv-hover);
   color: var(--pv-text);
 }
 
 .pv-btn.is-on {
-  color: var(--pv-accent);
+  background: var(--pv-accent);
+  color: var(--pv-on-accent);
 }
 
 .pv-stage {

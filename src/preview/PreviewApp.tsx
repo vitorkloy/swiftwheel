@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ExternalLink, FolderOpen, Pin, X } from 'lucide-react';
+import { AppWindow, FolderOpen, Pin, X } from 'lucide-react';
 import { highlightCode } from './highlight';
 
 type Kind = 'image' | 'svg' | 'video' | 'audio' | 'pdf' | 'text' | 'markdown' | 'html' | 'folder' | 'zip' | 'fallback';
@@ -41,11 +41,11 @@ interface Session {
 
 const COPY = {
   pt: {
-    pin: 'Fixar',
-    unpin: 'Desafixar',
-    openWith: 'Abrir com…',
+    pin: 'Fixar janela',
+    unpin: 'Desafixar janela',
+    openWith: 'Abrir com...',
     reveal: 'Mostrar na pasta',
-    close: 'Fechar',
+    close: 'Fechar (Esc)',
     folder: 'Pasta',
     items: 'itens',
     files: 'ficheiros',
@@ -59,11 +59,11 @@ const COPY = {
     fallback: 'Prévia não disponível para este tipo',
   },
   en: {
-    pin: 'Pin',
-    unpin: 'Unpin',
-    openWith: 'Open with…',
+    pin: 'Pin window',
+    unpin: 'Unpin window',
+    openWith: 'Open with...',
     reveal: 'Show in folder',
-    close: 'Close',
+    close: 'Close (Esc)',
     folder: 'Folder',
     items: 'items',
     files: 'files',
@@ -252,32 +252,6 @@ export function PreviewApp() {
     void window.preview?.action(action);
   }, []);
 
-  useEffect(() => {
-    const onKey = (event: KeyboardEvent) => {
-      if (event.key === 'Escape' || event.key === ' ') {
-        event.preventDefault();
-        run('close');
-        return;
-      }
-      if (event.key === 'Enter') {
-        event.preventDefault();
-        run('open');
-        return;
-      }
-      if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
-        event.preventDefault();
-        run('next');
-        return;
-      }
-      if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
-        event.preventDefault();
-        run('prev');
-      }
-    };
-    window.addEventListener('keydown', onKey);
-    return () => window.removeEventListener('keydown', onKey);
-  }, [run]);
-
   const appearance = session?.appearance;
   const t = COPY[session?.uiLanguage === 'en' ? 'en' : 'pt'];
   const accentStyle = useMemo(() => {
@@ -285,7 +259,8 @@ export function PreviewApp() {
     const white = /^#ffffff$/i.test(hex);
     const theme = appearance?.theme === 'white' ? 'white' : 'black';
     const accent = white ? (theme === 'white' ? '#101012' : '#ffffff') : hex;
-    return { ['--pv-accent' as string]: accent };
+    const on = (0.2126 * parseInt(accent.slice(1, 3), 16) + 0.7152 * parseInt(accent.slice(3, 5), 16) + 0.0722 * parseInt(accent.slice(5, 7), 16)) / 255 > 0.56 ? '#0a0a0b' : '#ffffff';
+    return { ['--pv-accent' as string]: accent, ['--pv-on-accent' as string]: on };
   }, [appearance]);
 
   const glass = appearance?.glass !== false;
@@ -313,17 +288,46 @@ export function PreviewApp() {
       <header className="pv-bar">
         <div className="pv-title" title={session.path}>{session.name}</div>
         <div className="pv-meta">{subtitle}</div>
-        <div className="pv-actions">
-          <button type="button" className={`pv-btn${session.pinned ? ' is-on' : ''}`} title={session.pinned ? t.unpin : t.pin} onClick={() => run('pin')}>
-            <Pin size={15} />
+        <div className="pv-actions" onMouseDown={(event) => event.stopPropagation()}>
+          <button
+            type="button"
+            className={`pv-btn${session.pinned ? ' is-on' : ''}`}
+            title={session.pinned ? t.unpin : t.pin}
+            aria-label={session.pinned ? t.unpin : t.pin}
+            aria-pressed={session.pinned}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => { event.stopPropagation(); run('pin'); }}
+          >
+            <Pin size={15} fill={session.pinned ? 'currentColor' : 'none'} />
           </button>
-          <button type="button" className="pv-btn" title={t.openWith} onClick={() => run('open-with')}>
-            <ExternalLink size={15} />
+          <button
+            type="button"
+            className="pv-btn"
+            title={t.openWith}
+            aria-label={t.openWith}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => { event.stopPropagation(); run('open-with'); }}
+          >
+            <AppWindow size={15} />
           </button>
-          <button type="button" className="pv-btn" title={t.reveal} onClick={() => run('reveal')}>
+          <button
+            type="button"
+            className="pv-btn"
+            title={t.reveal}
+            aria-label={t.reveal}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => { event.stopPropagation(); run('reveal'); }}
+          >
             <FolderOpen size={15} />
           </button>
-          <button type="button" className="pv-btn" title={t.close} onClick={() => run('close')}>
+          <button
+            type="button"
+            className="pv-btn"
+            title={t.close}
+            aria-label={t.close}
+            onMouseDown={(event) => event.stopPropagation()}
+            onClick={(event) => { event.stopPropagation(); run('close'); }}
+          >
             <X size={15} />
           </button>
         </div>

@@ -67,6 +67,52 @@ describe("native helper source", () => {
     assert.doesNotMatch(src, /\?\./);
     assert.doesNotMatch(src, /\basync\b/);
   });
+
+  it("handles Esc/arrows/Enter while armed and Open With via SHOpenWithDialog", () => {
+    const src = fs.readFileSync(path.join(__dirname, "..", "native", "vor-preview.cs"), "utf8");
+    assert.match(src, /SHOpenWithDialog/);
+    assert.match(src, /NavCommand/);
+    assert.match(src, /return "launch"/);
+    assert.match(src, /return "next"/);
+    assert.match(src, /return "prev"/);
+    assert.match(src, /openwith/);
+    assert.match(src, /openwith-done/);
+    assert.match(src, /pinned/);
+  });
+});
+
+describe("preview toolbar wiring", () => {
+  it("does not hide Open With and keeps toolbar buttons out of the drag region", () => {
+    const main = fs.readFileSync(path.join(__dirname, "preview.cjs"), "utf8");
+    const css = fs.readFileSync(path.join(__dirname, "..", "src", "preview", "preview.css"), "utf8");
+    const app = fs.readFileSync(path.join(__dirname, "..", "src", "preview", "PreviewApp.tsx"), "utf8");
+    assert.match(main, /windowsHide:\s*false/);
+    assert.match(main, /OpenAs_RunDLL/);
+    assert.match(main, /openWithBusy/);
+    assert.match(main, /shell\.showItemInFolder/);
+    assert.match(main, /action === "pin"/);
+    assert.match(main, /action === "open-with"/);
+    assert.match(main, /action === "reveal"/);
+    assert.match(css, /\.pv-actions \*/);
+    assert.match(css, /-webkit-app-region:\s*no-drag/);
+    assert.match(css, /\.pv-btn svg/);
+    assert.match(css, /pointer-events:\s*none/);
+    assert.match(app, /open-with/);
+    assert.match(app, /run\('pin'\)/);
+    assert.match(app, /run\('reveal'\)/);
+    assert.match(app, /Abrir com/);
+  });
+});
+
+describe("preview-lib navigation keys", () => {
+  it("maps Esc/Space/Enter/arrows", () => {
+    assert.equal(lib.previewNavCommand("Escape"), "close");
+    assert.equal(lib.previewNavCommand(" "), "close");
+    assert.equal(lib.previewNavCommand("Enter"), "launch");
+    assert.equal(lib.previewNavCommand("ArrowRight"), "next");
+    assert.equal(lib.previewNavCommand("ArrowLeft"), "prev");
+    assert.equal(lib.previewNavCommand("a"), null);
+  });
 });
 
 describe("preview-lib classifyKind", () => {

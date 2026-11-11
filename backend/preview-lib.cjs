@@ -407,6 +407,15 @@ function fileMeta(filePath, stat) {
   };
 }
 
+function previewNavCommand(key) {
+  const token = String(key || "");
+  if (token === "Escape" || token === " " || token === "Space") return "close";
+  if (token === "Enter") return "launch";
+  if (token === "ArrowRight" || token === "ArrowDown") return "next";
+  if (token === "ArrowLeft" || token === "ArrowUp") return "prev";
+  return null;
+}
+
 function canonicalAccelerator(raw) {
   const parts = String(raw || "")
     .split("+")
@@ -451,6 +460,7 @@ module.exports = {
   listSiblings,
   fileMeta,
   formatBytes,
+  previewNavCommand,
   canonicalAccelerator,
   MAX_TEXT_BYTES,
   tmpdir: () => os.tmpdir(),

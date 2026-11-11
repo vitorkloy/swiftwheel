@@ -5,8 +5,10 @@
 //   e nunca com o caret a piscar / campo Edit (renomear, busca, barra de endereço).
 // - O item selecionado vem da API do Shell (Shell.Application / IShellWindows).
 // Protocolo (linhas UTF-8):
-//   stdin  bind <accel> | armed 0|1 | quit | status
-//   stdout ready | open <path> | close | log <txt> | status ...
+//   stdin  bind <accel> | armed 0|1 | pinned 0|1 | hwnd <n> | openwith <path> | quit | status
+//   stdout ready | open <path> | close | next | prev | launch | openwith-done | log <txt> | status ...
+// Com a prévia armada o Explorer fica com o teclado (o Windows recusa o foco à janela
+// Electron). Esc/setas/Enter/Espaço são tratados aqui, não no renderer.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -35,9 +37,17 @@ static class VorPreview
     [DllImport("user32.dll")] static extern bool GetGUIThreadInfo(uint id, ref GUITHREADINFO info);
     [DllImport("user32.dll")] static extern short GetAsyncKeyState(int k);
     [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)] static extern int SHOpenWithDialog(IntPtr hwnd, ref OPENASINFO info);
 
     [StructLayout(LayoutKind.Sequential)] struct MSG { public IntPtr h; public uint msg; public IntPtr w; public IntPtr l; public uint t; public int x; public int y; }
     [StructLayout(LayoutKind.Sequential)] struct KBD { public uint vk; public uint scan; public uint flags; public uint time; public IntPtr extra; }
+    [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
+    struct OPENASINFO
+    {
+        [MarshalAs(UnmanagedType.LPWStr)] public string pcszFile;
+        [MarshalAs(UnmanagedType.LPWStr)] public string pcszClass;
+        public uint oaifInFlags;
+    }
     [StructLayout(LayoutKind.Sequential)]
     struct GUITHREADINFO
     {
@@ -69,6 +79,8 @@ static class VorPreview
 
     static string binding = "";
     static volatile bool armed;
+    static volatile bool stayOpen;
+    static IntPtr previewHwnd = IntPtr.Zero;
     static IntPtr hook = IntPtr.Zero;
     static HookProc hookProc = HookCallback;
     static readonly HashSet<uint> swallowUp = new HashSet<uint>();
@@ -119,6 +131,18 @@ static class VorPreview
                     Emit("log bindings " + (binding.Length == 0 ? 0 : 1));
                 }
                 else if (cmd == "armed") armed = arg == "1";
+                else if (cmd == "pinned") stayOpen = arg == "1";
+                else if (cmd == "hwnd")
+                {
+                    long n = 0;
+                    if (long.TryParse(arg, out n)) previewHwnd = new IntPtr(n);
+                }
+                else if (cmd == "openwith")
+                {
+                    string p = arg;
+                    try { form.BeginInvoke((Action)(() => ShowOpenWith(p))); }
+                    catch (Exception ex) { Emit("log openwith-invoke " + ex.Message); Emit("openwith-done"); }
+                }
                 else if (cmd == "status")
                     Emit("status hook=" + (hook != IntPtr.Zero ? 1 : 0) + " bindings=" + (binding.Length == 0 ? 0 : 1) + " lastkey=" + (lastKeyAt == 0 ? -1 : Environment.TickCount - lastKeyAt) + " armed=" + (armed ? 1 : 0));
                 else if (cmd == "quit") break;
@@ -156,9 +180,66 @@ static class VorPreview
         if (vk == 0x20) return "space";
         if (vk == 0x1B) return "escape";
         if (vk == 0x0D) return "enter";
+        if (vk == 0x25) return "left";
+        if (vk == 0x26) return "up";
+        if (vk == 0x27) return "right";
+        if (vk == 0x28) return "down";
         if (vk >= 0x30 && vk <= 0x5A) return ((char)vk).ToString().ToLowerInvariant();
         if (vk >= 0x70 && vk <= 0x87) return "f" + (vk - 0x6F);
         return null;
+    }
+
+    // Com a prévia visível o Explorer fica em primeiro plano: estas teclas não podem ir para lá.
+    static string NavCommand(uint vk)
+    {
+        if (vk == 0x1B) return "close";
+        if (vk == 0x20) return stayOpen ? null : "close";
+        if (vk == 0x0D) return "launch";
+        if (vk == 0x25 || vk == 0x26) return "prev";
+        if (vk == 0x27 || vk == 0x28) return "next";
+        return null;
+    }
+
+    static bool IsPreviewForeground()
+    {
+        if (previewHwnd == IntPtr.Zero) return false;
+        IntPtr fg = GetForegroundWindow();
+        return fg == previewHwnd || Related(fg, previewHwnd);
+    }
+
+    static void ShowOpenWith(string filePath)
+    {
+        if (filePath == null || filePath.Length == 0)
+        {
+            Emit("openwith-done");
+            return;
+        }
+        try
+        {
+            OPENASINFO info = new OPENASINFO();
+            info.pcszFile = filePath;
+            info.pcszClass = null;
+            info.oaifInFlags = 0x00000001 | 0x00000004; // ALLOW_REGISTRATION | EXEC
+            // Dono nulo: o HWND Chromium da prévia (alwaysOnTop) engolia ou escondia o diálogo.
+            int hr = SHOpenWithDialog(IntPtr.Zero, ref info);
+            if (hr < 0 && (hr & 0xFFFF) != 1223)
+            {
+                Emit("log openwith-hr " + hr);
+                try
+                {
+                    System.Diagnostics.Process.Start("rundll32.exe", "shell32.dll,OpenAs_RunDLL \"" + filePath + "\"");
+                }
+                catch (Exception fallbackEx)
+                {
+                    Emit("log openwith-rundll " + fallbackEx.Message);
+                }
+            }
+        }
+        catch (Exception ex)
+        {
+            Emit("log openwith-error " + ex.Message);
+        }
+        Emit("openwith-done");
     }
 
     static string AccelOf(uint vk)
@@ -376,7 +457,7 @@ static class VorPreview
     {
         try
         {
-            if (armed)
+            if (armed && !stayOpen)
             {
                 Emit("close");
                 return;
@@ -421,6 +502,22 @@ static class VorPreview
             if (isDown)
             {
                 bool repeat = !held.Add(k.vk);
+                if (armed)
+                {
+                    // Se a prévia tiver mesmo o foreground, o Chromium trata as teclas.
+                    // Caso típico: o Explorer ficou com o teclado e o Electron mente no isFocused.
+                    string nav = NavCommand(k.vk);
+                    if (nav != null && !IsPreviewForeground() && IsTargetForeground() && !IsTyping())
+                    {
+                        swallowUp.Add(k.vk);
+                        if (!repeat || nav == "next" || nav == "prev")
+                        {
+                            string emit = nav;
+                            form.BeginInvoke((Action)(() => Emit(emit)));
+                        }
+                        return new IntPtr(1);
+                    }
+                }
                 if (repeat)
                 {
                     if (swallowUp.Contains(k.vk)) return new IntPtr(1);
