@@ -34,6 +34,8 @@ function installPreview(ctx) {
   let siblings = { paths: [], index: 0 };
   let pendingSession = null;
   let opening = false;
+  let queuedOpen = null;
+  let helperView = null;
   let shownAt = 0;
   let openWithBusy = false;
   let openWithBusyTimer = null;
@@ -78,7 +80,7 @@ function installPreview(ctx) {
 
   const helperSend = (line) => {
     if (!helper || !helper.stdin || helper.stdin.destroyed) return;
-    try { helper.stdin.write(`${line}\n`); } catch { /* ignore */ }
+    try { helper.stdin.write(`${line}\n`, "utf8"); } catch { /* ignore */ }
   };
 
   const sendPreviewHwnd = () => {
@@ -305,6 +307,7 @@ function installPreview(ctx) {
   };
 
   const hidePreview = () => {
+    if (currentPath) helperSend(`select ${currentPath}`);
     visible = false;
     pendingSession = null;
     currentPath = "";
@@ -325,17 +328,24 @@ function installPreview(ctx) {
     sendToPreview("preview-session", session);
   };
 
-  const openPath = async (filePath, { keepPin = false } = {}) => {
+  const openPath = async (filePath, { keepPin = false, keepSiblings = false } = {}) => {
     const target = path.resolve(String(filePath || ""));
     if (!target || !fs.existsSync(target)) {
       ctx.diagLog(`[Preview] caminho inválido: ${target}`);
       return { ok: false, error: "missing" };
     }
-    if (opening) return { ok: false, error: "busy" };
+    if (opening) {
+      queuedOpen = { filePath: target, keepPin, keepSiblings };
+      return { ok: false, error: "busy" };
+    }
     opening = true;
     try {
       if (!keepPin) pinned = false;
-      siblings = lib.listSiblings(target);
+      if (!keepSiblings) siblings = lib.listSiblings(target);
+      else {
+        const idx = siblings.paths.findIndex((p) => p.toLowerCase() === target.toLowerCase());
+        if (idx >= 0) siblings.index = idx;
+      }
       currentPath = target;
       const session = await buildSession(target);
       const window = await ensureWindow();
@@ -355,7 +365,22 @@ function installPreview(ctx) {
       return { ok: false, error: err.message };
     } finally {
       opening = false;
+      if (queuedOpen) {
+        const next = queuedOpen;
+        queuedOpen = null;
+        void openPath(next.filePath, { keepPin: next.keepPin, keepSiblings: next.keepSiblings });
+      }
     }
+  };
+
+  const applyHelperView = () => {
+    if (!helperView || !helperView.paths.length) return false;
+    const paths = helperView.paths.map((p) => path.resolve(p));
+    let idx = helperView.index;
+    if (idx < 0 || idx >= paths.length) idx = 0;
+    siblings = { paths, index: idx };
+    helperView = null;
+    return true;
   };
 
   const navigate = (delta) => {
@@ -363,7 +388,9 @@ function installPreview(ctx) {
     const next = (siblings.index + delta + siblings.paths.length) % siblings.paths.length;
     const target = siblings.paths[next];
     if (!target || !fs.existsSync(target)) return Promise.resolve({ ok: false });
-    return openPath(target, { keepPin: true });
+    helperSend(`select ${target}`);
+    siblings = { paths: siblings.paths, index: next };
+    return openPath(target, { keepPin: true, keepSiblings: true });
   };
 
   const openDefault = async () => {
@@ -468,8 +495,15 @@ function installPreview(ctx) {
           helperUp = true;
           helperSend(`bind ${shortcutsPaused ? "" : helperBindSpec}`);
           setArmed();
+        } else if (cmd === "view") {
+          const parts = String(arg || "").split(/\s+/);
+          helperView = { index: Number(parts[0]) || 0, count: Number(parts[1]) || 0, paths: [] };
+        } else if (cmd === "viewitem") {
+          if (!helperView) helperView = { index: 0, count: 0, paths: [] };
+          if (arg) helperView.paths.push(arg);
         } else if (cmd === "open") {
-          void openPath(arg);
+          const keepSiblings = applyHelperView();
+          void openPath(arg, { keepPin: visible, keepSiblings });
         } else if (cmd === "close") {
           hidePreview();
         } else if (cmd === "next") {

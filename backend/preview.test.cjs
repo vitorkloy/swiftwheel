@@ -79,6 +79,27 @@ describe("native helper source", () => {
     assert.match(src, /openwith-done/);
     assert.match(src, /pinned/);
   });
+
+  it("enumerates and selects Explorer view items over UTF-8 stdout", () => {
+    const src = fs.readFileSync(path.join(__dirname, "..", "native", "vor-preview.cs"), "utf8");
+    assert.match(src, /IFolderView/);
+    assert.match(src, /SVGIO_ALLVIEW/);
+    assert.match(src, /SVGIO_FLAG_VIEWORDER/);
+    assert.match(src, /SVSI_SELECT/);
+    assert.match(src, /SVSI_DESELECTOTHERS/);
+    assert.match(src, /SVSI_ENSUREVISIBLE/);
+    assert.match(src, /SVSI_FOCUSED/);
+    assert.match(src, /Console\.OutputEncoding/);
+    assert.match(src, /UTF8Encoding/);
+    assert.match(src, /WriteFile/);
+    assert.match(src, /viewitem/);
+    const main = fs.readFileSync(path.join(__dirname, "preview.cjs"), "utf8");
+    assert.match(main, /cmd === "view"/);
+    assert.match(main, /cmd === "viewitem"/);
+    assert.match(main, /keepSiblings/);
+    assert.match(main, /select \$\{/);
+    assert.match(main, /stdin\.write\([^)]*"utf8"\)/);
+  });
 });
 
 describe("preview toolbar wiring", () => {

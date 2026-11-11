@@ -3,10 +3,10 @@
 // - WH_KEYBOARD_LL numa thread própria (o Windows não tira o hook por LowLevelHooksTimeout).
 // - Só engole o atalho com o Explorer ou a área de trabalho em primeiro plano,
 //   e nunca com o caret a piscar / campo Edit (renomear, busca, barra de endereço).
-// - O item selecionado vem da API do Shell (Shell.Application / IShellWindows).
+// - O item selecionado e a lista de irmãos vêm da view do Explorer (IFolderView).
 // Protocolo (linhas UTF-8):
-//   stdin  bind <accel> | armed 0|1 | pinned 0|1 | hwnd <n> | openwith <path> | quit | status
-//   stdout ready | open <path> | close | next | prev | launch | openwith-done | log <txt> | status ...
+//   stdin  bind <accel> | armed 0|1 | pinned 0|1 | hwnd <n> | openwith <path> | select <path> | quit | status
+//   stdout ready | view <index> <count> | viewitem <path> | open <path> | close | next | prev | launch | openwith-done | log <txt> | status ...
 // Com a prévia armada o Explorer fica com o teclado (o Windows recusa o foco à janela
 // Electron). Esc/setas/Enter/Espaço são tratados aqui, não no renderer.
 using System;
@@ -38,9 +38,15 @@ static class VorPreview
     [DllImport("user32.dll")] static extern short GetAsyncKeyState(int k);
     [DllImport("user32.dll")] static extern void keybd_event(byte vk, byte scan, uint flags, UIntPtr extra);
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)] static extern int SHOpenWithDialog(IntPtr hwnd, ref OPENASINFO info);
+    [DllImport("shell32.dll", CharSet = CharSet.Unicode)] static extern bool SHGetPathFromIDListW(IntPtr pidl, StringBuilder pszPath);
+    [DllImport("shell32.dll")] static extern int SHCreateItemFromIDList(IntPtr pidl, ref Guid riid, [MarshalAs(UnmanagedType.Interface)] out IShellItem ppv);
+    [DllImport("ole32.dll")] static extern void CoTaskMemFree(IntPtr pv);
+    [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int nStdHandle);
+    [DllImport("kernel32.dll", SetLastError = true)] static extern bool WriteFile(IntPtr hFile, byte[] buffer, int count, out int written, IntPtr overlapped);
 
     [StructLayout(LayoutKind.Sequential)] struct MSG { public IntPtr h; public uint msg; public IntPtr w; public IntPtr l; public uint t; public int x; public int y; }
     [StructLayout(LayoutKind.Sequential)] struct KBD { public uint vk; public uint scan; public uint flags; public uint time; public IntPtr extra; }
+    [StructLayout(LayoutKind.Sequential)] struct POINT { public int x; public int y; }
     [StructLayout(LayoutKind.Sequential, CharSet = CharSet.Unicode)]
     struct OPENASINFO
     {
@@ -63,24 +69,125 @@ static class VorPreview
     }
     delegate IntPtr HookProc(int code, IntPtr w, IntPtr l);
 
+    [ComImport, Guid("6D5140C1-7436-11CE-8034-00AA006009FA"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IServiceProvider
+    {
+        [PreserveSig]
+        int QueryService(ref Guid guidService, ref Guid riid, out IntPtr ppvObject);
+    }
+
+    [ComImport, Guid("000214E2-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IShellBrowser
+    {
+        [PreserveSig] int GetWindow(out IntPtr phwnd);
+        [PreserveSig] int ContextSensitiveHelp(int fEnterMode);
+        [PreserveSig] int InsertMenusSB(IntPtr hmenuShared, IntPtr lpMenuWidths);
+        [PreserveSig] int SetMenuSB(IntPtr hmenuShared, IntPtr holemenuRes, IntPtr hwndActiveObject);
+        [PreserveSig] int RemoveMenusSB(IntPtr hmenuShared);
+        [PreserveSig] int SetStatusTextSB(IntPtr pszStatusText);
+        [PreserveSig] int EnableModelessSB(int fEnable);
+        [PreserveSig] int TranslateAcceleratorSB(IntPtr pmsg, ushort wID);
+        [PreserveSig] int BrowseObject(IntPtr pidl, uint wFlags);
+        [PreserveSig] int GetViewStateStream(uint grfMode, out IntPtr ppStrm);
+        [PreserveSig] int GetControlWindow(uint id, out IntPtr phwnd);
+        [PreserveSig] int SendControlMsg(uint id, uint uMsg, IntPtr wParam, IntPtr lParam, out IntPtr pret);
+        [PreserveSig] int QueryActiveShellView(out IntPtr ppshv);
+        [PreserveSig] int OnViewWindowActive(IntPtr pshv);
+        [PreserveSig] int SetToolbarItems(IntPtr lpButtons, uint nButtons, uint uFlags);
+    }
+
+    [ComImport, Guid("CDE725B0-CCC9-4519-917E-325D72FAB4CE"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IFolderView
+    {
+        [PreserveSig] int GetCurrentViewMode(out uint pViewMode);
+        [PreserveSig] int SetCurrentViewMode(uint ViewMode);
+        [PreserveSig] int GetFolder(ref Guid riid, out IntPtr ppv);
+        [PreserveSig] int Item(int iItemIndex, out IntPtr ppidl);
+        [PreserveSig] int ItemCount(uint uFlags, out int pcItems);
+        [PreserveSig] int Items(uint uFlags, ref Guid riid, out IntPtr ppv);
+        [PreserveSig] int GetSelectionMarkedItem(out int piItem);
+        [PreserveSig] int GetFocusedItem(out int piItem);
+        [PreserveSig] int GetItemPosition(IntPtr pidl, out POINT ppt);
+        [PreserveSig] int GetSpacing(out POINT ppt);
+        [PreserveSig] int GetDefaultSpacing(out POINT ppt);
+        [PreserveSig] int GetAutoArrange();
+        [PreserveSig] int SelectItem(int iItem, uint dwFlags);
+        [PreserveSig] int SelectAndPositionItems(uint cidl, IntPtr apidl, IntPtr apt, uint dwFlags);
+    }
+
+    [ComImport, Guid("000214F2-0000-0000-C000-000000000046"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IEnumIDList
+    {
+        [PreserveSig] int Next(uint celt, out IntPtr rgelt, out uint pceltFetched);
+        [PreserveSig] int Skip(uint celt);
+        [PreserveSig] int Reset();
+        [PreserveSig] int Clone(out IntPtr ppenum);
+    }
+
+    [ComImport, Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IShellItem
+    {
+        [PreserveSig] int BindToHandler(IntPtr pbc, ref Guid bhid, ref Guid riid, out IntPtr ppv);
+        [PreserveSig] int GetParent(out IShellItem ppsi);
+        [PreserveSig] int GetDisplayName(uint sigdnName, out IntPtr ppszName);
+        [PreserveSig] int GetAttributes(uint sfgaoMask, out uint psfgaoAttribs);
+        [PreserveSig] int Compare(IShellItem psi, uint hint, out int piOrder);
+    }
+
     const int GUI_CARETBLINKING = 0x00000001;
     const int GUI_INMOVESIZE = 0x00000002;
     const int GUI_INMENUMODE = 0x00000004;
     const int GUI_SYSTEMMENUMODE = 0x00000008;
     const int GUI_POPUPMENUMODE = 0x00000010;
     const uint KEYEVENTF_KEYUP = 2;
+    const uint SVGIO_ALLVIEW = 0x00000002;
+    const uint SVGIO_FLAG_VIEWORDER = 0x80000000;
+    const uint SVGIO_VIEW = SVGIO_ALLVIEW | SVGIO_FLAG_VIEWORDER;
+    const uint SVSI_SELECT = 0x00000001;
+    const uint SVSI_DESELECTOTHERS = 0x00000004;
+    const uint SVSI_ENSUREVISIBLE = 0x00000008;
+    const uint SVSI_FOCUSED = 0x00000010;
+    const uint SVSI_NOTAKEFOCUS = 0x40000000;
+    const uint SVSI_FLAGS = SVSI_SELECT | SVSI_DESELECTOTHERS | SVSI_ENSUREVISIBLE | SVSI_FOCUSED | SVSI_NOTAKEFOCUS;
+    const uint SIGDN_FILESYSPATH = 0x80058000;
+    const int STD_OUTPUT_HANDLE = -11;
+    static readonly Guid IID_IEnumIDList = new Guid("000214F2-0000-0000-C000-000000000046");
+    static readonly Guid IID_IShellItem = new Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE");
+    static readonly Guid SID_STopLevelBrowser = new Guid("4C96BE40-915C-11CF-99D3-00AA004AE837");
+    static readonly Guid IID_IShellBrowser = new Guid("000214E2-0000-0000-C000-000000000046");
+    static readonly Guid IID_IFolderView = new Guid("CDE725B0-CCC9-4519-917E-325D72FAB4CE");
+    static readonly Guid IID_IServiceProvider = new Guid("6D5140C1-7436-11CE-8034-00AA006009FA");
     // Assinatura nas teclas que nós próprios injetamos, para o hook as deixar passar.
     static readonly UIntPtr MAGIC = new UIntPtr(0x53575056);
+    static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
 
     static readonly object outLock = new object();
     static StreamWriter output;
     static StreamReader input;
-    static void Emit(string s) { lock (outLock) { try { output.Write(s + "\n"); output.Flush(); } catch { } } }
+    static IntPtr stdoutHandle = IntPtr.Zero;
+    static void Emit(string s)
+    {
+        lock (outLock)
+        {
+            try
+            {
+                byte[] bytes = Utf8.GetBytes(s + "\n");
+                if (stdoutHandle != IntPtr.Zero)
+                {
+                    int written;
+                    if (WriteFile(stdoutHandle, bytes, bytes.Length, out written, IntPtr.Zero)) return;
+                }
+                if (output != null) { output.Write(s + "\n"); output.Flush(); }
+            }
+            catch { }
+        }
+    }
 
     static string binding = "";
     static volatile bool armed;
     static volatile bool stayOpen;
     static IntPtr previewHwnd = IntPtr.Zero;
+    static IntPtr originHwnd = IntPtr.Zero;
     static IntPtr hook = IntPtr.Zero;
     static HookProc hookProc = HookCallback;
     static readonly HashSet<uint> swallowUp = new HashSet<uint>();
@@ -91,8 +198,12 @@ static class VorPreview
     [STAThread]
     static void Main()
     {
-        output = new StreamWriter(Console.OpenStandardOutput(), new UTF8Encoding(false));
-        input = new StreamReader(Console.OpenStandardInput(), new UTF8Encoding(false));
+        try { Console.OutputEncoding = Utf8; } catch { }
+        try { Console.InputEncoding = Utf8; } catch { }
+        stdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
+        output = new StreamWriter(Console.OpenStandardOutput(), Utf8);
+        output.AutoFlush = true;
+        input = new StreamReader(Console.OpenStandardInput(), Utf8);
         form = new Form();
         form.FormBorderStyle = FormBorderStyle.None;
         form.ShowInTaskbar = false;
@@ -142,6 +253,12 @@ static class VorPreview
                     string p = arg;
                     try { form.BeginInvoke((Action)(() => ShowOpenWith(p))); }
                     catch (Exception ex) { Emit("log openwith-invoke " + ex.Message); Emit("openwith-done"); }
+                }
+                else if (cmd == "select")
+                {
+                    string p = arg;
+                    try { form.BeginInvoke((Action)(() => SelectPath(p))); }
+                    catch (Exception ex) { Emit("log select-invoke " + ex.Message); }
                 }
                 else if (cmd == "status")
                     Emit("status hook=" + (hook != IntPtr.Zero ? 1 : 0) + " bindings=" + (binding.Length == 0 ? 0 : 1) + " lastkey=" + (lastKeyAt == 0 ? -1 : Environment.TickCount - lastKeyAt) + " armed=" + (armed ? 1 : 0));
@@ -413,6 +530,279 @@ static class VorPreview
         return false;
     }
 
+    static string PathFromPidl(IntPtr pidl)
+    {
+        if (pidl == IntPtr.Zero) return null;
+        try
+        {
+            Guid iid = IID_IShellItem;
+            IShellItem item;
+            int hr = SHCreateItemFromIDList(pidl, ref iid, out item);
+            if (hr >= 0 && item != null)
+            {
+                IntPtr pName = IntPtr.Zero;
+                hr = item.GetDisplayName(SIGDN_FILESYSPATH, out pName);
+                if (hr >= 0 && pName != IntPtr.Zero)
+                {
+                    string s = Marshal.PtrToStringUni(pName);
+                    CoTaskMemFree(pName);
+                    try { Marshal.ReleaseComObject(item); } catch { }
+                    if (s != null && s.Length > 0) return s;
+                }
+                else try { Marshal.ReleaseComObject(item); } catch { }
+            }
+        }
+        catch { }
+        StringBuilder sb = new StringBuilder(32768);
+        if (SHGetPathFromIDListW(pidl, sb))
+        {
+            string s = sb.ToString();
+            if (s != null && s.Length > 0) return s;
+        }
+        return null;
+    }
+
+    static IFolderView FolderViewFromWindow(object w)
+    {
+        IntPtr unk = IntPtr.Zero;
+        IntPtr pSp = IntPtr.Zero;
+        IntPtr pBr = IntPtr.Zero;
+        IntPtr pView = IntPtr.Zero;
+        try
+        {
+            unk = Marshal.GetIUnknownForObject(w);
+            Guid iidSp = IID_IServiceProvider;
+            if (Marshal.QueryInterface(unk, ref iidSp, out pSp) != 0 || pSp == IntPtr.Zero) return null;
+            IServiceProvider sp = (IServiceProvider)Marshal.GetTypedObjectForIUnknown(pSp, typeof(IServiceProvider));
+            Guid sid = SID_STopLevelBrowser;
+            Guid iidBr = IID_IShellBrowser;
+            if (sp.QueryService(ref sid, ref iidBr, out pBr) != 0 || pBr == IntPtr.Zero)
+            {
+                try { Marshal.ReleaseComObject(sp); } catch { }
+                return null;
+            }
+            try { Marshal.ReleaseComObject(sp); } catch { }
+            IShellBrowser br = (IShellBrowser)Marshal.GetTypedObjectForIUnknown(pBr, typeof(IShellBrowser));
+            int hr = br.QueryActiveShellView(out pView);
+            try { Marshal.ReleaseComObject(br); } catch { }
+            if (hr != 0 || pView == IntPtr.Zero) return null;
+            Guid iidFv = IID_IFolderView;
+            IntPtr pFv;
+            if (Marshal.QueryInterface(pView, ref iidFv, out pFv) != 0 || pFv == IntPtr.Zero) return null;
+            IFolderView fv = (IFolderView)Marshal.GetTypedObjectForIUnknown(pFv, typeof(IFolderView));
+            Marshal.Release(pFv);
+            return fv;
+        }
+        catch (Exception ex)
+        {
+            Emit("log folderview " + ex.Message);
+            return null;
+        }
+        finally
+        {
+            if (pView != IntPtr.Zero) Marshal.Release(pView);
+            if (pBr != IntPtr.Zero) Marshal.Release(pBr);
+            if (pSp != IntPtr.Zero) Marshal.Release(pSp);
+            if (unk != IntPtr.Zero) Marshal.Release(unk);
+        }
+    }
+
+    static IFolderView GetFolderView(IntPtr preferHwnd)
+    {
+        Type t = Type.GetTypeFromProgID("Shell.Application");
+        if (t == null) return null;
+        object shell = Activator.CreateInstance(t);
+        if (shell == null) return null;
+        object windows = Call(shell, "Windows");
+        if (windows == null) return null;
+        int count = Convert.ToInt32(Prop(windows, "Count"));
+        IFolderView desktop = null;
+        IntPtr fg = preferHwnd != IntPtr.Zero ? preferHwnd : GetForegroundWindow();
+        bool desktopFg = IsDesktopHwnd(fg) || (preferHwnd != IntPtr.Zero && IsDesktopHwnd(preferHwnd));
+        for (int i = 0; i < count; i++)
+        {
+            object w = null;
+            try { w = Call(windows, "Item", i); } catch { continue; }
+            if (w == null) continue;
+            IntPtr hwnd = IntPtr.Zero;
+            try { hwnd = new IntPtr(Convert.ToInt64(Prop(w, "HWND"))); } catch { continue; }
+            bool match = Related(fg, hwnd) || Related(Root(fg), hwnd);
+            if (!match && preferHwnd != IntPtr.Zero)
+                match = Related(preferHwnd, hwnd) || Related(Root(preferHwnd), hwnd);
+            bool looksDesk = false;
+            try { looksDesk = WindowLooksDesktop(w) || hwnd == GetShellWindow(); } catch { }
+            if (!match && desktopFg && looksDesk) match = true;
+            if (!match) continue;
+            IFolderView fv = FolderViewFromWindow(w);
+            if (fv == null) continue;
+            if (looksDesk && !IsExplorerFrame(ClassName(hwnd)))
+            {
+                if (desktop != null && !object.ReferenceEquals(desktop, fv))
+                {
+                    try { Marshal.ReleaseComObject(desktop); } catch { }
+                }
+                desktop = fv;
+                continue;
+            }
+            if (desktop != null && !object.ReferenceEquals(desktop, fv))
+            {
+                try { Marshal.ReleaseComObject(desktop); } catch { }
+            }
+            originHwnd = hwnd;
+            return fv;
+        }
+        if (desktop != null)
+        {
+            originHwnd = GetShellWindow();
+            return desktop;
+        }
+        return null;
+    }
+
+    static List<string> ViewPaths(IFolderView fv)
+    {
+        List<string> paths = new List<string>();
+        if (fv == null) return paths;
+        Guid iidEnum = IID_IEnumIDList;
+        IntPtr pEnum = IntPtr.Zero;
+        int hr = fv.Items(SVGIO_VIEW, ref iidEnum, out pEnum);
+        if (hr >= 0 && pEnum != IntPtr.Zero)
+        {
+            try
+            {
+                IEnumIDList enumer = (IEnumIDList)Marshal.GetTypedObjectForIUnknown(pEnum, typeof(IEnumIDList));
+                while (true)
+                {
+                    IntPtr pidl;
+                    uint fetched;
+                    hr = enumer.Next(1, out pidl, out fetched);
+                    if (hr != 0 || fetched == 0 || pidl == IntPtr.Zero) break;
+                    string p = PathFromPidl(pidl);
+                    CoTaskMemFree(pidl);
+                    if (p != null && p.Length > 0) paths.Add(p);
+                }
+                try { Marshal.ReleaseComObject(enumer); } catch { }
+            }
+            catch (Exception ex) { Emit("log view-enum " + ex.Message); }
+            Marshal.Release(pEnum);
+            if (paths.Count > 0) return paths;
+        }
+        int count;
+        hr = fv.ItemCount(SVGIO_VIEW, out count);
+        if (hr < 0 || count <= 0) return paths;
+        for (int i = 0; i < count; i++)
+        {
+            IntPtr pidl;
+            if (fv.Item(i, out pidl) < 0 || pidl == IntPtr.Zero) continue;
+            string p = PathFromPidl(pidl);
+            CoTaskMemFree(pidl);
+            if (p != null && p.Length > 0) paths.Add(p);
+        }
+        return paths;
+    }
+
+    static int IndexOfPath(List<string> paths, string filePath)
+    {
+        if (paths == null || filePath == null) return -1;
+        for (int i = 0; i < paths.Count; i++)
+        {
+            if (string.Equals(paths[i], filePath, StringComparison.OrdinalIgnoreCase)) return i;
+        }
+        return -1;
+    }
+
+    static void EmitView(IFolderView fv, string currentPath)
+    {
+        List<string> paths = ViewPaths(fv);
+        int index = IndexOfPath(paths, currentPath);
+        if (index < 0) index = 0;
+        Emit("view " + index + " " + paths.Count);
+        for (int i = 0; i < paths.Count; i++) Emit("viewitem " + paths[i]);
+    }
+
+    static void EmitViewAndOpen(string path)
+    {
+        IFolderView fv = GetFolderView(originHwnd);
+        if (fv != null)
+        {
+            try { EmitView(fv, path); }
+            finally { try { Marshal.ReleaseComObject(fv); } catch { } }
+        }
+        Emit("open " + path);
+    }
+
+    static void SelectPath(string filePath)
+    {
+        if (filePath == null || filePath.Length == 0) return;
+        IFolderView fv = GetFolderView(originHwnd);
+        if (fv == null) return;
+        try
+        {
+            int count;
+            if (fv.ItemCount(SVGIO_VIEW, out count) < 0) return;
+            for (int i = 0; i < count; i++)
+            {
+                IntPtr pidl;
+                if (fv.Item(i, out pidl) < 0 || pidl == IntPtr.Zero) continue;
+                string p = PathFromPidl(pidl);
+                CoTaskMemFree(pidl);
+                if (p != null && string.Equals(p, filePath, StringComparison.OrdinalIgnoreCase))
+                {
+                    fv.SelectItem(i, SVSI_FLAGS);
+                    return;
+                }
+            }
+        }
+        catch (Exception ex) { Emit("log select " + ex.Message); }
+        finally { try { Marshal.ReleaseComObject(fv); } catch { } }
+    }
+
+    static void NavInView(int delta)
+    {
+        try
+        {
+            IFolderView fv = GetFolderView(originHwnd);
+            if (fv == null)
+            {
+                Emit(delta > 0 ? "next" : "prev");
+                return;
+            }
+            try
+            {
+                int count;
+                if (fv.ItemCount(SVGIO_VIEW, out count) < 0 || count < 1)
+                {
+                    Emit(delta > 0 ? "next" : "prev");
+                    return;
+                }
+                int cur;
+                if (fv.GetFocusedItem(out cur) < 0 || cur < 0) cur = 0;
+                for (int n = 0; n < count; n++)
+                {
+                    int i = cur + delta * (n + 1);
+                    i %= count;
+                    if (i < 0) i += count;
+                    IntPtr pidl;
+                    if (fv.Item(i, out pidl) < 0 || pidl == IntPtr.Zero) continue;
+                    string p = PathFromPidl(pidl);
+                    CoTaskMemFree(pidl);
+                    if (p == null || p.Length == 0) continue;
+                    fv.SelectItem(i, SVSI_FLAGS);
+                    EmitView(fv, p);
+                    Emit("open " + p);
+                    return;
+                }
+                Emit(delta > 0 ? "next" : "prev");
+            }
+            finally { try { Marshal.ReleaseComObject(fv); } catch { } }
+        }
+        catch (Exception ex)
+        {
+            Emit("log nav " + ex.Message);
+            Emit(delta > 0 ? "next" : "prev");
+        }
+    }
+
     static string SelectedPath()
     {
         IntPtr fg = GetForegroundWindow();
@@ -425,13 +815,14 @@ static class VorPreview
         if (windows == null) return null;
         int count = Convert.ToInt32(Prop(windows, "Count"));
         string desktopPath = null;
+        IntPtr desktopHwnd = IntPtr.Zero;
         for (int i = 0; i < count; i++)
         {
             object w = null;
             try { w = Call(windows, "Item", i); } catch { continue; }
             if (w == null) continue;
             IntPtr hwnd = IntPtr.Zero;
-            try { hwnd = new IntPtr(Convert.ToInt32(Prop(w, "HWND"))); } catch { continue; }
+            try { hwnd = new IntPtr(Convert.ToInt64(Prop(w, "HWND"))); } catch { continue; }
             bool match = Related(fg, hwnd) || Related(Root(fg), hwnd);
             if (!match && desktop && (hwnd == GetShellWindow() || WindowLooksDesktop(w))) match = true;
             if (!match) continue;
@@ -439,11 +830,24 @@ static class VorPreview
             try { path = PathFromDocument(Prop(w, "Document")); } catch { }
             if (path != null && path.Length > 0)
             {
-                if (desktop && WindowLooksDesktop(w)) desktopPath = path;
-                else return path;
+                if (desktop && WindowLooksDesktop(w))
+                {
+                    desktopPath = path;
+                    desktopHwnd = hwnd;
+                }
+                else
+                {
+                    originHwnd = hwnd;
+                    return path;
+                }
             }
         }
-        return desktopPath;
+        if (desktopPath != null)
+        {
+            originHwnd = desktopHwnd != IntPtr.Zero ? desktopHwnd : GetShellWindow();
+            return desktopPath;
+        }
+        return null;
     }
 
     static void InjectKey(uint vk)
@@ -463,7 +867,7 @@ static class VorPreview
                 return;
             }
             string path = SelectedPath();
-            if (path != null && path.Length > 0) Emit("open " + path);
+            if (path != null && path.Length > 0) EmitViewAndOpen(path);
             else InjectKey(vk);
         }
         catch (Exception ex)
@@ -512,8 +916,16 @@ static class VorPreview
                         swallowUp.Add(k.vk);
                         if (!repeat || nav == "next" || nav == "prev")
                         {
-                            string emit = nav;
-                            form.BeginInvoke((Action)(() => Emit(emit)));
+                            if (nav == "next" || nav == "prev")
+                            {
+                                int d = nav == "next" ? 1 : -1;
+                                form.BeginInvoke((Action)(() => NavInView(d)));
+                            }
+                            else
+                            {
+                                string emit = nav;
+                                form.BeginInvoke((Action)(() => Emit(emit)));
+                            }
                         }
                         return new IntPtr(1);
                     }
