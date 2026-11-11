@@ -6,7 +6,7 @@ on:
     tags: ["v*"]
   pull_request:
   workflow_dispatch:
-  # Chamado pelo sync-upstream (push com GITHUB_TOKEN não dispara outros workflows).
+  # Build reutilizável com ref/tag específica (não dispara sozinho a partir de outro workflow).
   workflow_call:
     inputs:
       ref:

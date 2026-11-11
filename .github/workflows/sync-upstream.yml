@@ -1,86 +1,31 @@
-name: Sync upstream
+name: Avisar atualização do Rovyl
 
-# Traz o main de HenryCauan/rovyl para o main do fork.
-# - Nada novo: termina.
-# - Merge limpo: sobe a versão patch, commita, cria tag v<versão> e compila + publica a release (Windows, macOS, Linux)
-#   no MESMO workflow (push com GITHUB_TOKEN não dispara outros workflows).
-# - Conflito: abre PR, sem release.
-# Limitação: GITHUB_TOKEN não pode dar push em commits que alteram .github/workflows. Se o upstream
-# mexer em workflows, crie o secret SYNC_TOKEN (PAT com repo + workflow).
+# Avisa via issue quando HenryCauan/rovyl (main) avança.
+# Não faz merge, bump, commit, tag, push nem release.
+
 on:
   schedule:
     - cron: "0 9 * * *" # 06:00 em São Paulo
   workflow_dispatch:
 
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
+  issues: write
 
 concurrency:
-  group: sync-upstream
+  group: notify-upstream-rovyl
   cancel-in-progress: false
 
 jobs:
-  sync:
+  notify:
     runs-on: ubuntu-latest
-    outputs:
-      tag: ${{ steps.merge.outputs.tag }}
+    timeout-minutes: 5
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: main
-          fetch-depth: 0
-          token: ${{ secrets.SYNC_TOKEN || github.token }}
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 20
-      - name: Merge upstream/main
-        id: merge
+          persist-credentials: false
+      - name: Verificar atualizações do Rovyl
         env:
-          GH_TOKEN: ${{ secrets.SYNC_TOKEN || github.token }}
-        run: |
-          set -euo pipefail
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git remote add upstream https://github.com/HenryCauan/rovyl.git
-          git fetch upstream main --no-tags
-          git fetch origin --tags --force
-          if git merge-base --is-ancestor upstream/main HEAD; then
-            echo "Nada novo no upstream."; exit 0
-          fi
-          CUR=$(node -p "require('./package.json').version")
-          UP=$(git show upstream/main:package.json | node -e "let s='';process.stdin.on('data',d=>s+=d).on('end',()=>console.log(JSON.parse(s).version))")
-          if ! git merge --no-edit upstream/main; then
-            git merge --abort
-            BR="sync/upstream-$(git rev-parse --short upstream/main)"
-            git push -f origin "upstream/main:refs/heads/$BR"
-            if [ -z "$(gh pr list --head "$BR" --state open --json number -q '.[].number')" ]; then
-              gh pr create --base main --head "$BR" \
-                --title "Sync upstream (conflito): HenryCauan/rovyl@$(git rev-parse --short upstream/main)" \
-                --body "O merge automático do upstream deu conflito. Resolva nesta PR; nenhuma release foi publicada."
-            fi
-            exit 0
-          fi
-          # Nova versão = max(upstream, atual + 1 patch); pula tags já existentes. Nunca regride.
-          NEW=$(CUR="$CUR" UP="$UP" node -e '
-            const p=v=>v.split(".").map(Number), c=(a,b)=>{for(let i=0;i<3;i++){if(a[i]!==b[i])return a[i]-b[i]}return 0};
-            const cur=p(process.env.CUR), up=p(process.env.UP); const bump=[cur[0],cur[1],cur[2]+1];
-            console.log((c(up,bump)>0?up:bump).join("."))')
-          while git rev-parse -q --verify "refs/tags/v$NEW" >/dev/null; do
-            NEW=$(node -e "const [a,b,c]='$NEW'.split('.').map(Number);console.log([a,b,c+1].join('.'))")
-          done
-          npm version "$NEW" --no-git-tag-version --allow-same-version
-          git commit -am "chore(release): v$NEW (sync upstream $(git rev-parse --short upstream/main))"
-          git tag "v$NEW"
-          git push origin HEAD:main "v$NEW"
-          echo "tag=v$NEW" >> "$GITHUB_OUTPUT"
-          echo "Upstream $UP, fork $CUR -> release v$NEW"
-
-  release:
-    needs: sync
-    if: needs.sync.outputs.tag != ''
-    uses: ./.github/workflows/build-windows.yml
-    with:
-      ref: ${{ needs.sync.outputs.tag }}
-      release_tag: ${{ needs.sync.outputs.tag }}
-    secrets: inherit
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: bash .github/scripts/notify-upstream-rovyl.sh
