@@ -106,6 +106,12 @@ export interface ScreenshotSettings {
   wheelSeeded: boolean;
 }
 
+export interface PreviewSettings {
+  enabled: boolean;
+  /** Atalho no Explorer / área de trabalho. O padrão é Espaço. */
+  shortcut: string;
+}
+
 export interface UIConfig {
   accentColor: string;
   /** Cor aplicada ao item apontado no menu radial. Opcional para compatibilidade com configs antigas. */
@@ -184,6 +190,7 @@ export interface UIConfig {
     version?: number;
   };
   screenshot?: ScreenshotSettings;
+  preview?: PreviewSettings;
 }
 
 export interface RadialState {
@@ -440,6 +447,7 @@ export interface ElectronAPI {
   onScreenshotRemember?: (
     callback: (region: { x: number; y: number; width: number; height: number }) => void,
   ) => () => void;
+  startPreview?: (filePath: string) => Promise<{ ok: boolean; error?: string }>;
 }
 
 declare global {

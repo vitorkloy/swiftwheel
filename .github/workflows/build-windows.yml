@@ -68,6 +68,7 @@ jobs:
           npm run test:user-data-migrate
           npm run test:persistence-shape
           npm run test:win32-launch
+          npm run test:preview
       - name: Unix platform tests
         if: runner.os != 'Windows'
         run: npm run test:platform-unix

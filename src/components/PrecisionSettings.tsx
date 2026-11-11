@@ -56,13 +56,13 @@ function accentStyle(color: string | undefined, theme: string): React.CSSPropert
 
 /** Ícone de cada grupo: título e cartões recolhidos deixam de ser só texto. */
 const GROUP_ICONS: Record<string, LucideIcon> = {
-  About: Info, 'App wheel': CircleDot, Behavior: Hand, Capture: Camera, Data: Database,
+  About: Info, 'App wheel': CircleDot, Behavior: Hand, Capture: Camera, Data: Database, Preview: Eye,
   'File wheel': FileImage, Format: ImageIcon, Language: Languages, Performance: Gauge,
   Protection: Shield, Shortcuts: Keyboard, Startup: Power, Theme: SunMoon, Updates: RefreshCw,
   Wheel: Disc3, Workspaces: SquareStack, 'Your workspaces': LayoutGrid, Presence: Sparkles,
 };
-import type { AppItem, ScreenshotSettings, UIConfig, Workspace } from '../types';
-import { DEFAULT_SCREENSHOT } from '../defaults';
+import type { AppItem, PreviewSettings, ScreenshotSettings, UIConfig, Workspace } from '../types';
+import { DEFAULT_PREVIEW, DEFAULT_SCREENSHOT } from '../defaults';
 import { getIcon } from '../iconMap';
 import { resolveWebsiteIconFields } from '../siteFavicon';
 import { SmartIcon } from './SmartIcon';
@@ -84,11 +84,11 @@ interface PrecisionSettingsProps {
   isPage?: boolean;
 }
 
-type SectionId = 'general' | 'trigger' | 'appearance' | 'capture' | 'spaces' | 'advanced';
+type SectionId = 'general' | 'trigger' | 'appearance' | 'capture' | 'preview' | 'spaces' | 'advanced';
 
 /** O modal fica reservado ao que não cabe numa linha: listas longas, gravação e edição. */
 type Editor =
-  | { kind: 'shortcut'; target?: 'global' | 'shot-region' | 'shot-full' | 'shot-window' }
+  | { kind: 'shortcut'; target?: 'global' | 'shot-region' | 'shot-full' | 'shot-window' | 'preview' }
   | { kind: 'blocked' }
   | { kind: 'workspace'; index: number }
   | null;
@@ -134,6 +134,7 @@ const SECTIONS: Array<{ id: SectionId; label: string; caption: string; icon: Luc
   { id: 'trigger', label: 'Activation', caption: 'How and where the wheel appears.', icon: Mouse },
   { id: 'appearance', label: 'Appearance', caption: 'Shape, presence, and theme.', icon: Palette },
   { id: 'capture', label: 'Screenshots', caption: 'Freeze, mark, and keep a capture.', icon: Camera },
+  { id: 'preview', label: 'Preview', caption: 'Instant file preview with Space.', icon: Eye },
   { id: 'spaces', label: 'Workspaces', caption: 'Contexts and their shortcuts.', icon: SquareStack },
   { id: 'advanced', label: 'Advanced', caption: 'Performance, protection, and data.', icon: Shield },
 ];
@@ -154,6 +155,14 @@ const PT: Record<string, string> = {
   'Shape, presence, and theme.': 'Forma, presença e tema.',
   Screenshots: 'Captura de tela',
   'Freeze, mark, and keep a capture.': 'Congela, marca e guarda uma captura.',
+  Preview: 'Pré-visualização',
+  'Instant file preview with Space.': 'Prévia instantânea de arquivos com Espaço.',
+  'Enable Preview': 'Ativar pré-visualização',
+  'Space on a selected file in Explorer or on the desktop opens a preview. Off keeps Space with Windows.': 'Espaço com um arquivo selecionado no Explorer ou na área de trabalho abre a prévia. Desligado, o Espaço fica com o Windows.',
+  'Preview shortcut': 'Atalho da prévia',
+  'Default is Space. Not captured while renaming a file or typing in Explorer search.': 'O padrão é Espaço. Não é capturado ao renomear um arquivo ou digitar na busca do Explorer.',
+  'Windows Explorer and desktop only. Other apps keep the shortcut.': 'Só no Explorer e na área de trabalho. Os outros aplicativos continuam com o atalho.',
+  'Record a Space-based shortcut for Explorer. Other apps are never captured.': 'Grave um atalho com Espaço para o Explorer. Os outros aplicativos nunca são capturados.',
   Workspaces: 'Espaços',
   'Contexts and their shortcuts.': 'Contextos e os seus atalhos.',
   Advanced: 'Avançado',
@@ -567,6 +576,14 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
     }));
   }, [setConfig]);
 
+  const preview: PreviewSettings = { ...DEFAULT_PREVIEW, ...config.preview };
+  const updatePreview = useCallback((patch: Partial<PreviewSettings>) => {
+    setConfig((current) => ({
+      ...current,
+      preview: { ...DEFAULT_PREVIEW, ...current.preview, ...patch },
+    }));
+  }, [setConfig]);
+
   const sections = useMemo<Record<SectionId, SettingItem[]>>(() => {
     const range = (
       key: string,
@@ -827,6 +844,24 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
           },
         },
       ],
+      preview: [
+        {
+          key: 'preview-enabled', group: 'Preview', title: 'Enable Preview',
+          description: 'Space on a selected file in Explorer or on the desktop opens a preview. Off keeps Space with Windows.',
+          kind: 'bool', enabled: preview.enabled,
+          onToggle: () => updatePreview({ enabled: !preview.enabled }),
+        },
+        {
+          key: 'preview-shortcut', group: 'Preview', title: 'Preview shortcut',
+          description: 'Default is Space. Not captured while renaming a file or typing in Explorer search.',
+          kind: 'open', value: preview.shortcut,
+          onOpen: () => setEditor({ kind: 'shortcut', target: 'preview' }),
+        },
+        {
+          key: 'preview-note', group: 'Preview', title: 'Windows Explorer and desktop only. Other apps keep the shortcut.',
+          kind: 'note',
+        },
+      ],
       spaces: [
         ...config.workspaces.map((workspace, index) => ({
           key: workspace.id,
@@ -926,7 +961,7 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
         },
       ],
     };
-  }, [config, gameMode, theme, apps, appVersion, update, updateShot, updateInfo, updateBusy, updateNote, isStoreBuild, runUpdateCheck, onReset, onClose, deleteWorkspace, reorderWorkspaces, assignFileWheelKey]);
+  }, [config, gameMode, theme, apps, appVersion, update, updateShot, updatePreview, preview, updateInfo, updateBusy, updateNote, isStoreBuild, runUpdateCheck, onReset, onClose, deleteWorkspace, reorderWorkspaces, assignFileWheelKey]);
 
   const tr = (text?: string) => {
     if (!text) return '';
@@ -1488,6 +1523,16 @@ function SettingsEditor({
       title = 'Global shortcut';
       description = 'Record a combination that does not conflict with your applications.';
       content = <ShortcutRecorder value={config.globalShortcut} onChange={(value) => update('globalShortcut', value)} />;
+    } else if (target === 'preview') {
+      const previewCfg = { ...DEFAULT_PREVIEW, ...config.preview };
+      title = 'Preview shortcut';
+      description = 'Record a Space-based shortcut for Explorer. Other apps are never captured.';
+      content = (
+        <ShortcutRecorder
+          value={previewCfg.shortcut}
+          onChange={(value) => update('preview', { ...previewCfg, shortcut: value })}
+        />
+      );
     } else {
       const field = target === 'shot-full' ? 'shortcutFull' : target === 'shot-window' ? 'shortcutWindow' : 'shortcutRegion';
       const shot = { ...DEFAULT_SCREENSHOT, ...config.screenshot };

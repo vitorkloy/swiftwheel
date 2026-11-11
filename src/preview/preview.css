@@ -1,0 +1,313 @@
+:root {
+  --pv-text: rgba(255, 255, 255, 0.93);
+  --pv-text-2: rgba(255, 255, 255, 0.55);
+  --pv-text-3: rgba(255, 255, 255, 0.34);
+  --pv-line: rgba(255, 255, 255, 0.13);
+  --pv-hover: rgba(255, 255, 255, 0.07);
+  --pv-bg: rgba(21, 21, 21, 0.82);
+  --pv-solid: #151515;
+  --pv-code: rgba(0, 0, 0, 0.28);
+  --pv-accent: #ffffff;
+  --pv-on-accent: #0a0a0b;
+  --pv-elev: 0 20px 50px rgba(0, 0, 0, 0.55);
+  --pv-spring: cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+[data-theme="white"] {
+  --pv-text: rgba(0, 0, 0, 0.90);
+  --pv-text-2: rgba(0, 0, 0, 0.56);
+  --pv-text-3: rgba(0, 0, 0, 0.38);
+  --pv-line: rgba(0, 0, 0, 0.12);
+  --pv-hover: rgba(0, 0, 0, 0.05);
+  --pv-bg: rgba(252, 252, 253, 0.88);
+  --pv-solid: #fcfcfd;
+  --pv-code: rgba(0, 0, 0, 0.04);
+  --pv-accent: #101012;
+  --pv-on-accent: #ffffff;
+  --pv-elev: 0 18px 44px rgba(0, 0, 0, 0.16);
+}
+
+html, body, #root {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: transparent;
+  color: var(--pv-text);
+  font-family: "Segoe UI Variable Text", "Segoe UI", system-ui, sans-serif;
+  user-select: none;
+  -webkit-font-smoothing: antialiased;
+}
+
+* { box-sizing: border-box; scrollbar-width: thin; scrollbar-color: rgba(127, 127, 127, 0.35) transparent; }
+*::-webkit-scrollbar { width: 8px; height: 8px; }
+*::-webkit-scrollbar-thumb { background: rgba(127, 127, 127, 0.35); border-radius: 999px; }
+
+.pv-frame {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: 14px;
+  background: var(--pv-bg);
+  background-image: linear-gradient(180deg, rgba(255, 255, 255, 0.06), rgba(255, 255, 255, 0) 88px);
+  box-shadow: inset 0 0 0 1px var(--pv-line);
+  overflow: hidden;
+  opacity: 0;
+  transform: scale(0.96);
+}
+
+.pv-frame.is-solid {
+  background: var(--pv-solid);
+  background-image: none;
+  backdrop-filter: none;
+}
+
+.pv-frame.is-glass {
+  backdrop-filter: blur(28px) saturate(1.2);
+}
+
+.pv-frame.is-in {
+  animation: pv-in 160ms var(--pv-spring) both;
+}
+
+@keyframes pv-in {
+  from { transform: scale(0.96); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pv-frame.is-in { animation: none; opacity: 1; transform: none; }
+}
+
+.pv-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 44px;
+  padding: 0 10px 0 16px;
+  flex: none;
+  -webkit-app-region: no-drag;
+  border-bottom: 1px solid var(--pv-line);
+}
+
+.pv-title {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  -webkit-app-region: drag;
+}
+
+.pv-meta {
+  flex: none;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--pv-text-2);
+  -webkit-app-region: drag;
+}
+
+.pv-actions {
+  display: flex;
+  gap: 4px;
+  -webkit-app-region: no-drag;
+}
+
+/* O Electron trata SVG dentro de drag como arraste da janela: o clique no ícone não chega. */
+.pv-actions,
+.pv-actions *,
+.pv-btn,
+.pv-btn * {
+  -webkit-app-region: no-drag;
+}
+
+.pv-btn {
+  width: 32px;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: var(--pv-text-2);
+  cursor: pointer;
+  pointer-events: auto;
+  -webkit-app-region: no-drag;
+}
+
+/* O clique tem de ir ao <button>, não ao SVG (Electron trata o ícone como drag). */
+.pv-btn svg,
+.pv-btn svg * {
+  pointer-events: none;
+  -webkit-app-region: no-drag;
+}
+
+.pv-btn:hover {
+  background: var(--pv-hover);
+  color: var(--pv-text);
+}
+
+.pv-btn.is-on {
+  background: var(--pv-accent);
+  color: var(--pv-on-accent);
+}
+
+.pv-stage {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  overflow: hidden;
+}
+
+.pv-image-stage {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  cursor: grab;
+  background:
+    linear-gradient(45deg, rgba(127, 127, 127, 0.12) 25%, transparent 25%) 0 0 / 16px 16px,
+    linear-gradient(-45deg, rgba(127, 127, 127, 0.12) 25%, transparent 25%) 0 8px / 16px 16px;
+}
+
+.pv-image-stage.is-drag { cursor: grabbing; }
+
+.pv-image-stage img {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  max-width: none;
+  transform-origin: center center;
+  pointer-events: none;
+  user-select: none;
+}
+
+.pv-media {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 12px 16px 20px;
+  background: #0a0a0b;
+}
+
+[data-theme="white"] .pv-media { background: #ececef; }
+
+.pv-media video,
+.pv-media audio {
+  width: min(100%, 960px);
+  max-height: 100%;
+}
+
+.pv-media audio { width: min(100%, 520px); }
+
+.pv-pdf,
+.pv-html {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #fff;
+}
+
+.pv-code {
+  margin: 0;
+  width: 100%;
+  height: 100%;
+  overflow: auto;
+  padding: 16px 20px 24px;
+  font: 12.5px/1.55 ui-monospace, "Cascadia Code", "Cascadia Mono", Consolas, monospace;
+  user-select: text;
+  background: var(--pv-code);
+  color: var(--pv-text);
+  white-space: pre;
+}
+
+.pv-md {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: transparent;
+}
+
+.pv-list {
+  margin: 0;
+  padding: 8px 10px 16px;
+  height: 100%;
+  overflow: auto;
+  list-style: none;
+}
+
+.pv-list li {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  align-items: center;
+  padding: 7px 10px;
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.pv-list li:hover { background: var(--pv-hover); }
+
+.pv-list .name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pv-list .size { color: var(--pv-text-2); font-variant-numeric: tabular-nums; font-size: 12px; }
+
+.pv-list .dir { color: var(--pv-text-2); font-weight: 600; }
+
+.pv-fallback {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  text-align: center;
+}
+
+.pv-fallback img {
+  width: 96px;
+  height: 96px;
+  object-fit: contain;
+}
+
+.pv-fallback h1 {
+  margin: 8px 0 0;
+  font-size: 18px;
+  font-weight: 650;
+}
+
+.pv-fallback p {
+  margin: 0;
+  color: var(--pv-text-2);
+  font-size: 13px;
+}
+
+.pv-empty {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--pv-text-3);
+  font-size: 13px;
+}
+
+.tok-kw { color: #7eb8ff; }
+.tok-str { color: #9fe7c0; }
+.tok-num { color: #f0c27a; }
+.tok-cm { color: var(--pv-text-3); font-style: italic; }
+.tok-key { color: #c4b5fd; }
+
+[data-theme="white"] .tok-kw { color: #1d4ed8; }
+[data-theme="white"] .tok-str { color: #047857; }
+[data-theme="white"] .tok-num { color: #b45309; }
+[data-theme="white"] .tok-key { color: #6d28d9; }

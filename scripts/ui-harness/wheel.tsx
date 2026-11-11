@@ -13,7 +13,7 @@ const tools = [
   mk('tool:cropImage', 'Cortar', 'Crop'), mk('tool:editImage', 'Editar', 'SlidersHorizontal'), mk('tool:frameImage', 'Fundo', 'Frame'),
   mk('tool:annotateImage', 'Anotar', 'PenLine'), mk('tool:rotate90', 'Girar', 'RotateCw'),
 ];
-const actions = [mk('act:airDrop', 'Compartilhar', 'Share2'), mk('act:float', 'Flutuar', 'Layers'), mk('act:copy', 'Copiar', 'Copy'), mk('act:move', 'Mover', 'FolderInput'), mk('act:copyPath', 'Caminho', 'Link'), mk('act:openTerminal', 'Terminal', 'Terminal')];
+const actions = [mk('act:preview', 'Visualizar', 'Eye'), mk('act:airDrop', 'Compartilhar', 'Share2'), mk('act:float', 'Flutuar', 'Layers'), mk('act:copy', 'Copiar', 'Copy'), mk('act:move', 'Mover', 'FolderInput'), mk('act:copyPath', 'Caminho', 'Link'), mk('act:openTerminal', 'Terminal', 'Terminal')];
 const cell = (title: string, items: AppItem[], active: number | null, label: string) => (
   <div style={{ position: 'relative', width: 260, height: 290 }}>
     <div style={{ position: 'absolute', left: 130, top: 130 }}>
