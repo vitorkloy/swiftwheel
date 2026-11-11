@@ -15,13 +15,16 @@ const PDF_EXT = new Set(["pdf"]);
 const MARKDOWN_EXT = new Set(["md", "markdown"]);
 const HTML_EXT = new Set(["html", "htm"]);
 const ZIP_EXT = new Set(["zip"]);
+const WORD_EXT = new Set(["docx", "doc", "rtf", "odt"]);
+const SHEET_EXT = new Set(["xlsx", "xls", "csv", "ods"]);
+const SLIDE_EXT = new Set(["pptx", "ppt", "odp"]);
 const TEXT_EXT = new Set([
-  "txt", "log", "csv", "tsv", "ini", "cfg", "conf", "env", "gitignore", "gitattributes",
+  "txt", "log", "tsv", "ini", "cfg", "conf", "env", "gitignore", "gitattributes",
   "js", "mjs", "cjs", "ts", "tsx", "jsx", "json", "css", "scss", "less",
   "py", "rb", "php", "rs", "go", "java", "kt", "kts", "swift", "cs", "c", "h", "cpp", "hpp", "cc",
   "sh", "bash", "zsh", "ps1", "bat", "cmd", "xml", "yml", "yaml", "toml", "sql",
   "vue", "svelte", "graphql", "mdx", "dockerfile", "makefile", "cmake", "gradle",
-  "rtf", "tex", "diff", "patch", "properties", "editorconfig",
+  "tex", "diff", "patch", "properties", "editorconfig",
 ]);
 
 const LANG_BY_EXT = {
@@ -77,6 +80,9 @@ function classifyKind(filePath, stat) {
   if (MARKDOWN_EXT.has(ext)) return "markdown";
   if (HTML_EXT.has(ext)) return "html";
   if (ZIP_EXT.has(ext)) return "zip";
+  if (WORD_EXT.has(ext)) return "word";
+  if (SHEET_EXT.has(ext)) return "spreadsheet";
+  if (SLIDE_EXT.has(ext)) return "presentation";
   if (TEXT_EXT.has(ext)) return "text";
   return "fallback";
 }
@@ -488,6 +494,9 @@ module.exports = {
   IMAGE_EXT,
   VIDEO_EXT,
   AUDIO_EXT,
+  WORD_EXT,
+  SHEET_EXT,
+  SLIDE_EXT,
   classifyKind,
   mimeFor,
   langFor,

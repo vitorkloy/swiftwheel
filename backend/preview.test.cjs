@@ -60,7 +60,9 @@ function storedZip(files) {
 
 describe("native helper source", () => {
   it("stays on C# 4 syntax so Framework 4 csc can compile it", () => {
-    const src = fs.readFileSync(path.join(__dirname, "..", "native", "vor-preview.cs"), "utf8");
+    const files = ["vor-preview.cs", "vor-preview-handler.cs"].map((name) =>
+      fs.readFileSync(path.join(__dirname, "..", "native", name), "utf8"));
+    const src = files.join("\n");
     assert.match(src, /bind <accel>/);
     assert.match(src, /IShellWindows|Shell\.Application/);
     assert.match(src, /GUI_CARETBLINKING/);
@@ -83,6 +85,8 @@ describe("native helper source", () => {
     assert.match(src, /openwith/);
     assert.match(src, /openwith-done/);
     assert.match(src, /pinned/);
+    assert.match(src, /IsHostForeground/);
+    assert.match(src, /cmd == "preview"/);
   });
 
   it("enumerates and selects Explorer view items over UTF-8 stdout", () => {
@@ -107,6 +111,18 @@ describe("native helper source", () => {
     assert.match(src, /GetCurFolder/);
     assert.match(src, /SHCreateItemWithParent/);
     assert.match(src, /PathFromViewChild/);
+    const handler = fs.readFileSync(path.join(__dirname, "..", "native", "vor-preview-handler.cs"), "utf8");
+    assert.match(handler, /IPreviewHandler/);
+    assert.match(handler, /IInitializeWithFile/);
+    assert.match(handler, /IInitializeWithStream/);
+    assert.match(handler, /IInitializeWithItem/);
+    assert.match(handler, /SHCreateStreamOnFileEx/);
+    assert.match(handler, /8895b1c6-b41f-4c1c-a562-0d564250836f/);
+    assert.match(handler, /preview-fail/);
+    assert.match(handler, /preview-ok/);
+    assert.match(handler, /Unload/);
+    assert.match(handler, /PREVIEW_TIMEOUT_MS/);
+    assert.match(handler, /IsHostForeground/);
     const main = fs.readFileSync(path.join(__dirname, "preview.cjs"), "utf8");
     assert.match(main, /cmd === "view"/);
     assert.match(main, /cmd === "viewitem"/);
@@ -114,6 +130,10 @@ describe("native helper source", () => {
     assert.match(main, /keepSiblings/);
     assert.match(main, /select \$\{/);
     assert.match(main, /stdin\.write\([^)]*"utf8"\)/);
+    assert.match(main, /preview-ok/);
+    assert.match(main, /hostrect/);
+    assert.match(main, /fillOfficeSession/);
+    assert.match(main, /preview-clear/);
   });
 });
 
@@ -321,7 +341,21 @@ describe("preview-lib classifyKind", () => {
     assert.equal(lib.classifyKind("a.html"), "html");
     assert.equal(lib.classifyKind("a.zip"), "zip");
     assert.equal(lib.classifyKind("a.ts"), "text");
-    assert.equal(lib.classifyKind("a.docx"), "fallback");
+    assert.equal(lib.classifyKind("a.tsv"), "text");
+  });
+
+  it("maps office extensions to word/spreadsheet/presentation", () => {
+    assert.equal(lib.classifyKind("a.docx"), "word");
+    assert.equal(lib.classifyKind("a.DOC"), "word");
+    assert.equal(lib.classifyKind("a.rtf"), "word");
+    assert.equal(lib.classifyKind("a.odt"), "word");
+    assert.equal(lib.classifyKind("a.xlsx"), "spreadsheet");
+    assert.equal(lib.classifyKind("a.xls"), "spreadsheet");
+    assert.equal(lib.classifyKind("a.csv"), "spreadsheet");
+    assert.equal(lib.classifyKind("a.ods"), "spreadsheet");
+    assert.equal(lib.classifyKind("a.pptx"), "presentation");
+    assert.equal(lib.classifyKind("a.ppt"), "presentation");
+    assert.equal(lib.classifyKind("a.odp"), "presentation");
   });
 
   it("treats directories as folder", () => {

@@ -2,7 +2,19 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppWindow, FolderOpen, Pin, X } from 'lucide-react';
 import { highlightCode } from './highlight';
 
-type Kind = 'image' | 'svg' | 'video' | 'audio' | 'pdf' | 'text' | 'markdown' | 'html' | 'folder' | 'zip' | 'fallback';
+type Kind = 'image' | 'svg' | 'video' | 'audio' | 'pdf' | 'text' | 'markdown' | 'html' | 'folder' | 'zip' | 'word' | 'spreadsheet' | 'presentation' | 'fallback';
+type Engine = 'native' | 'js' | 'info' | 'pending' | null;
+
+interface OfficeSheet { name: string; html: string; truncated?: boolean }
+interface OfficeSlide { label: string; html: string }
+interface OfficePayload {
+  message?: string;
+  reason?: string | null;
+  html?: string;
+  sheets?: OfficeSheet[];
+  slides?: OfficeSlide[];
+  truncated?: boolean;
+}
 
 interface Appearance {
   theme: 'black' | 'white';
@@ -31,6 +43,8 @@ interface Session {
   truncated: boolean;
   folder: { items: FolderItem[]; count: number; files: number; folders: number; totalSize: number; truncated: boolean } | null;
   zip: { entries: ZipItem[]; truncated: boolean } | null;
+  engine: Engine;
+  office: OfficePayload | null;
   iconDataUrl: string | null;
   pinned: boolean;
   index: number;
@@ -57,6 +71,9 @@ const COPY = {
     created: 'Criado',
     type: 'Tipo',
     fallback: 'Prévia não disponível para este tipo',
+    pending: 'A carregar prévia…',
+    native: 'Prévia nativa do Windows',
+    partial: 'Prévia parcial',
   },
   en: {
     pin: 'Pin window',
@@ -75,6 +92,9 @@ const COPY = {
     created: 'Created',
     type: 'Type',
     fallback: 'No preview for this file type',
+    pending: 'Loading preview…',
+    native: 'Windows native preview',
+    partial: 'Partial preview',
   },
 };
 
@@ -184,8 +204,94 @@ function ListPane({ items }: { items: Array<{ name: string; isDir: boolean; size
   );
 }
 
+function HtmlDoc({ session, html }: { session: Session; html: string }) {
+  const doc = `<!doctype html><html><head><meta charset="utf-8"><style>
+    html,body{margin:0;padding:16px 20px 28px;font:15px/1.55 Segoe UI,system-ui,sans-serif;color:${session.appearance.theme === 'white' ? '#1a1a1c' : '#eee'};background:transparent}
+    pre,code{font-family:ui-monospace,Consolas,monospace} pre{overflow:auto;padding:12px;border-radius:8px;background:rgba(127,127,127,.12)}
+    a{color:inherit} img{max-width:100%}
+    table{border-collapse:collapse;width:max-content;min-width:100%;font:12.5px/1.4 ui-monospace,Consolas,monospace}
+    th,td{border:1px solid ${session.appearance.theme === 'white' ? 'rgba(0,0,0,.12)' : 'rgba(255,255,255,.12)'};padding:4px 8px;white-space:pre}
+    th{font-weight:650;background:${session.appearance.theme === 'white' ? 'rgba(0,0,0,.04)' : 'rgba(255,255,255,.06)'};position:sticky;top:0}
+    .muted{opacity:.55}
+  </style></head><body>${html || ''}</body></html>`;
+  return <iframe key={session.path} className="pv-md" sandbox="" srcDoc={doc} title={session.name} />;
+}
+
+function SpreadsheetPane({ session }: { session: Session }) {
+  const sheets = session.office?.sheets || [];
+  const [index, setIndex] = useState(0);
+  useEffect(() => { setIndex(0); }, [session.path]);
+  if (!sheets.length) return <div className="pv-empty">{COPY[session.uiLanguage].empty}</div>;
+  const current = sheets[Math.min(index, sheets.length - 1)];
+  return (
+    <div className="pv-sheet">
+      <div className="pv-sheet-scroll" dangerouslySetInnerHTML={{ __html: current.html }} />
+      {sheets.length > 1 ? (
+        <div className="pv-sheet-tabs" role="tablist">
+          {sheets.map((sheet, i) => (
+            <button
+              key={`${sheet.name}-${i}`}
+              type="button"
+              role="tab"
+              aria-selected={i === index}
+              className={i === index ? 'is-on' : undefined}
+              onClick={() => setIndex(i)}
+            >
+              {sheet.name}
+            </button>
+          ))}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function SlidesPane({ session }: { session: Session }) {
+  const slides = session.office?.slides || [];
+  if (!slides.length) return <div className="pv-empty">{COPY[session.uiLanguage].empty}</div>;
+  return (
+    <div className="pv-slides">
+      {slides.map((slide, i) => (
+        <section key={`${slide.label}-${i}`} className="pv-slide">
+          <div className="pv-slide-n">{i + 1}</div>
+          <div className="pv-slide-body" dangerouslySetInnerHTML={{ __html: slide.html }} />
+        </section>
+      ))}
+    </div>
+  );
+}
+
+function InfoCard({ session, message }: { session: Session; message: string }) {
+  const t = COPY[session.uiLanguage];
+  return (
+    <div className="pv-fallback">
+      {session.iconDataUrl ? <img src={session.iconDataUrl} alt="" /> : null}
+      <h1>{session.name}</h1>
+      <p>{message || session.sizeLabel || t.fallback}</p>
+      <p>{t.type}: {session.ext ? session.ext.toUpperCase() : (session.kind === 'folder' ? t.folder : '—')}</p>
+      <p>{t.modified}: {formatWhen(session.modified, session.uiLanguage)}</p>
+      <p>{t.created}: {formatWhen(session.created, session.uiLanguage)}</p>
+    </div>
+  );
+}
+
 function Body({ session }: { session: Session }) {
   const t = COPY[session.uiLanguage];
+  if (session.kind === 'word' || session.kind === 'spreadsheet' || session.kind === 'presentation') {
+    if (session.engine === 'pending') return <div className="pv-empty">{session.office?.message || t.pending}</div>;
+    if (session.engine === 'native') return <div className="pv-native">{session.office?.message || t.native}</div>;
+    if (session.engine === 'info') return <InfoCard session={session} message={session.office?.message || t.fallback} />;
+    if (session.engine === 'js' && session.kind === 'spreadsheet' && session.office?.sheets?.length) {
+      return <SpreadsheetPane session={session} />;
+    }
+    if (session.engine === 'js' && session.kind === 'presentation' && session.office?.slides?.length) {
+      return <SlidesPane session={session} />;
+    }
+    if (session.engine === 'js' && (session.office?.html || session.html)) {
+      return <HtmlDoc session={session} html={session.office?.html || session.html || ''} />;
+    }
+    return <InfoCard session={session} message={session.office?.message || t.fallback} />;
+  }
   if (session.kind === 'image' || session.kind === 'svg') {
     return session.mediaUrl ? <ImagePane key={session.mediaUrl} src={session.mediaUrl} /> : <div className="pv-empty">{t.empty}</div>;
   }
@@ -205,12 +311,7 @@ function Body({ session }: { session: Session }) {
     return <pre className="pv-code" dangerouslySetInnerHTML={{ __html: html }} />;
   }
   if (session.kind === 'markdown' || session.kind === 'html') {
-    const doc = `<!doctype html><html><head><meta charset="utf-8"><style>
-      html,body{margin:0;padding:16px 20px 28px;font:15px/1.55 Segoe UI,system-ui,sans-serif;color:${session.appearance.theme === 'white' ? '#1a1a1c' : '#eee'};background:transparent}
-      pre,code{font-family:ui-monospace,Consolas,monospace} pre{overflow:auto;padding:12px;border-radius:8px;background:rgba(127,127,127,.12)}
-      a{color:inherit} img{max-width:100%}
-    </style></head><body>${session.html || ''}</body></html>`;
-    return <iframe key={session.path} className="pv-md" sandbox="" srcDoc={doc} title={session.name} />;
+    return <HtmlDoc session={session} html={session.html || ''} />;
   }
   if (session.kind === 'folder' && session.folder) {
     return <ListPane items={session.folder.items} />;
@@ -226,16 +327,7 @@ function Body({ session }: { session: Session }) {
       />
     );
   }
-  return (
-    <div className="pv-fallback">
-      {session.iconDataUrl ? <img src={session.iconDataUrl} alt="" /> : null}
-      <h1>{session.name}</h1>
-      <p>{session.sizeLabel || t.fallback}</p>
-      <p>{t.type}: {session.ext ? session.ext.toUpperCase() : (session.kind === 'folder' ? t.folder : '—')}</p>
-      <p>{t.modified}: {formatWhen(session.modified, session.uiLanguage)}</p>
-      <p>{t.created}: {formatWhen(session.created, session.uiLanguage)}</p>
-    </div>
-  );
+  return <InfoCard session={session} message={session.sizeLabel || t.fallback} />;
 }
 
 export function PreviewApp() {
@@ -297,7 +389,9 @@ export function PreviewApp() {
           ? `${session.folder.count} ${t.items}`
           : session.sizeLabel,
         session.total > 1 ? `${session.index + 1}/${session.total}` : '',
-        session.truncated ? t.truncated : '',
+        session.truncated
+          ? ((session.kind === 'word' || session.kind === 'spreadsheet' || session.kind === 'presentation') ? t.partial : t.truncated)
+          : '',
       ].filter(Boolean).join(' · ')
     : '';
 

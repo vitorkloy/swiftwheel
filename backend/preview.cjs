@@ -11,6 +11,7 @@ const { pathToFileURL } = require("url");
 const { BrowserWindow, app: electronApp, net, protocol, screen, shell } = require("electron");
 const lib = require("./preview-lib.cjs");
 const navLib = require("./preview-nav.cjs");
+const office = require("./preview-office.cjs");
 
 const DEFAULT_PREVIEW = {
   enabled: true,
@@ -42,6 +43,8 @@ function installPreview(ctx) {
   let mediaEpoch = 0;
   let openWithBusy = false;
   let openWithBusyTimer = null;
+  let nativeEngine = false;
+  let previewWait = null;
 
   const settings = () => ({ ...DEFAULT_PREVIEW, ...(ctx.getPreviewSettings() || {}) });
   const windowsOnly = () => process.platform === "win32";
@@ -105,6 +108,97 @@ function installPreview(ctx) {
     try { helper.stdin.write(`${line}\n`, "utf8"); } catch { /* ignore */ }
   };
 
+  const settlePreviewWait = (result) => {
+    if (!previewWait) return;
+    clearTimeout(previewWait.timer);
+    const wait = previewWait;
+    previewWait = null;
+    wait.resolve(result);
+  };
+
+  const sendHostRect = () => {
+    if (!win || win.isDestroyed()) return;
+    try {
+      const bounds = win.getContentBounds();
+      const display = screen.getDisplayMatching(bounds);
+      const factor = Number(display.scaleFactor) || 1;
+      const bar = Math.round(44 * factor);
+      const width = Math.round(bounds.width * factor);
+      const height = Math.max(8, Math.round(bounds.height * factor) - bar);
+      helperSend(`hostrect 0 ${bar} ${width} ${height}`);
+    } catch { /* ignore */ }
+  };
+
+  const clearNativePreview = () => {
+    nativeEngine = false;
+    helperSend("preview-clear");
+    settlePreviewWait({ ok: false, reason: "cancelled" });
+  };
+
+  const tryNativePreview = (filePath) => {
+    if (!windowsOnly() || !helperUp) return Promise.resolve({ ok: false, reason: "nohelper" });
+    sendHostRect();
+    settlePreviewWait({ ok: false, reason: "cancelled" });
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        if (!previewWait || previewWait.timer !== timer) return;
+        previewWait = null;
+        helperSend("preview-clear");
+        resolve({ ok: false, reason: "timeout" });
+      }, 10000);
+      previewWait = { resolve, timer, path: filePath };
+      helperSend(`preview ${filePath}`);
+    });
+  };
+
+  const fillOfficeSession = async (session, filePath) => {
+    const lang = session.uiLanguage === "en" ? "en" : "pt";
+    const guard = office.detectOfficeGuard(filePath, session.size);
+    if (guard.reason === "password" || (guard.reason === "too-large" && !guard.allowNative)) {
+      nativeEngine = false;
+      helperSend("preview-clear");
+      session.engine = "info";
+      session.office = { reason: guard.reason, message: office.messageFor(guard.reason, lang) };
+      if (!session.iconDataUrl) session.iconDataUrl = await iconDataUrl(filePath);
+      previewDebug(`office ${guard.reason} ${filePath}`);
+      return true;
+    }
+    if (guard.allowNative && windowsOnly() && helperUp) {
+      const native = await tryNativePreview(filePath);
+      if (currentPath !== filePath || !visible) return false;
+      if (native.ok) {
+        nativeEngine = true;
+        session.engine = "native";
+        session.office = { message: office.messageFor("native", lang) };
+        sendHostRect();
+        previewDebug(`office native ${filePath}`);
+        return true;
+      }
+      previewDebug(`office native-fail ${native.reason || ""} ${filePath}`);
+    }
+    nativeEngine = false;
+    helperSend("preview-clear");
+    if (!guard.allowJs) {
+      session.engine = "info";
+      session.office = { reason: guard.reason || "too-large", message: office.messageFor(guard.reason || "too-large", lang) };
+      if (!session.iconDataUrl) session.iconDataUrl = await iconDataUrl(filePath);
+      return true;
+    }
+    const rendered = await office.renderOfficeJs(filePath, session.kind, session.ext);
+    if (currentPath !== filePath || !visible) return false;
+    if (rendered.ok) {
+      session.engine = "js";
+      session.office = office.localizeOffice(rendered.office, lang);
+      session.html = rendered.office && rendered.office.html ? rendered.office.html : session.html;
+      session.truncated = !!(rendered.office && rendered.office.truncated);
+      return true;
+    }
+    session.engine = "info";
+    session.office = office.localizeOffice(rendered.office, lang);
+    if (!session.iconDataUrl) session.iconDataUrl = await iconDataUrl(filePath);
+    return true;
+  };
+
   const sendPreviewHwnd = () => {
     if (!win || win.isDestroyed()) return;
     try {
@@ -161,6 +255,8 @@ function installPreview(ctx) {
       truncated: false,
       folder: null,
       zip: null,
+      engine: null,
+      office: null,
       iconDataUrl: null,
       pinned,
       index: siblings.index,
@@ -209,6 +305,10 @@ function installPreview(ctx) {
       session.truncated = preview.truncated;
     } else if (kind === "image" || kind === "video" || kind === "audio" || kind === "pdf") {
       session.kind = kind;
+    } else if (office.isOfficeKind(kind)) {
+      session.engine = "pending";
+      session.office = { message: office.messageFor("pending", session.uiLanguage) };
+      session.iconDataUrl = await iconDataUrl(filePath);
     } else {
       // Fallback: se parecer texto pequeno, mostra como texto; senão ícone/metadados.
       if (!st.isDirectory() && st.size <= lib.MAX_TEXT_BYTES) {
@@ -263,8 +363,10 @@ function installPreview(ctx) {
       else if (nav === "next") void navigate(1);
       else if (nav === "prev") void navigate(-1);
     });
+    window.on("resize", sendHostRect);
+    window.on("move", sendHostRect);
     window.on("blur", () => {
-      if (pinned || !visible || openWithBusy) return;
+      if (pinned || !visible || openWithBusy || nativeEngine) return;
       // O foco a saltar no instante em que a janela nasce (ShiftDrop a fechar) não pode
       // engolir a prévia. Um clique fora, depois disso, fecha — excepto se estiver fixada.
       // «Abrir com» também desfoca: sem este guarda o diálogo nativo some com a janela.
@@ -336,6 +438,7 @@ function installPreview(ctx) {
     pendingSession = null;
     currentPath = "";
     sanitizedSvg = "";
+    clearNativePreview();
     openWithBusy = false;
     clearTimeout(openWithBusyTimer);
     openWithBusyTimer = null;
@@ -413,11 +516,22 @@ function installPreview(ctx) {
         placeWindow();
         window.setAlwaysOnTop(true, "floating");
         window.setSkipTaskbar(pinned);
+        if (!office.isOfficeKind(session.kind)) clearNativePreview();
         pushSession(session);
         visible = true;
         setArmed();
         shownAt = Date.now();
         if (!window.isVisible()) window.show();
+        sendHostRect();
+        if (office.isOfficeKind(session.kind)) {
+          const filled = await fillOfficeSession(session, job.filePath);
+          if (queuedOpen) {
+            previewDebug(`skip office gen=${job.gen} (queued gen=${queuedOpen.gen})`);
+            clearNativePreview();
+            continue;
+          }
+          if (filled) pushSession(session);
+        }
         if (job.selectAfter) {
           helperSend(`selecti ${nav.index}`);
           helperSend(`select ${job.filePath}`);
@@ -609,6 +723,12 @@ function installPreview(ctx) {
         } else if (cmd === "openwith-done") {
           previewDebug("open-with helper done");
           setOpenWithBusy(false);
+        } else if (cmd === "preview-ok") {
+          previewDebug("native preview-ok");
+          settlePreviewWait({ ok: true });
+        } else if (cmd === "preview-fail") {
+          previewDebug(`native preview-fail ${arg}`);
+          settlePreviewWait({ ok: false, reason: arg || "error" });
         } else if (cmd === "log") {
           previewDebug(`helper ${arg}`);
           ctx.diagLog(`[Preview] ${arg}`);
@@ -693,6 +813,7 @@ function installPreview(ctx) {
     registerShortcuts,
     setShortcutsPaused: (value, why = "ipc") => setPaused(value, why),
     dispose: () => {
+      helperSend("preview-clear");
       helperSend("quit");
       try { if (helper) helper.kill(); } catch { /* ignore */ }
       helper = null;

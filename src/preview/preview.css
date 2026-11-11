@@ -301,6 +301,120 @@ html, body, #root {
   font-size: 13px;
 }
 
+.pv-native {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--pv-text-3);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: transparent;
+}
+
+.pv-sheet {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.pv-sheet-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0;
+}
+
+.pv-sheet-scroll table {
+  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+  font: 12.5px/1.4 ui-monospace, "Cascadia Code", Consolas, monospace;
+  user-select: text;
+}
+
+.pv-sheet-scroll th,
+.pv-sheet-scroll td {
+  border: 1px solid var(--pv-line);
+  padding: 5px 10px;
+  white-space: pre;
+  text-align: left;
+}
+
+.pv-sheet-scroll th {
+  font-weight: 650;
+  position: sticky;
+  top: 0;
+  background: var(--pv-code);
+  z-index: 1;
+}
+
+.pv-sheet-tabs {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 6px 8px 8px;
+  border-top: 1px solid var(--pv-line);
+  -webkit-app-region: no-drag;
+}
+
+.pv-sheet-tabs button {
+  flex: none;
+  border: 0;
+  border-radius: 7px;
+  padding: 5px 10px;
+  background: transparent;
+  color: var(--pv-text-2);
+  font: 600 11px/1.2 "Segoe UI", system-ui, sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pv-sheet-tabs button:hover { background: var(--pv-hover); color: var(--pv-text); }
+
+.pv-sheet-tabs button.is-on {
+  background: var(--pv-accent);
+  color: var(--pv-on-accent);
+}
+
+.pv-slides {
+  height: 100%;
+  overflow: auto;
+  padding: 12px 14px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.pv-slide {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--pv-code);
+  border: 1px solid var(--pv-line);
+}
+
+.pv-slide-n {
+  font: 650 12px/1.2 "Segoe UI", system-ui, sans-serif;
+  color: var(--pv-text-3);
+  padding-top: 2px;
+}
+
+.pv-slide-body {
+  min-width: 0;
+  user-select: text;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.pv-slide-body p { margin: 0 0 8px; }
+.pv-slide-body img { max-width: 100%; border-radius: 6px; display: block; margin: 8px 0; }
+.pv-slide-body .muted { color: var(--pv-text-3); }
+
 .tok-kw { color: #7eb8ff; }
 .tok-str { color: #9fe7c0; }
 .tok-num { color: #f0c27a; }

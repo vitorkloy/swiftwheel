@@ -5,10 +5,14 @@
 //   e nunca com o caret a piscar / campo Edit (renomear, busca, barra de endereço).
 // - O item selecionado e a lista de irmãos vêm da view do Explorer (IFolderView).
 // Protocolo (linhas UTF-8):
-//   stdin  bind <accel> | armed 0|1 | pinned 0|1 | hwnd <n> | openwith <path> | select <path> | selecti <index> | quit | status
-//   stdout ready | view <index> <count> | viewitem <path> | open <path> | close | next | prev | launch | openwith-done | log <txt> | status ...
+//   stdin  bind <accel> | armed 0|1 | pinned 0|1 | hwnd <n> | openwith <path> | select <path> | selecti <index>
+//          | preview <path> | preview-clear | hostrect <l> <t> <w> <h> | quit | status
+//   stdout ready | view <index> <count> | viewitem <path> | open <path> | close | next | prev | launch
+//          | openwith-done | preview-ok | preview-fail <why> | log <txt> | status ...
 // Com a prévia armada o Explorer fica com o teclado (o Windows recusa o foco à janela
 // Electron). Esc/setas/Enter/Espaço são tratados aqui, não no renderer.
+// Preview Handlers (IPreviewHandler) vivem numa janela owned sobre a área de conteúdo;
+// o hook continua a tratar setas/Esc mesmo com o handler focado.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -18,7 +22,7 @@ using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
-static class VorPreview
+static partial class VorPreview
 {
     [DllImport("user32.dll")] static extern IntPtr SetWindowsHookEx(int id, HookProc p, IntPtr mod, uint tid);
     [DllImport("user32.dll")] static extern bool UnhookWindowsHookEx(IntPtr h);
@@ -228,6 +232,7 @@ static class VorPreview
         output = new StreamWriter(Console.OpenStandardOutput(), Utf8);
         output.AutoFlush = true;
         input = new StreamReader(Console.OpenStandardInput(), Utf8);
+        EnsureDpi();
         form = new Form();
         form.FormBorderStyle = FormBorderStyle.None;
         form.ShowInTaskbar = false;
@@ -265,12 +270,32 @@ static class VorPreview
                     binding = arg.ToLowerInvariant();
                     Emit("log bindings " + (binding.Length == 0 ? 0 : 1));
                 }
-                else if (cmd == "armed") armed = arg == "1";
+                else if (cmd == "armed")
+                {
+                    armed = arg == "1";
+                    if (!armed) ClearNativePreview();
+                }
                 else if (cmd == "pinned") stayOpen = arg == "1";
                 else if (cmd == "hwnd")
                 {
                     long n = 0;
                     if (long.TryParse(arg, out n)) previewHwnd = new IntPtr(n);
+                    try { if (hostForm != null) hostForm.BeginInvoke((Action)PositionHost); } catch { }
+                }
+                else if (cmd == "preview")
+                {
+                    string p = arg;
+                    try { form.BeginInvoke((Action)(() => StartNativePreview(p))); }
+                    catch (Exception ex) { Emit("log preview-invoke " + ex.Message); Emit("preview-fail error"); }
+                }
+                else if (cmd == "preview-clear")
+                {
+                    try { form.BeginInvoke((Action)ClearNativePreview); }
+                    catch { ClearNativePreview(); }
+                }
+                else if (cmd == "hostrect")
+                {
+                    ApplyHostRect(arg);
                 }
                 else if (cmd == "fg")
                 {
@@ -301,7 +326,13 @@ static class VorPreview
                 }
                 else if (cmd == "status")
                     Emit("status hook=" + (hook != IntPtr.Zero ? 1 : 0) + " bindings=" + (binding.Length == 0 ? 0 : 1) + " lastkey=" + (lastKeyAt == 0 ? -1 : Environment.TickCount - lastKeyAt) + " armed=" + (armed ? 1 : 0));
-                else if (cmd == "quit") break;
+                else if (cmd == "quit")
+                {
+                    hostClosingApp = true;
+                    ClearNativePreview();
+                    AbortHostThread();
+                    break;
+                }
             }
         }
         catch { }
@@ -1057,26 +1088,33 @@ static class VorPreview
                 bool repeat = !held.Add(k.vk);
                 if (armed)
                 {
-                    // Se a prévia tiver mesmo o foreground, o Chromium trata as teclas.
-                    // Caso típico: o Explorer ficou com o teclado e o Electron mente no isFocused.
+                    // Explorer em primeiro plano: o Chromium não vê as teclas.
+                    // Handler nativo focado: o Chromium também não. O chrome da prévia, sim.
                     string nav = NavCommand(k.vk);
-                    if (nav != null && !IsPreviewForeground() && IsTargetForeground() && !IsTyping())
+                    if (nav != null)
                     {
-                        swallowUp.Add(k.vk);
-                        if (!repeat || nav == "next" || nav == "prev")
+                        bool hostFg = IsHostForeground();
+                        bool chromeFg = IsPreviewForeground() && !hostFg;
+                        bool explorerFg = IsTargetForeground();
+                        bool typing = !hostFg && IsTyping();
+                        if (!typing && (hostFg || (explorerFg && !chromeFg)))
                         {
-                            if (nav == "next" || nav == "prev")
+                            swallowUp.Add(k.vk);
+                            if (!repeat || nav == "next" || nav == "prev")
                             {
-                                int d = nav == "next" ? 1 : -1;
-                                form.BeginInvoke((Action)(() => NavInView(d)));
+                                if (nav == "next" || nav == "prev")
+                                {
+                                    int d = nav == "next" ? 1 : -1;
+                                    form.BeginInvoke((Action)(() => NavInView(d)));
+                                }
+                                else
+                                {
+                                    string emit = nav;
+                                    form.BeginInvoke((Action)(() => Emit(emit)));
+                                }
                             }
-                            else
-                            {
-                                string emit = nav;
-                                form.BeginInvoke((Action)(() => Emit(emit)));
-                            }
+                            return new IntPtr(1);
                         }
-                        return new IntPtr(1);
                     }
                 }
                 if (repeat)
