@@ -435,12 +435,21 @@ function installPreview(ctx) {
     }
   };
 
-  const applyHelperView = () => {
+  const applyHelperView = (currentFile) => {
     if (!helperView || !helperView.paths.length) return false;
-    const paths = helperView.paths.map((p) => path.resolve(p));
-    let idx = helperView.index;
-    if (idx < 0 || idx >= paths.length) idx = 0;
-    nav = navLib.applyView(nav, paths, idx);
+    const resolved = navLib.resolveViewItems(
+      helperView.paths,
+      currentFile || currentPath || nav.current,
+      helperView.index,
+    );
+    for (let i = 0; i < resolved.warnings.length; i += 1) {
+      previewDebug(resolved.warnings[i]);
+    }
+    if (!resolved.paths.length) {
+      helperView = null;
+      return false;
+    }
+    nav = navLib.applyView(nav, resolved.paths, resolved.index);
     syncSiblingsFromNav();
     helperView = null;
     return true;
@@ -564,8 +573,8 @@ function installPreview(ctx) {
           if (!helperView) helperView = { index: 0, count: 0, paths: [] };
           if (arg) helperView.paths.push(arg);
         } else if (cmd === "open") {
-          const keepSiblings = applyHelperView();
           const resolved = path.resolve(String(arg || ""));
+          const keepSiblings = applyHelperView(resolved);
           if (visible && navLib.shouldIgnoreSelect(nav, resolved)) {
             previewDebug(`ignore explorer echo ${resolved}`);
             nav = navLib.clearIgnoreSelect(nav, resolved);

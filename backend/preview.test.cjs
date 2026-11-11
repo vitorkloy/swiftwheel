@@ -96,9 +96,15 @@ describe("native helper source", () => {
     assert.match(src, /viewitem/);
     assert.match(src, /selecti/);
     assert.match(src, /fonte da verdade/);
+    assert.match(src, /ILCombine/);
+    assert.match(src, /IPersistFolder2/);
+    assert.match(src, /GetCurFolder/);
+    assert.match(src, /SHCreateItemWithParent/);
+    assert.match(src, /PathFromViewChild/);
     const main = fs.readFileSync(path.join(__dirname, "preview.cjs"), "utf8");
     assert.match(main, /cmd === "view"/);
     assert.match(main, /cmd === "viewitem"/);
+    assert.match(main, /resolveViewItems/);
     assert.match(main, /keepSiblings/);
     assert.match(main, /select \$\{/);
     assert.match(main, /stdin\.write\([^)]*"utf8"\)/);
@@ -161,6 +167,51 @@ describe("preview nav state machine", () => {
     assert.equal(mixed.action.path, "SICREDI_09_2026.pdf");
     assert.equal(nav.shouldIgnoreSelect(mixed.state, "SICREDI_09_2026.pdf"), true);
     assert.equal(nav.shouldIgnoreSelect(mixed.state, "QuickLook Installer.exe"), false);
+  });
+
+  it("remaps viewitems that point at the wrong folder and drops missing files", () => {
+    const downloads = fs.mkdtempSync(path.join(os.tmpdir(), "sw-preview-dl-"));
+    const desktop = fs.mkdtempSync(path.join(os.tmpdir(), "sw-preview-desk-"));
+    try {
+      fs.writeFileSync(path.join(downloads, "Calendario.pdf"), "a");
+      fs.writeFileSync(path.join(downloads, "QuickLook Installer.exe"), "b");
+      fs.writeFileSync(path.join(downloads, "SICREDI_09_2026.pdf"), "c");
+      const raw = [
+        path.join(downloads, "Calendario.pdf"),
+        path.join(desktop, "QuickLook Installer.exe"),
+        path.join(desktop, "SICREDI_09_2026.pdf"),
+        path.join(desktop, "ghost.bin"),
+      ];
+      const out = nav.resolveViewItems(raw, path.join(downloads, "Calendario.pdf"), 0);
+      assert.equal(out.paths.length, 3);
+      assert.equal(out.index, 0);
+      assert.equal(out.paths[1], path.resolve(path.join(downloads, "QuickLook Installer.exe")));
+      assert.equal(out.paths[2], path.resolve(path.join(downloads, "SICREDI_09_2026.pdf")));
+      assert.equal(out.warnings.length, 3);
+      assert.match(out.warnings[0], /viewitem inexistente \(corrigido\)/);
+      assert.match(out.warnings[2], /viewitem inexistente: /);
+      assert.doesNotMatch(out.warnings[2], /corrigido/);
+    } finally {
+      fs.rmSync(downloads, { recursive: true, force: true });
+      fs.rmSync(desktop, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps valid viewitem paths and the helper index", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sw-preview-ok-"));
+    try {
+      const files = ["a.pdf", "b.pdf", "c.pdf"].map((name) => {
+        const file = path.join(dir, name);
+        fs.writeFileSync(file, name);
+        return file;
+      });
+      const out = nav.resolveViewItems(files, files[1], 1);
+      assert.deepEqual(out.paths, files.map((file) => path.resolve(file)));
+      assert.equal(out.index, 1);
+      assert.equal(out.warnings.length, 0);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 
   it("writes preview.log only when SWIFTWHEEL debug is on", () => {

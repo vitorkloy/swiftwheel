@@ -36,6 +36,42 @@ function applyView(state, paths, index) {
   return next;
 }
 
+/**
+ * Os PIDLs relativos da view, se mal convertidos, viram Área de Trabalho\<nome>.
+ * Confirma que o ficheiro existe; se não, tenta a pasta do item atual.
+ */
+function resolveViewItems(rawPaths, currentFile, preferredIndex) {
+  const warnings = [];
+  const paths = [];
+  const current = currentFile ? path.resolve(String(currentFile)) : "";
+  const currentDir = current ? path.dirname(current) : "";
+  const list = Array.isArray(rawPaths) ? rawPaths : [];
+  for (let i = 0; i < list.length; i += 1) {
+    const raw = String(list[i] || "");
+    if (!raw) continue;
+    const resolved = path.resolve(raw);
+    if (resolved && fs.existsSync(resolved)) {
+      paths.push(resolved);
+      continue;
+    }
+    const name = path.basename(resolved || raw);
+    const sibling = currentDir && name ? path.resolve(path.join(currentDir, name)) : "";
+    if (sibling && sibling !== resolved && fs.existsSync(sibling)) {
+      warnings.push(`viewitem inexistente (corrigido): ${resolved} → ${sibling}`);
+      paths.push(sibling);
+      continue;
+    }
+    warnings.push(`viewitem inexistente: ${resolved || raw}`);
+  }
+  let index = current ? paths.findIndex((item) => samePath(item, current)) : -1;
+  if (index < 0) {
+    index = Number(preferredIndex) || 0;
+    if (index < 0 || (paths.length && index >= paths.length)) index = 0;
+  }
+  if (!paths.length) index = 0;
+  return { paths, index, warnings };
+}
+
 function move(state, delta) {
   const list = (state && state.paths) || [];
   const step = Number(delta) || 0;
@@ -106,6 +142,7 @@ module.exports = {
   samePath,
   createNavState,
   applyView,
+  resolveViewItems,
   move,
   shouldIgnoreSelect,
   clearIgnoreSelect,

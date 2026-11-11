@@ -40,6 +40,8 @@ static class VorPreview
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)] static extern int SHOpenWithDialog(IntPtr hwnd, ref OPENASINFO info);
     [DllImport("shell32.dll", CharSet = CharSet.Unicode)] static extern bool SHGetPathFromIDListW(IntPtr pidl, StringBuilder pszPath);
     [DllImport("shell32.dll")] static extern int SHCreateItemFromIDList(IntPtr pidl, ref Guid riid, [MarshalAs(UnmanagedType.Interface)] out IShellItem ppv);
+    [DllImport("shell32.dll")] static extern IntPtr ILCombine(IntPtr pidl1, IntPtr pidl2);
+    [DllImport("shell32.dll")] static extern int SHCreateItemWithParent(IntPtr pidlParent, IntPtr psfParent, IntPtr pidlChild, ref Guid riid, [MarshalAs(UnmanagedType.Interface)] out IShellItem ppv);
     [DllImport("ole32.dll")] static extern void CoTaskMemFree(IntPtr pv);
     [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int nStdHandle);
     [DllImport("kernel32.dll", SetLastError = true)] static extern bool WriteFile(IntPtr hFile, byte[] buffer, int count, out int written, IntPtr overlapped);
@@ -134,6 +136,15 @@ static class VorPreview
         [PreserveSig] int Compare(IShellItem psi, uint hint, out int piOrder);
     }
 
+    // IPersist + IPersistFolder + GetCurFolder. Os PIDLs da view são filhos relativos.
+    [ComImport, Guid("1AC3D9F0-175C-11D1-95BE-00609797EA4F"), InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
+    interface IPersistFolder2
+    {
+        [PreserveSig] int GetClassID(out Guid pClassID);
+        [PreserveSig] int Initialize(IntPtr pidl);
+        [PreserveSig] int GetCurFolder(out IntPtr ppidl);
+    }
+
     const int GUI_CARETBLINKING = 0x00000001;
     const int GUI_INMOVESIZE = 0x00000002;
     const int GUI_INMENUMODE = 0x00000004;
@@ -157,6 +168,8 @@ static class VorPreview
     static readonly Guid IID_IShellBrowser = new Guid("000214E2-0000-0000-C000-000000000046");
     static readonly Guid IID_IFolderView = new Guid("CDE725B0-CCC9-4519-917E-325D72FAB4CE");
     static readonly Guid IID_IServiceProvider = new Guid("6D5140C1-7436-11CE-8034-00AA006009FA");
+    static readonly Guid IID_IPersistFolder2 = new Guid("1AC3D9F0-175C-11D1-95BE-00609797EA4F");
+    static readonly Guid IID_IShellFolder = new Guid("000214E6-0000-0000-C000-000000000046");
     // Assinatura nas teclas que nós próprios injetamos, para o hook as deixar passar.
     static readonly UIntPtr MAGIC = new UIntPtr(0x53575056);
     static readonly UTF8Encoding Utf8 = new UTF8Encoding(false);
@@ -571,6 +584,79 @@ static class VorPreview
         return null;
     }
 
+    static IntPtr FolderAbsPidl(IFolderView fv)
+    {
+        if (fv == null) return IntPtr.Zero;
+        Guid iid = IID_IPersistFolder2;
+        IntPtr p = IntPtr.Zero;
+        if (fv.GetFolder(ref iid, out p) < 0 || p == IntPtr.Zero) return IntPtr.Zero;
+        try
+        {
+            IPersistFolder2 persist = (IPersistFolder2)Marshal.GetTypedObjectForIUnknown(p, typeof(IPersistFolder2));
+            IntPtr absPidl = IntPtr.Zero;
+            int hr = persist.GetCurFolder(out absPidl);
+            try { Marshal.ReleaseComObject(persist); } catch { }
+            if (hr < 0) return IntPtr.Zero;
+            return absPidl;
+        }
+        catch (Exception ex)
+        {
+            Emit("log folder-abs " + ex.Message);
+            return IntPtr.Zero;
+        }
+        finally { if (p != IntPtr.Zero) Marshal.Release(p); }
+    }
+
+    static IntPtr FolderShellFolderPtr(IFolderView fv)
+    {
+        if (fv == null) return IntPtr.Zero;
+        Guid iid = IID_IShellFolder;
+        IntPtr p = IntPtr.Zero;
+        if (fv.GetFolder(ref iid, out p) < 0) return IntPtr.Zero;
+        return p;
+    }
+
+    // IFolderView::Item/Items devolve PIDL relativo ao folder. SHGetPathFromIDList
+    // num filho sozinho resolve a partir da Área de Trabalho.
+    static string PathFromViewChild(IntPtr folderAbs, IntPtr psf, IntPtr child)
+    {
+        if (child == IntPtr.Zero) return null;
+        if (folderAbs != IntPtr.Zero)
+        {
+            IntPtr full = ILCombine(folderAbs, child);
+            if (full != IntPtr.Zero)
+            {
+                string combined = PathFromPidl(full);
+                CoTaskMemFree(full);
+                if (combined != null && combined.Length > 0) return combined;
+            }
+        }
+        try
+        {
+            if (psf != IntPtr.Zero)
+            {
+                Guid iid = IID_IShellItem;
+                IShellItem item;
+                int hr = SHCreateItemWithParent(IntPtr.Zero, psf, child, ref iid, out item);
+                if (hr >= 0 && item != null)
+                {
+                    IntPtr pName = IntPtr.Zero;
+                    hr = item.GetDisplayName(SIGDN_FILESYSPATH, out pName);
+                    if (hr >= 0 && pName != IntPtr.Zero)
+                    {
+                        string s = Marshal.PtrToStringUni(pName);
+                        CoTaskMemFree(pName);
+                        try { Marshal.ReleaseComObject(item); } catch { }
+                        if (s != null && s.Length > 0) return s;
+                    }
+                    else try { Marshal.ReleaseComObject(item); } catch { }
+                }
+            }
+        }
+        catch { }
+        return PathFromPidl(child);
+    }
+
     static IFolderView FolderViewFromWindow(object w)
     {
         IntPtr unk = IntPtr.Zero;
@@ -672,42 +758,52 @@ static class VorPreview
     {
         List<string> paths = new List<string>();
         if (fv == null) return paths;
-        Guid iidEnum = IID_IEnumIDList;
-        IntPtr pEnum = IntPtr.Zero;
-        int hr = fv.Items(SVGIO_VIEW, ref iidEnum, out pEnum);
-        if (hr >= 0 && pEnum != IntPtr.Zero)
+        IntPtr folderAbs = FolderAbsPidl(fv);
+        IntPtr psf = FolderShellFolderPtr(fv);
+        try
         {
-            try
+            Guid iidEnum = IID_IEnumIDList;
+            IntPtr pEnum = IntPtr.Zero;
+            int hr = fv.Items(SVGIO_VIEW, ref iidEnum, out pEnum);
+            if (hr >= 0 && pEnum != IntPtr.Zero)
             {
-                IEnumIDList enumer = (IEnumIDList)Marshal.GetTypedObjectForIUnknown(pEnum, typeof(IEnumIDList));
-                while (true)
+                try
                 {
-                    IntPtr pidl;
-                    uint fetched;
-                    hr = enumer.Next(1, out pidl, out fetched);
-                    if (hr != 0 || fetched == 0 || pidl == IntPtr.Zero) break;
-                    string p = PathFromPidl(pidl);
-                    CoTaskMemFree(pidl);
-                    if (p != null && p.Length > 0) paths.Add(p);
+                    IEnumIDList enumer = (IEnumIDList)Marshal.GetTypedObjectForIUnknown(pEnum, typeof(IEnumIDList));
+                    while (true)
+                    {
+                        IntPtr pidl;
+                        uint fetched;
+                        hr = enumer.Next(1, out pidl, out fetched);
+                        if (hr != 0 || fetched == 0 || pidl == IntPtr.Zero) break;
+                        string p = PathFromViewChild(folderAbs, psf, pidl);
+                        CoTaskMemFree(pidl);
+                        if (p != null && p.Length > 0) paths.Add(p);
+                    }
+                    try { Marshal.ReleaseComObject(enumer); } catch { }
                 }
-                try { Marshal.ReleaseComObject(enumer); } catch { }
+                catch (Exception ex) { Emit("log view-enum " + ex.Message); }
+                Marshal.Release(pEnum);
+                if (paths.Count > 0) return paths;
             }
-            catch (Exception ex) { Emit("log view-enum " + ex.Message); }
-            Marshal.Release(pEnum);
-            if (paths.Count > 0) return paths;
+            int count;
+            hr = fv.ItemCount(SVGIO_VIEW, out count);
+            if (hr < 0 || count <= 0) return paths;
+            for (int i = 0; i < count; i++)
+            {
+                IntPtr pidl;
+                if (fv.Item(i, out pidl) < 0 || pidl == IntPtr.Zero) continue;
+                string p = PathFromViewChild(folderAbs, psf, pidl);
+                CoTaskMemFree(pidl);
+                if (p != null && p.Length > 0) paths.Add(p);
+            }
+            return paths;
         }
-        int count;
-        hr = fv.ItemCount(SVGIO_VIEW, out count);
-        if (hr < 0 || count <= 0) return paths;
-        for (int i = 0; i < count; i++)
+        finally
         {
-            IntPtr pidl;
-            if (fv.Item(i, out pidl) < 0 || pidl == IntPtr.Zero) continue;
-            string p = PathFromPidl(pidl);
-            CoTaskMemFree(pidl);
-            if (p != null && p.Length > 0) paths.Add(p);
+            if (folderAbs != IntPtr.Zero) CoTaskMemFree(folderAbs);
+            if (psf != IntPtr.Zero) Marshal.Release(psf);
         }
-        return paths;
     }
 
     static int IndexOfPath(List<string> paths, string filePath)
@@ -715,7 +811,7 @@ static class VorPreview
         if (paths == null || filePath == null) return -1;
         for (int i = 0; i < paths.Count; i++)
         {
-            if (string.Equals(paths[i], filePath, StringComparison.OrdinalIgnoreCase)) return i;
+            if (SameFile(paths[i], filePath)) return i;
         }
         return -1;
     }
@@ -772,6 +868,8 @@ static class VorPreview
         if (filePath == null || filePath.Length == 0) return;
         IFolderView fv = GetFolderView(originHwnd);
         if (fv == null) return;
+        IntPtr folderAbs = FolderAbsPidl(fv);
+        IntPtr psf = FolderShellFolderPtr(fv);
         try
         {
             int count;
@@ -780,7 +878,7 @@ static class VorPreview
             {
                 IntPtr pidl;
                 if (fv.Item(i, out pidl) < 0 || pidl == IntPtr.Zero) continue;
-                string p = PathFromPidl(pidl);
+                string p = PathFromViewChild(folderAbs, psf, pidl);
                 CoTaskMemFree(pidl);
                 if (p != null && SameFile(p, filePath))
                 {
@@ -790,7 +888,12 @@ static class VorPreview
             }
         }
         catch (Exception ex) { Emit("log select " + ex.Message); }
-        finally { try { Marshal.ReleaseComObject(fv); } catch { } }
+        finally
+        {
+            if (folderAbs != IntPtr.Zero) CoTaskMemFree(folderAbs);
+            if (psf != IntPtr.Zero) Marshal.Release(psf);
+            try { Marshal.ReleaseComObject(fv); } catch { }
+        }
     }
 
     // O preview é a fonte da verdade: só pedimos next/prev. O Electron mostra e
