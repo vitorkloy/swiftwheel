@@ -102,6 +102,22 @@ describe("native helper source", () => {
   });
 });
 
+describe("preview media reload", () => {
+  it("cache-busts viewer URLs and remounts the renderer per path", () => {
+    const main = fs.readFileSync(path.join(__dirname, "preview.cjs"), "utf8");
+    const app = fs.readFileSync(path.join(__dirname, "..", "src", "preview", "PreviewApp.tsx"), "utf8");
+    assert.match(main, /bumpMediaUrl/);
+    assert.match(main, /mediaEpoch/);
+    assert.match(main, /vor-preview:\/\/media\/current\?\$\{q\}/);
+    assert.match(main, /status: 409/);
+    assert.match(main, /queuedOpen \|\| seq !== openSeq/);
+    assert.match(app, /key=\{session\.path\}/);
+    assert.match(app, /key=\{session\.mediaUrl\}/);
+    assert.match(app, /removeAttribute\('src'\)/);
+    assert.match(app, /function MediaPane/);
+  });
+});
+
 describe("preview toolbar wiring", () => {
   it("does not hide Open With and keeps toolbar buttons out of the drag region", () => {
     const main = fs.readFileSync(path.join(__dirname, "preview.cjs"), "utf8");

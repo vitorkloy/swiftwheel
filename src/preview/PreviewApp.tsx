@@ -87,6 +87,28 @@ function formatWhen(iso: string, lang: 'pt' | 'en') {
   }
 }
 
+function stopMedia(el: HTMLMediaElement | null) {
+  if (!el) return;
+  el.pause();
+  el.removeAttribute('src');
+  el.load();
+}
+
+function MediaPane({ src, kind }: { src: string; kind: 'video' | 'audio' }) {
+  const videoRef = useRef<HTMLVideoElement | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  useEffect(() => () => {
+    stopMedia(kind === 'video' ? videoRef.current : audioRef.current);
+  }, [src, kind]);
+  return (
+    <div className="pv-media">
+      {kind === 'video'
+        ? <video ref={videoRef} src={src} controls autoPlay />
+        : <audio ref={audioRef} src={src} controls autoPlay />}
+    </div>
+  );
+}
+
 function ImagePane({ src }: { src: string }) {
   const stage = useRef<HTMLDivElement>(null);
   const zoomRef = useRef(1);
@@ -165,25 +187,17 @@ function ListPane({ items }: { items: Array<{ name: string; isDir: boolean; size
 function Body({ session }: { session: Session }) {
   const t = COPY[session.uiLanguage];
   if (session.kind === 'image' || session.kind === 'svg') {
-    return session.mediaUrl ? <ImagePane src={session.mediaUrl} /> : <div className="pv-empty">{t.empty}</div>;
+    return session.mediaUrl ? <ImagePane key={session.mediaUrl} src={session.mediaUrl} /> : <div className="pv-empty">{t.empty}</div>;
   }
   if (session.kind === 'video') {
-    return (
-      <div className="pv-media">
-        {session.mediaUrl ? <video src={session.mediaUrl} controls autoPlay /> : t.empty}
-      </div>
-    );
+    return session.mediaUrl ? <MediaPane key={session.mediaUrl} src={session.mediaUrl} kind="video" /> : <div className="pv-empty">{t.empty}</div>;
   }
   if (session.kind === 'audio') {
-    return (
-      <div className="pv-media">
-        {session.mediaUrl ? <audio src={session.mediaUrl} controls autoPlay /> : t.empty}
-      </div>
-    );
+    return session.mediaUrl ? <MediaPane key={session.mediaUrl} src={session.mediaUrl} kind="audio" /> : <div className="pv-empty">{t.empty}</div>;
   }
   if (session.kind === 'pdf') {
     return session.mediaUrl
-      ? <iframe className="pv-pdf" src={session.mediaUrl} title={session.name} />
+      ? <iframe key={session.mediaUrl} className="pv-pdf" src={session.mediaUrl} title={session.name} />
       : <div className="pv-empty">{t.empty}</div>;
   }
   if (session.kind === 'text') {
@@ -196,7 +210,7 @@ function Body({ session }: { session: Session }) {
       pre,code{font-family:ui-monospace,Consolas,monospace} pre{overflow:auto;padding:12px;border-radius:8px;background:rgba(127,127,127,.12)}
       a{color:inherit} img{max-width:100%}
     </style></head><body>${session.html || ''}</body></html>`;
-    return <iframe className="pv-md" sandbox="" srcDoc={doc} title={session.name} />;
+    return <iframe key={session.path} className="pv-md" sandbox="" srcDoc={doc} title={session.name} />;
   }
   if (session.kind === 'folder' && session.folder) {
     return <ListPane items={session.folder.items} />;
@@ -231,21 +245,23 @@ export function PreviewApp() {
   useEffect(() => {
     const api = window.preview;
     if (!api) return;
+    let alive = true;
     const unsub = api.onSession((next) => {
+      if (!alive) return;
       setSession(next as Session);
       setVisible(!!next);
     });
     const unsubA = api.onAppearance((appearance) => {
+      if (!alive) return;
       setSession((current) => (current ? { ...current, appearance: appearance as Appearance } : current));
     });
     void api.getSession().then((next) => {
-      if (next) {
-        setSession(next as Session);
-        setVisible(true);
-      }
+      if (!alive || !next) return;
+      setSession((current) => current || (next as Session));
+      setVisible(true);
     });
     void api.action('ready');
-    return () => { unsub(); unsubA(); };
+    return () => { alive = false; unsub(); unsubA(); };
   }, []);
 
   const run = useCallback((action: string) => {
@@ -333,7 +349,7 @@ export function PreviewApp() {
         </div>
       </header>
       <div className="pv-stage">
-        <Body session={session} />
+        <Body key={session.path} session={session} />
       </div>
     </div>
   );

@@ -37,15 +37,27 @@ function installPreview(ctx) {
   let queuedOpen = null;
   let helperView = null;
   let shownAt = 0;
+  let mediaEpoch = 0;
+  let openSeq = 0;
   let openWithBusy = false;
   let openWithBusyTimer = null;
 
   const settings = () => ({ ...DEFAULT_PREVIEW, ...(ctx.getPreviewSettings() || {}) });
   const windowsOnly = () => process.platform === "win32";
 
+  const bumpMediaUrl = (kind, filePath) => {
+    mediaEpoch += 1;
+    const q = `r=${mediaEpoch}&p=${encodeURIComponent(path.basename(filePath))}`;
+    return kind === "svg" ? `vor-preview://svg/current?${q}` : `vor-preview://media/current?${q}`;
+  };
+
   protocol.handle("vor-preview", (request) => {
     try {
       const url = new URL(request.url);
+      const epoch = url.searchParams.get("r");
+      if (epoch && epoch !== String(mediaEpoch)) {
+        return new Response("stale", { status: 409 });
+      }
       if (url.hostname === "svg") {
         if (!sanitizedSvg) return new Response("missing", { status: 404 });
         return new Response(sanitizedSvg, {
@@ -184,10 +196,9 @@ function installPreview(ctx) {
     } else if (kind === "svg") {
       const preview = lib.readTextPreview(filePath, 4 * 1024 * 1024);
       sanitizedSvg = preview.text ? lib.sanitizeSvg(preview.text) : "";
-      session.mediaUrl = "vor-preview://svg/current";
       session.truncated = preview.truncated;
     } else if (kind === "image" || kind === "video" || kind === "audio" || kind === "pdf") {
-      session.mediaUrl = "vor-preview://media/current";
+      session.kind = kind;
     } else {
       // Fallback: se parecer texto pequeno, mostra como texto; senão ícone/metadados.
       if (!st.isDirectory() && st.size <= lib.MAX_TEXT_BYTES) {
@@ -339,6 +350,7 @@ function installPreview(ctx) {
       return { ok: false, error: "busy" };
     }
     opening = true;
+    const seq = ++openSeq;
     try {
       if (!keepPin) pinned = false;
       if (!keepSiblings) siblings = lib.listSiblings(target);
@@ -346,9 +358,14 @@ function installPreview(ctx) {
         const idx = siblings.paths.findIndex((p) => p.toLowerCase() === target.toLowerCase());
         if (idx >= 0) siblings.index = idx;
       }
-      currentPath = target;
       const session = await buildSession(target);
+      if (queuedOpen || seq !== openSeq) return { ok: true };
+      currentPath = target;
+      if (session.kind === "svg" || session.kind === "image" || session.kind === "video" || session.kind === "audio" || session.kind === "pdf") {
+        session.mediaUrl = bumpMediaUrl(session.kind, target);
+      }
       const window = await ensureWindow();
+      if (queuedOpen || seq !== openSeq) return { ok: true };
       placeWindow();
       window.setAlwaysOnTop(true, "floating");
       window.setSkipTaskbar(pinned);
