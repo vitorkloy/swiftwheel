@@ -134,7 +134,7 @@ function debugLog(line, opts) {
   const dir = path.join(appData, "SwiftWheel", "logs");
   fs.mkdirSync(dir, { recursive: true });
   const file = path.join(dir, "preview.log");
-  fs.appendFileSync(file, `${new Date().toISOString()} ${line}\n`);
+  fs.appendFileSync(file, `${new Date().toISOString()} ${line}\n`, { encoding: "utf8" });
   return file;
 }
 

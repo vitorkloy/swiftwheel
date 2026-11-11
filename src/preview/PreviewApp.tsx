@@ -268,6 +268,16 @@ export function PreviewApp() {
     void window.preview?.action(action);
   }, []);
 
+  const lastPress = useRef(0);
+  const press = useCallback((action: string) => (event: React.SyntheticEvent) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const now = Date.now();
+    if (event.type !== "pointerdown" && now - lastPress.current < 400) return;
+    lastPress.current = now;
+    run(action);
+  }, [run]);
+
   const appearance = session?.appearance;
   const t = COPY[session?.uiLanguage === 'en' ? 'en' : 'pt'];
   const accentStyle = useMemo(() => {
@@ -311,8 +321,8 @@ export function PreviewApp() {
             title={session.pinned ? t.unpin : t.pin}
             aria-label={session.pinned ? t.unpin : t.pin}
             aria-pressed={session.pinned}
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={(event) => { event.stopPropagation(); run('pin'); }}
+            onPointerDown={press("pin")}
+            onClick={press("pin")}
           >
             <Pin size={15} fill={session.pinned ? 'currentColor' : 'none'} />
           </button>
@@ -321,8 +331,8 @@ export function PreviewApp() {
             className="pv-btn"
             title={t.openWith}
             aria-label={t.openWith}
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={(event) => { event.stopPropagation(); run('open-with'); }}
+            onPointerDown={press("open-with")}
+            onClick={press("open-with")}
           >
             <AppWindow size={15} />
           </button>
@@ -331,8 +341,8 @@ export function PreviewApp() {
             className="pv-btn"
             title={t.reveal}
             aria-label={t.reveal}
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={(event) => { event.stopPropagation(); run('reveal'); }}
+            onPointerDown={press("reveal")}
+            onClick={press("reveal")}
           >
             <FolderOpen size={15} />
           </button>
@@ -341,8 +351,8 @@ export function PreviewApp() {
             className="pv-btn"
             title={t.close}
             aria-label={t.close}
-            onMouseDown={(event) => event.stopPropagation()}
-            onClick={(event) => { event.stopPropagation(); run('close'); }}
+            onPointerDown={press("close")}
+            onClick={press("close")}
           >
             <X size={15} />
           </button>

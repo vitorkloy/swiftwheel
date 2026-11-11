@@ -392,11 +392,55 @@ function isoOrEmpty(date) {
   catch { return ""; }
 }
 
+function decodeHelperLine(buf) {
+  const raw = Buffer.isBuffer(buf) ? buf : Buffer.from(String(buf == null ? "" : buf), "utf8");
+  const text = raw.toString("utf8");
+  if (text.indexOf("\uFFFD") === -1) return text;
+  return raw.toString("latin1");
+}
+
+function displayName(filePath) {
+  const fallback = path.basename(String(filePath || ""));
+  if (!filePath) return fallback;
+  try {
+    const names = fs.readdirSync(path.dirname(filePath));
+    const exact = names.find((n) => n === fallback);
+    if (exact) return exact;
+    const lower = fallback.toLowerCase();
+    const ci = names.find((n) => n.toLowerCase() === lower);
+    if (ci) return ci;
+  } catch { /* ignore */ }
+  try {
+    return path.basename(fs.realpathSync(filePath));
+  } catch {
+    return fallback;
+  }
+}
+
+function canonicalizePath(filePath) {
+  const target = path.resolve(String(filePath || ""));
+  if (!target) return target;
+  try {
+    if (fs.existsSync(target)) {
+      try { return fs.realpathSync(target); } catch { return target; }
+    }
+  } catch { /* ignore */ }
+  try {
+    const dir = path.dirname(target);
+    const base = path.basename(target);
+    const names = fs.readdirSync(dir);
+    const lower = base.toLowerCase();
+    const hit = names.find((n) => n === base) || names.find((n) => n.toLowerCase() === lower);
+    if (hit) return path.join(dir, hit);
+  } catch { /* ignore */ }
+  return target;
+}
+
 function fileMeta(filePath, stat) {
   const st = stat || fs.statSync(filePath);
   const ext = extOf(filePath);
   return {
-    name: path.basename(filePath),
+    name: displayName(filePath),
     dir: path.dirname(filePath),
     ext,
     size: st.isDirectory() ? 0 : st.size,
@@ -459,6 +503,9 @@ module.exports = {
   listFolder,
   listSiblings,
   fileMeta,
+  displayName,
+  canonicalizePath,
+  decodeHelperLine,
   formatBytes,
   previewNavCommand,
   canonicalAccelerator,

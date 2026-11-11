@@ -290,6 +290,7 @@ function installPreview(ctx) {
       frame: false,
       transparent: true,
       hasShadow: false,
+      thickFrame: false,
       resizable: true,
       minimizable: false,
       maximizable: true,
@@ -298,6 +299,7 @@ function installPreview(ctx) {
       alwaysOnTop: true,
       autoHideMenuBar: true,
       backgroundColor: "#00000000",
+      backgroundMaterial: "none",
       paintWhenInitiallyHidden: true,
       webPreferences: {
         preload: ctx.preloadPath,
@@ -309,6 +311,7 @@ function installPreview(ctx) {
         backgroundThrottling: false,
       },
     });
+    try { window.setHasShadow(false); } catch { /* ignore */ }
     attachLifecycle(window);
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     window.webContents.on("will-navigate", (event, url) => {
@@ -354,7 +357,7 @@ function installPreview(ctx) {
   };
 
   const openPath = async (filePath, { keepPin = false, keepSiblings = false, gen = null, selectAfter = false } = {}) => {
-    const target = path.resolve(String(filePath || ""));
+    const target = lib.canonicalizePath(filePath);
     if (!target || !fs.existsSync(target)) {
       previewDebug(`caminho inválido: ${target}`);
       return { ok: false, error: "missing" };
@@ -487,9 +490,26 @@ function installPreview(ctx) {
     } catch { /* ignore */ }
   };
 
+  const launchOpenAs = (target) => {
+    const { spawn } = require("child_process");
+    const child = spawn("rundll32.exe", ["shell32.dll,OpenAs_RunDLL", target], {
+      detached: true,
+      stdio: "ignore",
+      windowsHide: false,
+    });
+    child.on("error", (err) => previewDebug(`open-with rundll32 error ${err.message}`));
+    child.unref();
+    previewDebug(`open-with rundll32 ${target}`);
+  };
+
   const openWith = () => {
-    if (!currentPath) return { ok: false };
+    previewDebug(`open-with click helper=${helperUp ? 1 : 0} path=${currentPath || ""}`);
+    if (!currentPath) {
+      previewDebug("open-with abort: sem path");
+      return { ok: false };
+    }
     if (!windowsOnly()) {
+      previewDebug("open-with abort: windows-only");
       ctx.diagLog("[Preview] Abrir com... só existe no Windows");
       return { ok: false, error: "windows-only" };
     }
@@ -497,24 +517,20 @@ function installPreview(ctx) {
     ctx.diagLog(`[Preview] Abrir com... ${target}`);
     setOpenWithBusy(true);
     openWithBusyTimer = setTimeout(() => setOpenWithBusy(false), 120000);
-    // SHOpenWithDialog no helper (STA). rundll32 com windowsHide:true escondia o diálogo.
+    helperSend("fg");
     if (helperUp) {
       helperSend(`openwith ${target}`);
+      previewDebug(`open-with helper SHOpenWithDialog ${target}`);
       return { ok: true };
     }
     try {
-      const { spawn } = require("child_process");
-      spawn("rundll32.exe", ["shell32.dll,OpenAs_RunDLL", target], {
-        detached: true,
-        stdio: "ignore",
-        windowsHide: false,
-      }).unref();
-      // O rundll32 não avisa quando o diálogo fecha; liberta o alwaysOnTop assim que ele nascer.
+      launchOpenAs(target);
       clearTimeout(openWithBusyTimer);
-      openWithBusyTimer = setTimeout(() => setOpenWithBusy(false), 1500);
+      openWithBusyTimer = setTimeout(() => setOpenWithBusy(false), 120000);
       return { ok: true };
     } catch (err) {
       setOpenWithBusy(false);
+      previewDebug(`open-with falhou: ${err.message}`);
       ctx.diagLog(`[Preview] Abrir com falhou: ${err.message}`);
       return { ok: false, error: err.message };
     }
@@ -550,14 +566,15 @@ function installPreview(ctx) {
     const { spawn } = require("child_process");
     const child = spawn(exe, [], { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
     helper = child;
-    let buf = "";
-    child.stdout.setEncoding("utf8");
+    let buf = Buffer.alloc(0);
     child.stdout.on("data", (chunk) => {
-      buf += chunk;
+      buf = Buffer.concat([buf, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)]);
       let nl;
-      while ((nl = buf.indexOf("\n")) >= 0) {
-        const line = buf.slice(0, nl).replace(/\r$/, "");
+      while ((nl = buf.indexOf(0x0a)) >= 0) {
+        let lineBuf = buf.slice(0, nl);
         buf = buf.slice(nl + 1);
+        if (lineBuf.length && lineBuf[lineBuf.length - 1] === 0x0d) lineBuf = lineBuf.slice(0, -1);
+        const line = lib.decodeHelperLine(lineBuf);
         if (!line) continue;
         const sp = line.indexOf(" ");
         const cmd = sp < 0 ? line : line.slice(0, sp);
@@ -573,7 +590,7 @@ function installPreview(ctx) {
           if (!helperView) helperView = { index: 0, count: 0, paths: [] };
           if (arg) helperView.paths.push(arg);
         } else if (cmd === "open") {
-          const resolved = path.resolve(String(arg || ""));
+          const resolved = lib.canonicalizePath(arg);
           const keepSiblings = applyHelperView(resolved);
           if (visible && navLib.shouldIgnoreSelect(nav, resolved)) {
             previewDebug(`ignore explorer echo ${resolved}`);
@@ -590,8 +607,10 @@ function installPreview(ctx) {
         } else if (cmd === "launch") {
           void openDefault();
         } else if (cmd === "openwith-done") {
+          previewDebug("open-with helper done");
           setOpenWithBusy(false);
         } else if (cmd === "log") {
+          previewDebug(`helper ${arg}`);
           ctx.diagLog(`[Preview] ${arg}`);
         }
       }
@@ -640,8 +659,10 @@ function installPreview(ctx) {
 
   ctx.ipcMain.handle("preview-pending", (event) => (fromPreview(event) ? pendingSession : null));
   ctx.ipcMain.handle("preview-action", async (event, payload) => {
-    if (!fromPreview(event)) return { ok: false, error: "origem inválida" };
     const action = payload && payload.action;
+    const allowed = fromPreview(event);
+    previewDebug(`ipc action=${action || ""} fromPreview=${allowed ? 1 : 0} path=${currentPath || ""}`);
+    if (!allowed) return { ok: false, error: "origem inválida" };
     if (action === "ready") return { ok: true };
     if (action === "close") { hidePreview(); return { ok: true }; }
     if (action === "pin") return togglePin();

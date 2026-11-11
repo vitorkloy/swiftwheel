@@ -45,6 +45,11 @@ static class VorPreview
     [DllImport("ole32.dll")] static extern void CoTaskMemFree(IntPtr pv);
     [DllImport("kernel32.dll")] static extern IntPtr GetStdHandle(int nStdHandle);
     [DllImport("kernel32.dll", SetLastError = true)] static extern bool WriteFile(IntPtr hFile, byte[] buffer, int count, out int written, IntPtr overlapped);
+    [DllImport("kernel32.dll")] static extern bool SetConsoleOutputCP(uint wCodePageID);
+    [DllImport("kernel32.dll")] static extern bool SetConsoleCP(uint wCodePageID);
+    [DllImport("user32.dll")] static extern bool AllowSetForegroundWindow(int dwProcessId);
+    [DllImport("user32.dll")] static extern bool SetForegroundWindow(IntPtr hWnd);
+    [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr hWnd);
 
     [StructLayout(LayoutKind.Sequential)] struct MSG { public IntPtr h; public uint msg; public IntPtr w; public IntPtr l; public uint t; public int x; public int y; }
     [StructLayout(LayoutKind.Sequential)] struct KBD { public uint vk; public uint scan; public uint flags; public uint time; public IntPtr extra; }
@@ -161,6 +166,10 @@ static class VorPreview
     const uint SVSI_NOTAKEFOCUS = 0x40000000;
     const uint SVSI_FLAGS = SVSI_SELECT | SVSI_DESELECTOTHERS | SVSI_ENSUREVISIBLE | SVSI_FOCUSED | SVSI_NOTAKEFOCUS;
     const uint SIGDN_FILESYSPATH = 0x80058000;
+    const uint OAIF_ALLOW_REGISTRATION = 0x00000001;
+    const uint OAIF_EXEC = 0x00000004;
+    const int ERROR_CANCELLED = 1223;
+    const int ASFW_ANY = -1;
     const int STD_OUTPUT_HANDLE = -11;
     static readonly Guid IID_IEnumIDList = new Guid("000214F2-0000-0000-C000-000000000046");
     static readonly Guid IID_IShellItem = new Guid("43826D1E-E718-42EE-BC55-A1E261C37BFE");
@@ -211,8 +220,10 @@ static class VorPreview
     [STAThread]
     static void Main()
     {
-        try { Console.OutputEncoding = Utf8; } catch { }
-        try { Console.InputEncoding = Utf8; } catch { }
+        try { SetConsoleOutputCP(65001); } catch { }
+        try { SetConsoleCP(65001); } catch { }
+        try { Console.OutputEncoding = new UTF8Encoding(false); } catch { }
+        try { Console.InputEncoding = new UTF8Encoding(false); } catch { }
         stdoutHandle = GetStdHandle(STD_OUTPUT_HANDLE);
         output = new StreamWriter(Console.OpenStandardOutput(), Utf8);
         output.AutoFlush = true;
@@ -261,9 +272,15 @@ static class VorPreview
                     long n = 0;
                     if (long.TryParse(arg, out n)) previewHwnd = new IntPtr(n);
                 }
+                else if (cmd == "fg")
+                {
+                    try { AllowSetForegroundWindow(ASFW_ANY); Emit("log fg"); }
+                    catch (Exception ex) { Emit("log fg " + ex.Message); }
+                }
                 else if (cmd == "openwith")
                 {
                     string p = arg;
+                    Emit("log openwith-recv");
                     try { form.BeginInvoke((Action)(() => ShowOpenWith(p))); }
                     catch (Exception ex) { Emit("log openwith-invoke " + ex.Message); Emit("openwith-done"); }
                 }
@@ -346,37 +363,68 @@ static class VorPreview
         return fg == previewHwnd || Related(fg, previewHwnd);
     }
 
+    static void AllowForeground()
+    {
+        try { AllowSetForegroundWindow(ASFW_ANY); } catch { }
+    }
+
+    static void RunOpenAsDialog(string filePath)
+    {
+        try
+        {
+            System.Diagnostics.ProcessStartInfo psi = new System.Diagnostics.ProcessStartInfo();
+            psi.FileName = "rundll32.exe";
+            psi.Arguments = "shell32.dll,OpenAs_RunDLL \"" + filePath + "\"";
+            psi.UseShellExecute = true;
+            psi.CreateNoWindow = false;
+            System.Diagnostics.Process.Start(psi);
+            Emit("log openwith-rundll ok");
+        }
+        catch (Exception ex)
+        {
+            Emit("log openwith-rundll " + ex.Message);
+        }
+    }
+
     static void ShowOpenWith(string filePath)
     {
         if (filePath == null || filePath.Length == 0)
         {
+            Emit("log openwith-abort empty");
             Emit("openwith-done");
             return;
         }
+        Emit("log openwith-start");
         try
         {
+            AllowForeground();
+            IntPtr owner = IntPtr.Zero;
+            try { if (form != null) owner = form.Handle; } catch { }
+            if (owner != IntPtr.Zero)
+            {
+                try { SetForegroundWindow(owner); } catch { }
+                try { BringWindowToTop(owner); } catch { }
+            }
             OPENASINFO info = new OPENASINFO();
             info.pcszFile = filePath;
             info.pcszClass = null;
-            info.oaifInFlags = 0x00000001 | 0x00000004; // ALLOW_REGISTRATION | EXEC
-            // Dono nulo: o HWND Chromium da prévia (alwaysOnTop) engolia ou escondia o diálogo.
-            int hr = SHOpenWithDialog(IntPtr.Zero, ref info);
-            if (hr < 0 && (hr & 0xFFFF) != 1223)
+            info.oaifInFlags = OAIF_ALLOW_REGISTRATION | OAIF_EXEC;
+            int t0 = Environment.TickCount;
+            int hr = SHOpenWithDialog(owner, ref info);
+            int dt = Environment.TickCount - t0;
+            Emit("log openwith-hr " + hr + " ms " + dt);
+            bool cancelled = (hr & 0xFFFF) == ERROR_CANCELLED;
+            // hwnd 0 / sem foreground: o API devolve S_OK em <250 ms e não mostra nada.
+            if (!cancelled && (hr < 0 || dt < 250))
             {
-                Emit("log openwith-hr " + hr);
-                try
-                {
-                    System.Diagnostics.Process.Start("rundll32.exe", "shell32.dll,OpenAs_RunDLL \"" + filePath + "\"");
-                }
-                catch (Exception fallbackEx)
-                {
-                    Emit("log openwith-rundll " + fallbackEx.Message);
-                }
+                AllowForeground();
+                RunOpenAsDialog(filePath);
             }
         }
         catch (Exception ex)
         {
             Emit("log openwith-error " + ex.Message);
+            RunOpenAsDialog(filePath);
         }
         Emit("openwith-done");
     }

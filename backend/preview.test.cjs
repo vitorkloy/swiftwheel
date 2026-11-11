@@ -72,6 +72,10 @@ describe("native helper source", () => {
   it("handles Esc/arrows/Enter while armed and Open With via SHOpenWithDialog", () => {
     const src = fs.readFileSync(path.join(__dirname, "..", "native", "vor-preview.cs"), "utf8");
     assert.match(src, /SHOpenWithDialog/);
+    assert.match(src, /AllowSetForegroundWindow/);
+    assert.match(src, /OAIF_ALLOW_REGISTRATION/);
+    assert.match(src, /OAIF_EXEC/);
+    assert.match(src, /OpenAs_RunDLL/);
     assert.match(src, /NavCommand/);
     assert.match(src, /return "launch"/);
     assert.match(src, /return "next"/);
@@ -90,8 +94,10 @@ describe("native helper source", () => {
     assert.match(src, /SVSI_DESELECTOTHERS/);
     assert.match(src, /SVSI_ENSUREVISIBLE/);
     assert.match(src, /SVSI_FOCUSED/);
-    assert.match(src, /Console\.OutputEncoding/);
+    assert.match(src, /Console\.OutputEncoding = new UTF8Encoding\(false\)/);
     assert.match(src, /UTF8Encoding/);
+    assert.match(src, /SetConsoleOutputCP\(65001\)/);
+    assert.match(src, /SetConsoleCP\(65001\)/);
     assert.match(src, /WriteFile/);
     assert.match(src, /viewitem/);
     assert.match(src, /selecti/);
@@ -221,6 +227,38 @@ describe("preview nav state machine", () => {
       const file = nav.debugLog("hello-nav", { enabled: true, appData: dir });
       assert.equal(file, path.join(dir, "SwiftWheel", "logs", "preview.log"));
       assert.match(fs.readFileSync(file, "utf8"), /hello-nav/);
+      nav.debugLog("Calendário · CONCILIAÇÃO", { enabled: true, appData: dir });
+      const body = fs.readFileSync(file);
+      assert.equal(body.includes(Buffer.from("CONCILIAÇÃO", "utf8")), true);
+      assert.equal(body.includes(Buffer.from([0xff, 0xfd])), false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("preview helper encoding", () => {
+  it("decodes UTF-8 helper lines and falls back from ACP bytes", () => {
+    const utf8 = Buffer.from("open C:\\dl\\Calendário.pdf", "utf8");
+    assert.equal(lib.decodeHelperLine(utf8), "open C:\\dl\\Calendário.pdf");
+    const acp = Buffer.concat([
+      Buffer.from("open C:\\dl\\Calend", "latin1"),
+      Buffer.from([0xe1]),
+      Buffer.from("rio.pdf", "latin1"),
+    ]);
+    const asUtf8 = acp.toString("utf8");
+    assert.match(asUtf8, /\uFFFD/);
+    assert.equal(lib.decodeHelperLine(acp), "open C:\\dl\\Calendário.pdf");
+  });
+
+  it("uses the real directory entry for the display name", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sw-preview-name-"));
+    try {
+      const real = path.join(dir, "PLANILHA_CONTAS_PAGAS_-_CONCILIAÇÃO.xlsx");
+      fs.writeFileSync(real, "x");
+      assert.equal(lib.displayName(real), "PLANILHA_CONTAS_PAGAS_-_CONCILIAÇÃO.xlsx");
+      assert.equal(lib.fileMeta(real).name, "PLANILHA_CONTAS_PAGAS_-_CONCILIAÇÃO.xlsx");
+      assert.equal(lib.canonicalizePath(real), fs.realpathSync(real));
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -235,17 +273,27 @@ describe("preview toolbar wiring", () => {
     assert.match(main, /windowsHide:\s*false/);
     assert.match(main, /OpenAs_RunDLL/);
     assert.match(main, /openWithBusy/);
+    assert.match(main, /thickFrame:\s*false/);
+    assert.match(main, /setHasShadow\(false\)/);
+    assert.match(main, /open-with click/);
+    assert.match(main, /decodeHelperLine/);
+    assert.match(main, /canonicalizePath/);
     assert.match(main, /shell\.showItemInFolder/);
     assert.match(main, /action === "pin"/);
     assert.match(main, /action === "open-with"/);
     assert.match(main, /action === "reveal"/);
     assert.match(css, /\.pv-actions \*/);
     assert.match(css, /-webkit-app-region:\s*no-drag/);
+    assert.match(css, /inset:\s*0/);
+    assert.match(css, /box-shadow:\s*inset 0 0 0 1px/);
+    assert.doesNotMatch(css, /inset:\s*16px/);
     assert.match(css, /\.pv-btn svg/);
     assert.match(css, /pointer-events:\s*none/);
     assert.match(app, /open-with/);
-    assert.match(app, /run\('pin'\)/);
-    assert.match(app, /run\('reveal'\)/);
+    assert.match(app, /onPointerDown/);
+    assert.match(app, /press\("pin"\)/);
+    assert.match(app, /press\("open-with"\)/);
+    assert.match(app, /press\("reveal"\)/);
     assert.match(app, /Abrir com/);
   });
 });
