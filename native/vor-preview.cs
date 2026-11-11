@@ -5,7 +5,7 @@
 //   e nunca com o caret a piscar / campo Edit (renomear, busca, barra de endereço).
 // - O item selecionado e a lista de irmãos vêm da view do Explorer (IFolderView).
 // Protocolo (linhas UTF-8):
-//   stdin  bind <accel> | armed 0|1 | pinned 0|1 | hwnd <n> | openwith <path> | select <path> | quit | status
+//   stdin  bind <accel> | armed 0|1 | pinned 0|1 | hwnd <n> | openwith <path> | select <path> | selecti <index> | quit | status
 //   stdout ready | view <index> <count> | viewitem <path> | open <path> | close | next | prev | launch | openwith-done | log <txt> | status ...
 // Com a prévia armada o Explorer fica com o teclado (o Windows recusa o foco à janela
 // Electron). Esc/setas/Enter/Espaço são tratados aqui, não no renderer.
@@ -259,6 +259,15 @@ static class VorPreview
                     string p = arg;
                     try { form.BeginInvoke((Action)(() => SelectPath(p))); }
                     catch (Exception ex) { Emit("log select-invoke " + ex.Message); }
+                }
+                else if (cmd == "selecti")
+                {
+                    int idx = 0;
+                    if (int.TryParse(arg, out idx))
+                    {
+                        try { form.BeginInvoke((Action)(() => SelectIndex(idx))); }
+                        catch (Exception ex) { Emit("log selecti-invoke " + ex.Message); }
+                    }
                 }
                 else if (cmd == "status")
                     Emit("status hook=" + (hook != IntPtr.Zero ? 1 : 0) + " bindings=" + (binding.Length == 0 ? 0 : 1) + " lastkey=" + (lastKeyAt == 0 ? -1 : Environment.TickCount - lastKeyAt) + " armed=" + (armed ? 1 : 0));
@@ -731,6 +740,33 @@ static class VorPreview
         Emit("open " + path);
     }
 
+    static bool SameFile(string a, string b)
+    {
+        if (a == null || b == null) return false;
+        if (string.Equals(a, b, StringComparison.OrdinalIgnoreCase)) return true;
+        try
+        {
+            return string.Equals(Path.GetFileName(a), Path.GetFileName(b), StringComparison.OrdinalIgnoreCase)
+                && string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase);
+        }
+        catch { return false; }
+    }
+
+    static void SelectIndex(int index)
+    {
+        IFolderView fv = GetFolderView(originHwnd);
+        if (fv == null) return;
+        try
+        {
+            int count;
+            if (fv.ItemCount(SVGIO_VIEW, out count) < 0) return;
+            if (index < 0 || index >= count) return;
+            fv.SelectItem(index, SVSI_FLAGS);
+        }
+        catch (Exception ex) { Emit("log selecti " + ex.Message); }
+        finally { try { Marshal.ReleaseComObject(fv); } catch { } }
+    }
+
     static void SelectPath(string filePath)
     {
         if (filePath == null || filePath.Length == 0) return;
@@ -746,7 +782,7 @@ static class VorPreview
                 if (fv.Item(i, out pidl) < 0 || pidl == IntPtr.Zero) continue;
                 string p = PathFromPidl(pidl);
                 CoTaskMemFree(pidl);
-                if (p != null && string.Equals(p, filePath, StringComparison.OrdinalIgnoreCase))
+                if (p != null && SameFile(p, filePath))
                 {
                     fv.SelectItem(i, SVSI_FLAGS);
                     return;
@@ -757,50 +793,12 @@ static class VorPreview
         finally { try { Marshal.ReleaseComObject(fv); } catch { } }
     }
 
+    // O preview é a fonte da verdade: só pedimos next/prev. O Electron mostra e
+    // depois manda select/selecti. SelectItem aqui adiantava o Explorer e o
+    // open seguinte era descartado como sessão «stale».
     static void NavInView(int delta)
     {
-        try
-        {
-            IFolderView fv = GetFolderView(originHwnd);
-            if (fv == null)
-            {
-                Emit(delta > 0 ? "next" : "prev");
-                return;
-            }
-            try
-            {
-                int count;
-                if (fv.ItemCount(SVGIO_VIEW, out count) < 0 || count < 1)
-                {
-                    Emit(delta > 0 ? "next" : "prev");
-                    return;
-                }
-                int cur;
-                if (fv.GetFocusedItem(out cur) < 0 || cur < 0) cur = 0;
-                for (int n = 0; n < count; n++)
-                {
-                    int i = cur + delta * (n + 1);
-                    i %= count;
-                    if (i < 0) i += count;
-                    IntPtr pidl;
-                    if (fv.Item(i, out pidl) < 0 || pidl == IntPtr.Zero) continue;
-                    string p = PathFromPidl(pidl);
-                    CoTaskMemFree(pidl);
-                    if (p == null || p.Length == 0) continue;
-                    fv.SelectItem(i, SVSI_FLAGS);
-                    EmitView(fv, p);
-                    Emit("open " + p);
-                    return;
-                }
-                Emit(delta > 0 ? "next" : "prev");
-            }
-            finally { try { Marshal.ReleaseComObject(fv); } catch { } }
-        }
-        catch (Exception ex)
-        {
-            Emit("log nav " + ex.Message);
-            Emit(delta > 0 ? "next" : "prev");
-        }
+        Emit(delta > 0 ? "next" : "prev");
     }
 
     static string SelectedPath()

@@ -6,6 +6,7 @@ const fs = require("fs");
 const os = require("os");
 const path = require("path");
 const lib = require("./preview-lib.cjs");
+const nav = require("./preview-nav.cjs");
 
 function crc32(buf) {
   let crc = 0xffffffff;
@@ -93,6 +94,8 @@ describe("native helper source", () => {
     assert.match(src, /UTF8Encoding/);
     assert.match(src, /WriteFile/);
     assert.match(src, /viewitem/);
+    assert.match(src, /selecti/);
+    assert.match(src, /fonte da verdade/);
     const main = fs.readFileSync(path.join(__dirname, "preview.cjs"), "utf8");
     assert.match(main, /cmd === "view"/);
     assert.match(main, /cmd === "viewitem"/);
@@ -110,11 +113,66 @@ describe("preview media reload", () => {
     assert.match(main, /mediaEpoch/);
     assert.match(main, /vor-preview:\/\/media\/current\?\$\{q\}/);
     assert.match(main, /status: 409/);
-    assert.match(main, /queuedOpen \|\| seq !== openSeq/);
+    assert.match(main, /selectAfter/);
+    assert.match(main, /shouldIgnoreSelect/);
+    assert.match(main, /preview-nav/);
     assert.match(app, /key=\{session\.path\}/);
     assert.match(app, /key=\{session\.mediaUrl\}/);
     assert.match(app, /removeAttribute\('src'\)/);
     assert.match(app, /function MediaPane/);
+  });
+});
+
+describe("preview nav state machine", () => {
+  const files = [
+    "C:\\\\dl\\\\QuickLook Installer.exe",
+    "C:\\\\dl\\\\SICREDI_09_2026.pdf",
+    "C:\\\\dl\\\\PLANILHA.xlsx",
+    "C:\\\\dl\\\\Calendario.pdf",
+  ];
+
+  it("moves 5 times rapidly and only the last gen commits", () => {
+    let state = nav.createNavState(files, 0);
+    const gens = [];
+    for (let i = 0; i < 5; i += 1) {
+      const moved = nav.move(state, 1);
+      assert.ok(moved.action);
+      state = moved.state;
+      gens.push(moved.action.gen);
+    }
+    assert.equal(state.index, 1);
+    assert.equal(state.paths[state.index], files[1]);
+    assert.equal(nav.acceptShow(state, files[0], gens[0]).accepted, false);
+    assert.equal(nav.acceptShow(state, files[1], gens[1]).accepted, false);
+    const last = nav.acceptShow(state, files[1], gens[4]);
+    assert.equal(last.accepted, true);
+    assert.equal(last.state.current, files[1]);
+  });
+
+  it("PDF→PDF and exe→pdf keep the preview as source of truth", () => {
+    let pdfs = nav.createNavState(["a.pdf", "b.pdf"], 0);
+    const pdfMove = nav.move(pdfs, 1);
+    assert.equal(pdfMove.action.path, "b.pdf");
+    assert.equal(pdfMove.action.select, "b.pdf");
+    assert.equal(nav.acceptShow(pdfMove.state, "a.pdf", 0).accepted, false);
+    assert.equal(nav.acceptShow(pdfMove.state, "b.pdf", pdfMove.action.gen).accepted, true);
+
+    const mixed = nav.move(nav.createNavState(["QuickLook Installer.exe", "SICREDI_09_2026.pdf"], 0), 1);
+    assert.equal(mixed.action.path, "SICREDI_09_2026.pdf");
+    assert.equal(nav.shouldIgnoreSelect(mixed.state, "SICREDI_09_2026.pdf"), true);
+    assert.equal(nav.shouldIgnoreSelect(mixed.state, "QuickLook Installer.exe"), false);
+  });
+
+  it("writes preview.log only when SWIFTWHEEL debug is on", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sw-preview-log-"));
+    try {
+      assert.equal(nav.debugLog("skip", { enabled: false, appData: dir }), null);
+      const file = nav.debugLog("hello-nav", { enabled: true, appData: dir });
+      assert.equal(file, path.join(dir, "SwiftWheel", "logs", "preview.log"));
+      assert.match(fs.readFileSync(file, "utf8"), /hello-nav/);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

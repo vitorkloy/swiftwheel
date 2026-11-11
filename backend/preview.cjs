@@ -10,6 +10,7 @@ const path = require("path");
 const { pathToFileURL } = require("url");
 const { BrowserWindow, app: electronApp, net, protocol, screen, shell } = require("electron");
 const lib = require("./preview-lib.cjs");
+const navLib = require("./preview-nav.cjs");
 
 const DEFAULT_PREVIEW = {
   enabled: true,
@@ -32,18 +33,27 @@ function installPreview(ctx) {
   let currentKind = "fallback";
   let sanitizedSvg = "";
   let siblings = { paths: [], index: 0 };
+  let nav = navLib.createNavState([], 0);
   let pendingSession = null;
   let opening = false;
   let queuedOpen = null;
   let helperView = null;
   let shownAt = 0;
   let mediaEpoch = 0;
-  let openSeq = 0;
   let openWithBusy = false;
   let openWithBusyTimer = null;
 
   const settings = () => ({ ...DEFAULT_PREVIEW, ...(ctx.getPreviewSettings() || {}) });
   const windowsOnly = () => process.platform === "win32";
+
+  const previewDebug = (msg) => {
+    ctx.diagLog(`[Preview] ${msg}`);
+    if (process.env.SWIFTWHEEL_DEBUG_PREVIEW !== "1") return;
+    try {
+      const appData = typeof electronApp.getPath === "function" ? electronApp.getPath("appData") : (process.env.APPDATA || "");
+      navLib.debugLog(msg, { enabled: true, appData });
+    } catch { /* ignore */ }
+  };
 
   const bumpMediaUrl = (kind, filePath) => {
     mediaEpoch += 1;
@@ -339,53 +349,88 @@ function installPreview(ctx) {
     sendToPreview("preview-session", session);
   };
 
-  const openPath = async (filePath, { keepPin = false, keepSiblings = false } = {}) => {
+  const syncSiblingsFromNav = () => {
+    siblings = { paths: nav.paths.slice(), index: nav.index };
+  };
+
+  const openPath = async (filePath, { keepPin = false, keepSiblings = false, gen = null, selectAfter = false } = {}) => {
     const target = path.resolve(String(filePath || ""));
     if (!target || !fs.existsSync(target)) {
-      ctx.diagLog(`[Preview] caminho inválido: ${target}`);
+      previewDebug(`caminho inválido: ${target}`);
       return { ok: false, error: "missing" };
     }
+    const requestGen = gen == null ? nav.gen : gen;
     if (opening) {
-      queuedOpen = { filePath: target, keepPin, keepSiblings };
+      queuedOpen = { filePath: target, keepPin, keepSiblings, gen: requestGen, selectAfter };
+      previewDebug(`queue gen=${requestGen} ${target}`);
       return { ok: false, error: "busy" };
     }
     opening = true;
-    const seq = ++openSeq;
     try {
-      if (!keepPin) pinned = false;
-      if (!keepSiblings) siblings = lib.listSiblings(target);
-      else {
-        const idx = siblings.paths.findIndex((p) => p.toLowerCase() === target.toLowerCase());
-        if (idx >= 0) siblings.index = idx;
+      for (;;) {
+        const job = queuedOpen
+          ? { filePath: path.resolve(queuedOpen.filePath), keepPin: queuedOpen.keepPin, keepSiblings: queuedOpen.keepSiblings, gen: queuedOpen.gen, selectAfter: queuedOpen.selectAfter }
+          : { filePath: target, keepPin, keepSiblings, gen: requestGen, selectAfter };
+        queuedOpen = null;
+        if (!job.keepPin) pinned = false;
+        if (!job.keepSiblings) {
+          nav = navLib.applyView(nav, lib.listSiblings(job.filePath).paths, 0);
+          const hit = nav.paths.findIndex((p) => navLib.samePath(p, job.filePath));
+          if (hit >= 0) nav = { ...nav, index: hit, current: job.filePath };
+          syncSiblingsFromNav();
+        } else {
+          const idx = nav.paths.findIndex((p) => navLib.samePath(p, job.filePath));
+          if (idx >= 0) nav = { ...nav, index: idx };
+          syncSiblingsFromNav();
+        }
+        previewDebug(`build gen=${job.gen} currentGen=${nav.gen} ${job.filePath}`);
+        const session = await buildSession(job.filePath);
+        if (queuedOpen) {
+          previewDebug(`skip uncommitted gen=${job.gen} (queued gen=${queuedOpen.gen})`);
+          continue;
+        }
+        const verdict = navLib.acceptShow(nav, job.filePath, job.gen);
+        if (!verdict.accepted) {
+          previewDebug(`skip stale gen=${job.gen} navGen=${nav.gen} ${job.filePath}`);
+          return { ok: true };
+        }
+        nav = verdict.state;
+        syncSiblingsFromNav();
+        currentPath = job.filePath;
+        if (session.kind === "svg" || session.kind === "image" || session.kind === "video" || session.kind === "audio" || session.kind === "pdf") {
+          session.mediaUrl = bumpMediaUrl(session.kind, job.filePath);
+        }
+        session.index = nav.index;
+        session.total = nav.paths.length;
+        const window = await ensureWindow();
+        if (queuedOpen) {
+          previewDebug(`skip after window gen=${job.gen} (queued gen=${queuedOpen.gen})`);
+          continue;
+        }
+        placeWindow();
+        window.setAlwaysOnTop(true, "floating");
+        window.setSkipTaskbar(pinned);
+        pushSession(session);
+        visible = true;
+        setArmed();
+        shownAt = Date.now();
+        if (!window.isVisible()) window.show();
+        if (job.selectAfter) {
+          helperSend(`selecti ${nav.index}`);
+          helperSend(`select ${job.filePath}`);
+        }
+        previewDebug(`commit gen=${job.gen} ${job.filePath} ${nav.index + 1}/${nav.paths.length}`);
+        return { ok: true };
       }
-      const session = await buildSession(target);
-      if (queuedOpen || seq !== openSeq) return { ok: true };
-      currentPath = target;
-      if (session.kind === "svg" || session.kind === "image" || session.kind === "video" || session.kind === "audio" || session.kind === "pdf") {
-        session.mediaUrl = bumpMediaUrl(session.kind, target);
-      }
-      const window = await ensureWindow();
-      if (queuedOpen || seq !== openSeq) return { ok: true };
-      placeWindow();
-      window.setAlwaysOnTop(true, "floating");
-      window.setSkipTaskbar(pinned);
-      pushSession(session);
-      visible = true;
-      setArmed();
-      shownAt = Date.now();
-      if (!window.isVisible()) window.show();
-      // Não roubar o foreground: o Windows recusa, o Explorer fica com as teclas, e o helper
-      // trata Esc/setas/Enter enquanto a prévia está armada. Um clique na janela dá-lhe foco.
-      return { ok: true };
     } catch (err) {
-      ctx.diagLog(`[Preview] open: ${err.message}`);
+      previewDebug(`open error: ${err.message}`);
       return { ok: false, error: err.message };
     } finally {
       opening = false;
       if (queuedOpen) {
         const next = queuedOpen;
         queuedOpen = null;
-        void openPath(next.filePath, { keepPin: next.keepPin, keepSiblings: next.keepSiblings });
+        void openPath(next.filePath, next);
       }
     }
   };
@@ -395,19 +440,19 @@ function installPreview(ctx) {
     const paths = helperView.paths.map((p) => path.resolve(p));
     let idx = helperView.index;
     if (idx < 0 || idx >= paths.length) idx = 0;
-    siblings = { paths, index: idx };
+    nav = navLib.applyView(nav, paths, idx);
+    syncSiblingsFromNav();
     helperView = null;
     return true;
   };
 
   const navigate = (delta) => {
-    if (!siblings.paths.length) return Promise.resolve({ ok: false });
-    const next = (siblings.index + delta + siblings.paths.length) % siblings.paths.length;
-    const target = siblings.paths[next];
-    if (!target || !fs.existsSync(target)) return Promise.resolve({ ok: false });
-    helperSend(`select ${target}`);
-    siblings = { paths: siblings.paths, index: next };
-    return openPath(target, { keepPin: true, keepSiblings: true });
+    const moved = navLib.move(nav, delta);
+    if (!moved.action) return Promise.resolve({ ok: false });
+    nav = moved.state;
+    syncSiblingsFromNav();
+    previewDebug(`move delta=${delta} gen=${moved.action.gen} ${moved.action.path} (${moved.action.index + 1}/${moved.action.total})`);
+    return openPath(moved.action.path, { keepPin: true, keepSiblings: true, gen: moved.action.gen, selectAfter: true });
   };
 
   const openDefault = async () => {
@@ -520,7 +565,13 @@ function installPreview(ctx) {
           if (arg) helperView.paths.push(arg);
         } else if (cmd === "open") {
           const keepSiblings = applyHelperView();
-          void openPath(arg, { keepPin: visible, keepSiblings });
+          const resolved = path.resolve(String(arg || ""));
+          if (visible && navLib.shouldIgnoreSelect(nav, resolved)) {
+            previewDebug(`ignore explorer echo ${resolved}`);
+            nav = navLib.clearIgnoreSelect(nav, resolved);
+          } else {
+            void openPath(resolved, { keepPin: visible, keepSiblings, gen: nav.gen });
+          }
         } else if (cmd === "close") {
           hidePreview();
         } else if (cmd === "next") {
