@@ -5,10 +5,14 @@
 //   e nunca com o caret a piscar / campo Edit (renomear, busca, barra de endereço).
 // - O item selecionado e a lista de irmãos vêm da view do Explorer (IFolderView).
 // Protocolo (linhas UTF-8):
-//   stdin  bind <accel> | armed 0|1 | pinned 0|1 | hwnd <n> | openwith <path> | select <path> | selecti <index> | quit | status
-//   stdout ready | view <index> <count> | viewitem <path> | open <path> | close | next | prev | launch | openwith-done | log <txt> | status ...
+//   stdin  bind <accel> | armed 0|1 | pinned 0|1 | hwnd <n> | openwith <path> | select <path> | selecti <index>
+//          | preview <path> | preview-clear | hostrect <l> <t> <w> <h> | quit | status
+//   stdout ready | view <index> <count> | viewitem <path> | open <path> | close | next | prev | launch
+//          | openwith-done | preview-ok | preview-fail <why> | log <txt> | status ...
 // Com a prévia armada o Explorer fica com o teclado (o Windows recusa o foco à janela
 // Electron). Esc/setas/Enter/Espaço são tratados aqui, não no renderer.
+// Preview Handlers (IPreviewHandler) vivem numa janela owned sobre a área de conteúdo;
+// o hook continua a tratar setas/Esc mesmo com o handler focado.
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -18,7 +22,7 @@ using System.Text;
 using System.Threading;
 using System.Windows.Forms;
 
-static class VorPreview
+static partial class VorPreview
 {
     [DllImport("user32.dll")] static extern IntPtr SetWindowsHookEx(int id, HookProc p, IntPtr mod, uint tid);
     [DllImport("user32.dll")] static extern bool UnhookWindowsHookEx(IntPtr h);
@@ -228,6 +232,7 @@ static class VorPreview
         output = new StreamWriter(Console.OpenStandardOutput(), Utf8);
         output.AutoFlush = true;
         input = new StreamReader(Console.OpenStandardInput(), Utf8);
+        EnsureDpi();
         form = new Form();
         form.FormBorderStyle = FormBorderStyle.None;
         form.ShowInTaskbar = false;
@@ -265,12 +270,32 @@ static class VorPreview
                     binding = arg.ToLowerInvariant();
                     Emit("log bindings " + (binding.Length == 0 ? 0 : 1));
                 }
-                else if (cmd == "armed") armed = arg == "1";
+                else if (cmd == "armed")
+                {
+                    armed = arg == "1";
+                    if (!armed) ClearNativePreview();
+                }
                 else if (cmd == "pinned") stayOpen = arg == "1";
                 else if (cmd == "hwnd")
                 {
                     long n = 0;
                     if (long.TryParse(arg, out n)) previewHwnd = new IntPtr(n);
+                    try { if (hostForm != null) hostForm.BeginInvoke((Action)PositionHost); } catch { }
+                }
+                else if (cmd == "preview")
+                {
+                    string p = arg;
+                    try { form.BeginInvoke((Action)(() => StartNativePreview(p))); }
+                    catch (Exception ex) { Emit("log preview-invoke " + ex.Message); Emit("preview-fail error"); }
+                }
+                else if (cmd == "preview-clear")
+                {
+                    try { form.BeginInvoke((Action)ClearNativePreview); }
+                    catch { ClearNativePreview(); }
+                }
+                else if (cmd == "hostrect")
+                {
+                    ApplyHostRect(arg);
                 }
                 else if (cmd == "fg")
                 {
@@ -301,7 +326,13 @@ static class VorPreview
                 }
                 else if (cmd == "status")
                     Emit("status hook=" + (hook != IntPtr.Zero ? 1 : 0) + " bindings=" + (binding.Length == 0 ? 0 : 1) + " lastkey=" + (lastKeyAt == 0 ? -1 : Environment.TickCount - lastKeyAt) + " armed=" + (armed ? 1 : 0));
-                else if (cmd == "quit") break;
+                else if (cmd == "quit")
+                {
+                    hostClosingApp = true;
+                    ClearNativePreview();
+                    AbortHostThread();
+                    break;
+                }
             }
         }
         catch { }
@@ -873,15 +904,97 @@ static class VorPreview
         for (int i = 0; i < paths.Count; i++) Emit("viewitem " + paths[i]);
     }
 
+    static bool HammingCloseName(string a, string b)
+    {
+        if (a == null || b == null) return false;
+        string na = a;
+        string nb = b;
+        try { na = a.Normalize(); nb = b.Normalize(); } catch { }
+        if (na.Length != nb.Length || na.Length == 0) return false;
+        if (!string.Equals(Path.GetExtension(na), Path.GetExtension(nb), StringComparison.OrdinalIgnoreCase)) return false;
+        int d = 0;
+        int i;
+        for (i = 0; i < na.Length; i++)
+        {
+            if (na[i] != nb[i])
+            {
+                d++;
+                if (d > 2) return false;
+            }
+        }
+        return d > 0;
+    }
+
+    static string CanonicalExistingPath(string path)
+    {
+        if (path == null || path.Length == 0) return path;
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                DirectoryInfo folder = new DirectoryInfo(path);
+                if (folder != null && folder.FullName != null && folder.FullName.Length > 0) return folder.FullName;
+            }
+            FileInfo fi = new FileInfo(path);
+            DirectoryInfo dir = null;
+            try { dir = fi.Directory; } catch { }
+            if (dir == null || !dir.Exists) return path;
+            FileInfo[] all = null;
+            try { all = dir.GetFiles(); } catch { return path; }
+            if (all == null) return path;
+            int i;
+            for (i = 0; i < all.Length; i++)
+            {
+                if (string.Equals(all[i].Name, fi.Name, StringComparison.Ordinal)) return all[i].FullName;
+            }
+            for (i = 0; i < all.Length; i++)
+            {
+                if (string.Equals(all[i].Name, fi.Name, StringComparison.OrdinalIgnoreCase)) return all[i].FullName;
+            }
+            FileInfo close = null;
+            int closeHits = 0;
+            for (i = 0; i < all.Length; i++)
+            {
+                if (HammingCloseName(all[i].Name, fi.Name))
+                {
+                    close = all[i];
+                    closeHits++;
+                }
+            }
+            if (closeHits == 1 && close != null) return close.FullName;
+            if (fi.Exists)
+            {
+                long len = 0;
+                DateTime stamp = DateTime.MinValue;
+                try { len = fi.Length; stamp = fi.LastWriteTimeUtc; } catch { }
+                FileInfo unique = null;
+                int hits = 0;
+                for (i = 0; i < all.Length; i++)
+                {
+                    if (all[i].Length == len && all[i].LastWriteTimeUtc == stamp
+                        && string.Equals(all[i].Extension, fi.Extension, StringComparison.OrdinalIgnoreCase))
+                    {
+                        unique = all[i];
+                        hits++;
+                    }
+                }
+                if (hits == 1 && unique != null) return unique.FullName;
+            }
+        }
+        catch { }
+        return path;
+    }
+
     static void EmitViewAndOpen(string path)
     {
+        string resolved = CanonicalExistingPath(path);
         IFolderView fv = GetFolderView(originHwnd);
         if (fv != null)
         {
-            try { EmitView(fv, path); }
+            try { EmitView(fv, resolved); }
             finally { try { Marshal.ReleaseComObject(fv); } catch { } }
         }
-        Emit("open " + path);
+        Emit("open " + resolved);
     }
 
     static bool SameFile(string a, string b)
@@ -1057,26 +1170,33 @@ static class VorPreview
                 bool repeat = !held.Add(k.vk);
                 if (armed)
                 {
-                    // Se a prévia tiver mesmo o foreground, o Chromium trata as teclas.
-                    // Caso típico: o Explorer ficou com o teclado e o Electron mente no isFocused.
+                    // Explorer em primeiro plano: o Chromium não vê as teclas.
+                    // Handler nativo focado: o Chromium também não. O chrome da prévia, sim.
                     string nav = NavCommand(k.vk);
-                    if (nav != null && !IsPreviewForeground() && IsTargetForeground() && !IsTyping())
+                    if (nav != null)
                     {
-                        swallowUp.Add(k.vk);
-                        if (!repeat || nav == "next" || nav == "prev")
+                        bool hostFg = IsHostForeground();
+                        bool chromeFg = IsPreviewForeground() && !hostFg;
+                        bool explorerFg = IsTargetForeground();
+                        bool typing = !hostFg && IsTyping();
+                        if (!typing && (hostFg || (explorerFg && !chromeFg)))
                         {
-                            if (nav == "next" || nav == "prev")
+                            swallowUp.Add(k.vk);
+                            if (!repeat || nav == "next" || nav == "prev")
                             {
-                                int d = nav == "next" ? 1 : -1;
-                                form.BeginInvoke((Action)(() => NavInView(d)));
+                                if (nav == "next" || nav == "prev")
+                                {
+                                    int d = nav == "next" ? 1 : -1;
+                                    form.BeginInvoke((Action)(() => NavInView(d)));
+                                }
+                                else
+                                {
+                                    string emit = nav;
+                                    form.BeginInvoke((Action)(() => Emit(emit)));
+                                }
                             }
-                            else
-                            {
-                                string emit = nav;
-                                form.BeginInvoke((Action)(() => Emit(emit)));
-                            }
+                            return new IntPtr(1);
                         }
-                        return new IntPtr(1);
                     }
                 }
                 if (repeat)

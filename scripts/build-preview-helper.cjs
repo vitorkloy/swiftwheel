@@ -6,6 +6,7 @@ const { execFileSync } = require("child_process");
 
 const root = path.join(__dirname, "..");
 const src = path.join(root, "native", "vor-preview.cs");
+const handlerSrc = path.join(root, "native", "vor-preview-handler.cs");
 const out = path.join(root, "backend", "bin", "vor-preview.exe");
 if (process.platform !== "win32") {
   console.log("[preview-helper] fora do Windows, a saltar");
@@ -19,7 +20,7 @@ if (!csc) throw new Error("csc.exe do .NET Framework 4 não encontrado");
 fs.mkdirSync(path.dirname(out), { recursive: true });
 execFileSync(csc, [
   "/nologo", "/optimize+", "/target:winexe", "/platform:anycpu",
-  "/r:System.Windows.Forms.dll",
-  `/out:${out}`, src,
+  "/r:System.Windows.Forms.dll", "/r:System.Drawing.dll",
+  `/out:${out}`, src, handlerSrc,
 ], { stdio: "inherit" });
 console.log(`[preview-helper] ${out}`);

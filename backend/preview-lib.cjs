@@ -15,13 +15,16 @@ const PDF_EXT = new Set(["pdf"]);
 const MARKDOWN_EXT = new Set(["md", "markdown"]);
 const HTML_EXT = new Set(["html", "htm"]);
 const ZIP_EXT = new Set(["zip"]);
+const WORD_EXT = new Set(["docx", "doc", "rtf", "odt"]);
+const SHEET_EXT = new Set(["xlsx", "xls", "csv", "ods"]);
+const SLIDE_EXT = new Set(["pptx", "ppt", "odp"]);
 const TEXT_EXT = new Set([
-  "txt", "log", "csv", "tsv", "ini", "cfg", "conf", "env", "gitignore", "gitattributes",
+  "txt", "log", "tsv", "ini", "cfg", "conf", "env", "gitignore", "gitattributes",
   "js", "mjs", "cjs", "ts", "tsx", "jsx", "json", "css", "scss", "less",
   "py", "rb", "php", "rs", "go", "java", "kt", "kts", "swift", "cs", "c", "h", "cpp", "hpp", "cc",
   "sh", "bash", "zsh", "ps1", "bat", "cmd", "xml", "yml", "yaml", "toml", "sql",
   "vue", "svelte", "graphql", "mdx", "dockerfile", "makefile", "cmake", "gradle",
-  "rtf", "tex", "diff", "patch", "properties", "editorconfig",
+  "tex", "diff", "patch", "properties", "editorconfig",
 ]);
 
 const LANG_BY_EXT = {
@@ -77,6 +80,9 @@ function classifyKind(filePath, stat) {
   if (MARKDOWN_EXT.has(ext)) return "markdown";
   if (HTML_EXT.has(ext)) return "html";
   if (ZIP_EXT.has(ext)) return "zip";
+  if (WORD_EXT.has(ext)) return "word";
+  if (SHEET_EXT.has(ext)) return "spreadsheet";
+  if (SLIDE_EXT.has(ext)) return "presentation";
   if (TEXT_EXT.has(ext)) return "text";
   return "fallback";
 }
@@ -392,11 +398,75 @@ function isoOrEmpty(date) {
   catch { return ""; }
 }
 
+function stripWinLongPath(filePath) {
+  const s = String(filePath || "");
+  if (/^\\\\\?\\UNC\\/i.test(s)) return `\\\\${s.slice(8)}`;
+  if (/^\\\\\?\\/i.test(s)) return s.slice(4);
+  return s;
+}
+
+function repairUtf8Mojibake(value) {
+  const raw = String(value || "");
+  if (!raw) return raw;
+  if (!/[À-ÿÃÂ]/.test(raw) && !/â€/.test(raw)) return raw;
+  try {
+    const repaired = Buffer.from(raw, "latin1").toString("utf8");
+    if (repaired.indexOf("\uFFFD") === -1 && repaired !== raw) return repaired;
+  } catch { /* ignore */ }
+  return raw;
+}
+
+function foldName(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .toLowerCase();
+}
+
+function namesEqual(a, b) {
+  const left = String(a || "");
+  const right = String(b || "");
+  if (left === right) return true;
+  const na = left.normalize("NFC");
+  const nb = right.normalize("NFC");
+  if (na === nb) return true;
+  if (na.toLowerCase() === nb.toLowerCase()) return true;
+  if (foldName(na) === foldName(nb)) return true;
+  if (repairUtf8Mojibake(na).normalize("NFC") === nb) return true;
+  if (repairUtf8Mojibake(nb).normalize("NFC") === na) return true;
+  return false;
+}
+
+function hammingClose(a, b) {
+  const na = String(a || "").normalize("NFC");
+  const nb = String(b || "").normalize("NFC");
+  if (!na || !nb || na.length !== nb.length) return false;
+  if (path.extname(na).toLowerCase() !== path.extname(nb).toLowerCase()) return false;
+  let d = 0;
+  for (let i = 0; i < na.length; i += 1) if (na[i] !== nb[i]) d += 1;
+  return d > 0 && d <= 2;
+}
+
+function matchDirName(names, want) {
+  const list = Array.isArray(names) ? names : [];
+  const target = String(want || "");
+  if (!target) return "";
+  const exact = list.find((n) => n === target);
+  if (exact) return exact;
+  const eq = list.find((n) => namesEqual(n, target));
+  if (eq) return eq;
+  const close = list.filter((n) => hammingClose(n, target));
+  if (close.length === 1) return close[0];
+  return "";
+}
+
 function decodeHelperLine(buf) {
   const raw = Buffer.isBuffer(buf) ? buf : Buffer.from(String(buf == null ? "" : buf), "utf8");
-  const text = raw.toString("utf8");
-  if (text.indexOf("\uFFFD") === -1) return text;
-  return raw.toString("latin1");
+  let text = raw.toString("utf8");
+  if (text.indexOf("\uFFFD") !== -1) text = raw.toString("latin1");
+  const repaired = repairUtf8Mojibake(text);
+  if (repaired !== text && /[áàâãéêíóôõúçÁÀÂÃÉÊÍÓÔÕÚÇ]/.test(repaired)) return repaired;
+  return text;
 }
 
 function displayName(filePath) {
@@ -404,17 +474,21 @@ function displayName(filePath) {
   if (!filePath) return fallback;
   try {
     const names = fs.readdirSync(path.dirname(filePath));
-    const exact = names.find((n) => n === fallback);
-    if (exact) return exact;
-    const lower = fallback.toLowerCase();
-    const ci = names.find((n) => n.toLowerCase() === lower);
-    if (ci) return ci;
+    const hit = matchDirName(names, fallback);
+    if (hit) return hit;
   } catch { /* ignore */ }
   try {
-    return path.basename(fs.realpathSync(filePath));
-  } catch {
-    return fallback;
-  }
+    const native = typeof fs.realpathSync.native === "function" ? fs.realpathSync.native : fs.realpathSync;
+    const real = stripWinLongPath(native(filePath));
+    const base = path.basename(real);
+    try {
+      const names = fs.readdirSync(path.dirname(real));
+      const hit = matchDirName(names, base) || matchDirName(names, fallback);
+      if (hit) return hit;
+    } catch { /* ignore */ }
+    if (base) return base;
+  } catch { /* ignore */ }
+  return fallback;
 }
 
 function canonicalizePath(filePath) {
@@ -422,15 +496,14 @@ function canonicalizePath(filePath) {
   if (!target) return target;
   try {
     if (fs.existsSync(target)) {
-      try { return fs.realpathSync(target); } catch { return target; }
+      try { return stripWinLongPath(fs.realpathSync(target)); } catch { return target; }
     }
   } catch { /* ignore */ }
   try {
     const dir = path.dirname(target);
     const base = path.basename(target);
     const names = fs.readdirSync(dir);
-    const lower = base.toLowerCase();
-    const hit = names.find((n) => n === base) || names.find((n) => n.toLowerCase() === lower);
+    const hit = matchDirName(names, base);
     if (hit) return path.join(dir, hit);
   } catch { /* ignore */ }
   return target;
@@ -488,6 +561,9 @@ module.exports = {
   IMAGE_EXT,
   VIDEO_EXT,
   AUDIO_EXT,
+  WORD_EXT,
+  SHEET_EXT,
+  SLIDE_EXT,
   classifyKind,
   mimeFor,
   langFor,
@@ -506,6 +582,9 @@ module.exports = {
   displayName,
   canonicalizePath,
   decodeHelperLine,
+  repairUtf8Mojibake,
+  matchDirName,
+  namesEqual,
   formatBytes,
   previewNavCommand,
   canonicalAccelerator,

@@ -6,7 +6,7 @@
   --pv-hover: rgba(255, 255, 255, 0.07);
   --pv-bg: rgba(21, 21, 21, 0.82);
   --pv-solid: #151515;
-  --pv-code: rgba(0, 0, 0, 0.28);
+  --pv-code: #1c1c1c;
   --pv-accent: #ffffff;
   --pv-on-accent: #0a0a0b;
   --pv-elev: 0 20px 50px rgba(0, 0, 0, 0.55);
@@ -21,7 +21,7 @@
   --pv-hover: rgba(0, 0, 0, 0.05);
   --pv-bg: rgba(252, 252, 253, 0.88);
   --pv-solid: #fcfcfd;
-  --pv-code: rgba(0, 0, 0, 0.04);
+  --pv-code: #f0f0f2;
   --pv-accent: #101012;
   --pv-on-accent: #ffffff;
   --pv-elev: 0 18px 44px rgba(0, 0, 0, 0.16);
@@ -64,6 +64,13 @@ html, body, #root {
 }
 
 .pv-frame.is-glass {
+  /* O vidro fica só na barra: se o filtro cobrir o palco, o Explorer vaza no Electron transparente. */
+  backdrop-filter: none;
+  background: transparent;
+}
+
+.pv-frame.is-glass .pv-bar {
+  background: var(--pv-bg);
   backdrop-filter: blur(28px) saturate(1.2);
 }
 
@@ -163,6 +170,10 @@ html, body, #root {
   min-height: 0;
   position: relative;
   overflow: hidden;
+  background: var(--pv-solid);
+  background-color: var(--pv-solid);
+  isolation: isolate;
+  transform: translateZ(0);
 }
 
 .pv-image-stage {
@@ -170,9 +181,12 @@ html, body, #root {
   height: 100%;
   overflow: hidden;
   cursor: grab;
-  background:
-    linear-gradient(45deg, rgba(127, 127, 127, 0.12) 25%, transparent 25%) 0 0 / 16px 16px,
-    linear-gradient(-45deg, rgba(127, 127, 127, 0.12) 25%, transparent 25%) 0 8px / 16px 16px;
+  background-color: var(--pv-solid);
+  background-image:
+    linear-gradient(45deg, rgba(127, 127, 127, 0.12) 25%, var(--pv-solid) 25%),
+    linear-gradient(-45deg, rgba(127, 127, 127, 0.12) 25%, var(--pv-solid) 25%);
+  background-position: 0 0, 0 8px;
+  background-size: 16px 16px;
 }
 
 .pv-image-stage.is-drag { cursor: grabbing; }
@@ -222,7 +236,7 @@ html, body, #root {
   padding: 16px 20px 24px;
   font: 12.5px/1.55 ui-monospace, "Cascadia Code", "Cascadia Mono", Consolas, monospace;
   user-select: text;
-  background: var(--pv-code);
+  background: var(--pv-solid);
   color: var(--pv-text);
   white-space: pre;
 }
@@ -231,7 +245,8 @@ html, body, #root {
   width: 100%;
   height: 100%;
   border: 0;
-  background: transparent;
+  background: var(--pv-solid);
+  background-color: var(--pv-solid);
 }
 
 .pv-list {
@@ -240,6 +255,7 @@ html, body, #root {
   height: 100%;
   overflow: auto;
   list-style: none;
+  background: var(--pv-solid);
 }
 
 .pv-list li {
@@ -273,6 +289,7 @@ html, body, #root {
   gap: 10px;
   padding: 24px;
   text-align: center;
+  background: var(--pv-solid);
 }
 
 .pv-fallback img {
@@ -299,7 +316,124 @@ html, body, #root {
   place-items: center;
   color: var(--pv-text-3);
   font-size: 13px;
+  background: var(--pv-solid);
 }
+
+.pv-native {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--pv-text-3);
+  font-size: 12px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  background: var(--pv-solid);
+}
+
+.pv-sheet {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  background: var(--pv-solid);
+}
+
+.pv-sheet-scroll {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding: 0;
+}
+
+.pv-sheet-scroll table {
+  border-collapse: collapse;
+  width: max-content;
+  min-width: 100%;
+  font: 12.5px/1.4 ui-monospace, "Cascadia Code", Consolas, monospace;
+  user-select: text;
+}
+
+.pv-sheet-scroll th,
+.pv-sheet-scroll td {
+  border: 1px solid var(--pv-line);
+  padding: 5px 10px;
+  white-space: pre;
+  text-align: left;
+}
+
+.pv-sheet-scroll th {
+  font-weight: 650;
+  position: sticky;
+  top: 0;
+  background: var(--pv-code);
+  z-index: 1;
+}
+
+.pv-sheet-tabs {
+  flex: none;
+  display: flex;
+  gap: 2px;
+  overflow-x: auto;
+  padding: 6px 8px 8px;
+  border-top: 1px solid var(--pv-line);
+  -webkit-app-region: no-drag;
+}
+
+.pv-sheet-tabs button {
+  flex: none;
+  border: 0;
+  border-radius: 7px;
+  padding: 5px 10px;
+  background: transparent;
+  color: var(--pv-text-2);
+  font: 600 11px/1.2 "Segoe UI", system-ui, sans-serif;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.pv-sheet-tabs button:hover { background: var(--pv-hover); color: var(--pv-text); }
+
+.pv-sheet-tabs button.is-on {
+  background: var(--pv-accent);
+  color: var(--pv-on-accent);
+}
+
+.pv-slides {
+  height: 100%;
+  overflow: auto;
+  padding: 12px 14px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--pv-solid);
+}
+
+.pv-slide {
+  display: grid;
+  grid-template-columns: 36px 1fr;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: 10px;
+  background: var(--pv-code);
+  border: 1px solid var(--pv-line);
+}
+
+.pv-slide-n {
+  font: 650 12px/1.2 "Segoe UI", system-ui, sans-serif;
+  color: var(--pv-text-3);
+  padding-top: 2px;
+}
+
+.pv-slide-body {
+  min-width: 0;
+  user-select: text;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.pv-slide-body p { margin: 0 0 8px; }
+.pv-slide-body img { max-width: 100%; border-radius: 6px; display: block; margin: 8px 0; }
+.pv-slide-body .muted { color: var(--pv-text-3); }
 
 .tok-kw { color: #7eb8ff; }
 .tok-str { color: #9fe7c0; }
