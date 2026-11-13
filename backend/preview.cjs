@@ -12,6 +12,9 @@ const { BrowserWindow, app: electronApp, net, protocol, screen, shell } = requir
 const lib = require("./preview-lib.cjs");
 const navLib = require("./preview-nav.cjs");
 const office = require("./preview-office.cjs");
+const fonts = require("./preview-font.cjs");
+const archives = require("./preview-archive.cjs");
+const heic = require("./preview-heic.cjs");
 
 const DEFAULT_PREVIEW = {
   enabled: true,
@@ -45,6 +48,7 @@ function installPreview(ctx) {
   let openWithBusyTimer = null;
   let nativeEngine = false;
   let previewWait = null;
+  let inMemoryMedia = null;
 
   const settings = () => ({ ...DEFAULT_PREVIEW, ...(ctx.getPreviewSettings() || {}) });
   const windowsOnly = () => process.platform === "win32";
@@ -61,7 +65,9 @@ function installPreview(ctx) {
   const bumpMediaUrl = (kind, filePath) => {
     mediaEpoch += 1;
     const q = `r=${mediaEpoch}&p=${encodeURIComponent(path.basename(filePath))}`;
-    return kind === "svg" ? `vor-preview://svg/current?${q}` : `vor-preview://media/current?${q}`;
+    if (kind === "svg") return `vor-preview://svg/current?${q}`;
+    if (kind === "blob") return `vor-preview://blob/current?${q}`;
+    return `vor-preview://media/current?${q}`;
   };
 
   protocol.handle("vor-preview", (request) => {
@@ -81,6 +87,16 @@ function installPreview(ctx) {
           },
         });
       }
+      if (url.hostname === "blob") {
+        if (!inMemoryMedia || !inMemoryMedia.body) return new Response("missing", { status: 404 });
+        return new Response(inMemoryMedia.body, {
+          headers: {
+            "content-type": inMemoryMedia.mime || "application/octet-stream",
+            "cache-control": "no-store",
+            "access-control-allow-origin": "*",
+          },
+        });
+      }
       if (url.hostname !== "media" || !currentPath) {
         return new Response("forbidden", { status: 403 });
       }
@@ -95,6 +111,7 @@ function installPreview(ctx) {
         const headers = new Headers(response.headers);
         headers.set("content-type", mime);
         headers.set("cache-control", "no-store");
+        headers.set("access-control-allow-origin", "*");
         return new Response(response.body, { status: response.status, headers });
       });
     } catch (err) {
@@ -199,6 +216,26 @@ function installPreview(ctx) {
     return true;
   };
 
+  const fillHeicSession = async (session, filePath) => {
+    const lang = session.uiLanguage === "en" ? "en" : "pt";
+    const converted = await heic.convertHeicPreview(filePath, session.size);
+    if (currentPath !== filePath || !visible) return false;
+    if (converted.ok) {
+      inMemoryMedia = { body: Uint8Array.from(converted.body), mime: converted.mime };
+      session.engine = "js";
+      session.mediaUrl = bumpMediaUrl("blob", filePath);
+      session.message = null;
+      return true;
+    }
+    inMemoryMedia = null;
+    session.engine = "info";
+    session.mediaUrl = null;
+    session.message = heic.messageFor(converted.reason, lang);
+    if (!session.iconDataUrl) session.iconDataUrl = await iconDataUrl(filePath);
+    previewDebug(`heic ${converted.reason || "error"} ${filePath}`);
+    return true;
+  };
+
   const sendPreviewHwnd = () => {
     if (!win || win.isDestroyed()) return;
     try {
@@ -257,6 +294,8 @@ function installPreview(ctx) {
       zip: null,
       engine: null,
       office: null,
+      fontFamily: null,
+      message: null,
       iconDataUrl: null,
       pinned,
       index: siblings.index,
@@ -271,7 +310,23 @@ function installPreview(ctx) {
       session.sizeLabel = lib.formatBytes(session.folder.totalSize);
       session.iconDataUrl = await iconDataUrl(filePath);
     } else if (kind === "zip") {
-      session.zip = lib.listZipEntries(filePath);
+      if (lib.PACKED_ARCHIVE_EXT.has(meta.ext)) {
+        session.zip = await archives.listPackedArchive(filePath, st.size);
+        if (session.zip.error) session.message = archives.messageFor(session.zip.error, session.uiLanguage);
+      } else {
+        session.zip = lib.listZipEntries(filePath);
+      }
+      session.iconDataUrl = await iconDataUrl(filePath);
+    } else if (kind === "font") {
+      const parsed = fonts.parseFontFamily(filePath, st.size);
+      session.fontFamily = parsed.family;
+      if (parsed.tooLarge) {
+        session.kind = "fallback";
+        session.message = fonts.messageFor("tooLarge", session.uiLanguage);
+        session.iconDataUrl = await iconDataUrl(filePath);
+      }
+    } else if (kind === "heic") {
+      session.engine = "pending";
       session.iconDataUrl = await iconDataUrl(filePath);
     } else if (kind === "markdown") {
       const preview = lib.readTextPreview(filePath);
@@ -438,6 +493,7 @@ function installPreview(ctx) {
     pendingSession = null;
     currentPath = "";
     sanitizedSvg = "";
+    inMemoryMedia = null;
     clearNativePreview();
     openWithBusy = false;
     clearTimeout(openWithBusyTimer);
@@ -503,7 +559,8 @@ function installPreview(ctx) {
         nav = verdict.state;
         syncSiblingsFromNav();
         currentPath = job.filePath;
-        if (session.kind === "svg" || session.kind === "image" || session.kind === "video" || session.kind === "audio" || session.kind === "pdf") {
+        inMemoryMedia = null;
+        if (session.kind === "svg" || session.kind === "image" || session.kind === "video" || session.kind === "audio" || session.kind === "pdf" || session.kind === "font") {
           session.mediaUrl = bumpMediaUrl(session.kind, job.filePath);
         }
         session.index = nav.index;
@@ -528,6 +585,13 @@ function installPreview(ctx) {
           if (queuedOpen) {
             previewDebug(`skip office gen=${job.gen} (queued gen=${queuedOpen.gen})`);
             clearNativePreview();
+            continue;
+          }
+          if (filled) pushSession(session);
+        } else if (session.kind === "heic") {
+          const filled = await fillHeicSession(session, job.filePath);
+          if (queuedOpen) {
+            previewDebug(`skip heic gen=${job.gen} (queued gen=${queuedOpen.gen})`);
             continue;
           }
           if (filled) pushSession(session);

@@ -24,7 +24,7 @@
     "release:check": "node scripts/release.mjs --check",
     "dist:store": "npm run build && node scripts/run-electron-builder.mjs --win appx --publish never",
     "test:platform-unix": "node --test backend/platform-unix.test.cjs",
-    "test:preview": "node --test backend/preview.test.cjs backend/preview-office.test.cjs"
+    "test:preview": "node --test backend/preview.test.cjs backend/preview-office.test.cjs backend/preview-formats.test.cjs"
   },
   "dependencies": {
     "@fontsource-variable/instrument-sans": "^5.3.0",
@@ -34,6 +34,8 @@
     "active-win": "^8.2.1",
     "electron-updater": "^6.8.9",
     "framer-motion": "^10.16.4",
+    "heic-convert": "^2.1.0",
+    "libarchive-wasm": "^1.2.0",
     "lucide-react": "^0.292.0",
     "mammoth": "^1.13.0",
     "node-global-key-listener": "^0.1.1",
@@ -81,7 +83,9 @@
       "node_modules/uiohook-napi/**/*",
       "node_modules/node-global-key-listener/**/*",
       "node_modules/sharp/**/*",
-      "node_modules/@img/**/*"
+      "node_modules/@img/**/*",
+      "node_modules/libarchive-wasm/**/*",
+      "node_modules/libheif-js/**/*"
     ],
     "directories": {
       "output": "build-out"

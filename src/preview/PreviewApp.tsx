@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { AppWindow, FolderOpen, Pin, X } from 'lucide-react';
 import { highlightCode } from './highlight';
 
-type Kind = 'image' | 'svg' | 'video' | 'audio' | 'pdf' | 'text' | 'markdown' | 'html' | 'folder' | 'zip' | 'word' | 'spreadsheet' | 'presentation' | 'fallback';
+type Kind = 'image' | 'svg' | 'video' | 'audio' | 'pdf' | 'text' | 'markdown' | 'html' | 'folder' | 'zip' | 'font' | 'heic' | 'word' | 'spreadsheet' | 'presentation' | 'fallback';
 type Engine = 'native' | 'js' | 'info' | 'pending' | null;
 
 interface OfficeSheet { name: string; html: string; truncated?: boolean }
@@ -42,9 +42,11 @@ interface Session {
   html: string | null;
   truncated: boolean;
   folder: { items: FolderItem[]; count: number; files: number; folders: number; totalSize: number; truncated: boolean } | null;
-  zip: { entries: ZipItem[]; truncated: boolean } | null;
+  zip: { entries: ZipItem[]; truncated: boolean; error?: string } | null;
   engine: Engine;
   office: OfficePayload | null;
+  fontFamily: string | null;
+  message: string | null;
   iconDataUrl: string | null;
   pinned: boolean;
   index: number;
@@ -74,6 +76,10 @@ const COPY = {
     pending: 'A carregar prévia…',
     native: 'Prévia nativa do Windows',
     partial: 'Prévia parcial',
+    tooLarge: 'Arquivo grande demais para prévia. Abra-o no aplicativo.',
+    family: 'Família',
+    pangram: 'A rápida raposa marrom saltou sobre o cão preguiçoso.',
+    alphabet: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ\nabcdefghijklmnopqrstuvwxyz\n0123456789\nàáâãçéêíóôõú ÀÁÂÃÇÉÊÍÓÔÕÚ',
   },
   en: {
     pin: 'Pin window',
@@ -95,7 +101,20 @@ const COPY = {
     pending: 'Loading preview…',
     native: 'Windows native preview',
     partial: 'Partial preview',
+    tooLarge: 'File is too large to preview. Open it in the app.',
+    family: 'Family',
+    pangram: 'The quick brown fox jumps over the lazy dog.',
+    alphabet: 'ABCDEFGHIJKLMNOPQRSTUVWXYZ\nabcdefghijklmnopqrstuvwxyz\n0123456789\nàáâãçéêíóôõú ÀÁÂÃÇÉÊÍÓÔÕÚ',
   },
+};
+
+const FONT_SIZES = [12, 18, 24, 36, 48, 72];
+const FONT_CSS_FAMILY = 'pv-preview-font';
+const FONT_FORMAT: Record<string, string> = {
+  ttf: 'truetype',
+  otf: 'opentype',
+  woff: 'woff',
+  woff2: 'woff2',
 };
 
 function formatWhen(iso: string, lang: 'pt' | 'en') {
@@ -263,6 +282,59 @@ function SlidesPane({ session }: { session: Session }) {
   );
 }
 
+function FontPane({ session }: { session: Session }) {
+  const t = COPY[session.uiLanguage];
+  const [ready, setReady] = useState(false);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    if (!session.mediaUrl) {
+      setFailed(true);
+      return;
+    }
+    let gone = false;
+    let face: FontFace | null = null;
+    const format = FONT_FORMAT[session.ext] || 'truetype';
+    const source = `url(${JSON.stringify(session.mediaUrl)}) format(${JSON.stringify(format)})`;
+    const run = async () => {
+      try {
+        face = new FontFace(FONT_CSS_FAMILY, source);
+        await face.load();
+        if (gone) {
+          document.fonts.delete(face);
+          return;
+        }
+        document.fonts.add(face);
+        setReady(true);
+      } catch {
+        if (!gone) setFailed(true);
+      }
+    };
+    void run();
+    return () => {
+      gone = true;
+      if (face) {
+        try { document.fonts.delete(face); } catch { /* ignore */ }
+      }
+    };
+  }, [session.mediaUrl, session.ext]);
+
+  if (failed) return <InfoCard session={session} message={session.message || t.fallback} />;
+  if (!ready) return <div className="pv-empty">{t.pending}</div>;
+  return (
+    <div className="pv-font">
+      <div className="pv-font-family">{t.family}: {session.fontFamily || session.name}</div>
+      {FONT_SIZES.map((size) => (
+        <p key={size} className="pv-font-sample" style={{ fontFamily: FONT_CSS_FAMILY, fontSize: size }}>
+          <span className="pv-font-size">{size}</span>
+          {t.pangram}
+        </p>
+      ))}
+      <pre className="pv-font-alpha" style={{ fontFamily: FONT_CSS_FAMILY }}>{t.alphabet}</pre>
+    </div>
+  );
+}
+
 function InfoCard({ session, message }: { session: Session; message: string }) {
   const t = COPY[session.uiLanguage];
   return (
@@ -294,6 +366,14 @@ function Body({ session }: { session: Session }) {
     }
     return <InfoCard session={session} message={session.office?.message || t.fallback} />;
   }
+  if (session.kind === 'heic') {
+    if (session.engine === 'pending') return <div className="pv-empty">{t.pending}</div>;
+    if (session.mediaUrl) return <ImagePane key={session.mediaUrl} src={session.mediaUrl} />;
+    return <InfoCard session={session} message={session.message || t.fallback} />;
+  }
+  if (session.kind === 'font') {
+    return <FontPane session={session} />;
+  }
   if (session.kind === 'image' || session.kind === 'svg') {
     return session.mediaUrl ? <ImagePane key={session.mediaUrl} src={session.mediaUrl} /> : <div className="pv-empty">{t.empty}</div>;
   }
@@ -319,6 +399,7 @@ function Body({ session }: { session: Session }) {
     return <ListPane items={session.folder.items} />;
   }
   if (session.kind === 'zip' && session.zip) {
+    if (session.zip.error) return <InfoCard session={session} message={session.message || t.tooLarge} />;
     return (
       <ListPane
         items={session.zip.entries.map((entry) => ({
@@ -329,7 +410,7 @@ function Body({ session }: { session: Session }) {
       />
     );
   }
-  return <InfoCard session={session} message={session.sizeLabel || t.fallback} />;
+  return <InfoCard session={session} message={session.message || session.sizeLabel || t.fallback} />;
 }
 
 export function PreviewApp() {

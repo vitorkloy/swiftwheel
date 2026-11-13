@@ -431,6 +431,50 @@ html, body, #root {
   line-height: 1.5;
 }
 
+.pv-font {
+  height: 100%;
+  overflow: auto;
+  padding: 20px 24px 28px;
+  background: var(--pv-solid);
+  background-color: var(--pv-solid);
+  user-select: text;
+}
+
+.pv-font-family {
+  margin: 0 0 16px;
+  font-size: 13px;
+  font-weight: 650;
+  color: var(--pv-text-2);
+}
+
+.pv-font-sample {
+  margin: 0 0 10px;
+  line-height: 1.35;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.pv-font-size {
+  display: inline-block;
+  min-width: 36px;
+  margin-right: 12px;
+  font: 650 11px/1 "Segoe UI", system-ui, sans-serif;
+  color: var(--pv-text-3);
+  vertical-align: middle;
+}
+
+.pv-font-alpha {
+  margin: 18px 0 0;
+  padding: 14px 16px;
+  border-radius: 10px;
+  background: var(--pv-code);
+  border: 1px solid var(--pv-line);
+  font-size: 22px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+}
+
 .pv-slide-body p { margin: 0 0 8px; }
 .pv-slide-body img { max-width: 100%; border-radius: 6px; display: block; margin: 8px 0; }
 .pv-slide-body .muted { color: var(--pv-text-3); }

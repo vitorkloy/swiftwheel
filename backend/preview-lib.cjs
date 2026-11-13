@@ -15,6 +15,9 @@ const PDF_EXT = new Set(["pdf"]);
 const MARKDOWN_EXT = new Set(["md", "markdown"]);
 const HTML_EXT = new Set(["html", "htm"]);
 const ZIP_EXT = new Set(["zip"]);
+const PACKED_ARCHIVE_EXT = new Set(["7z", "rar"]);
+const FONT_EXT = new Set(["ttf", "otf", "woff", "woff2"]);
+const HEIC_EXT = new Set(["heic", "heif"]);
 const WORD_EXT = new Set(["docx", "doc", "rtf", "odt"]);
 const SHEET_EXT = new Set(["xlsx", "xls", "csv", "ods"]);
 const SLIDE_EXT = new Set(["pptx", "ppt", "odp"]);
@@ -47,6 +50,9 @@ const MIME_BY_EXT = {
   mp3: "audio/mpeg", wav: "audio/wav", ogg: "audio/ogg", flac: "audio/flac",
   pdf: "application/pdf", html: "text/html", htm: "text/html",
   zip: "application/zip", json: "application/json",
+  ttf: "font/ttf", otf: "font/otf", woff: "font/woff", woff2: "font/woff2",
+  heic: "image/heic", heif: "image/heif",
+  "7z": "application/x-7z-compressed", rar: "application/vnd.rar",
 };
 
 const MAX_TEXT_BYTES = 2 * 1024 * 1024;
@@ -79,7 +85,9 @@ function classifyKind(filePath, stat) {
   if (PDF_EXT.has(ext)) return "pdf";
   if (MARKDOWN_EXT.has(ext)) return "markdown";
   if (HTML_EXT.has(ext)) return "html";
-  if (ZIP_EXT.has(ext)) return "zip";
+  if (ZIP_EXT.has(ext) || PACKED_ARCHIVE_EXT.has(ext)) return "zip";
+  if (FONT_EXT.has(ext)) return "font";
+  if (HEIC_EXT.has(ext)) return "heic";
   if (WORD_EXT.has(ext)) return "word";
   if (SHEET_EXT.has(ext)) return "spreadsheet";
   if (SLIDE_EXT.has(ext)) return "presentation";
@@ -561,6 +569,9 @@ module.exports = {
   IMAGE_EXT,
   VIDEO_EXT,
   AUDIO_EXT,
+  PACKED_ARCHIVE_EXT,
+  FONT_EXT,
+  HEIC_EXT,
   WORD_EXT,
   SHEET_EXT,
   SLIDE_EXT,
@@ -589,5 +600,6 @@ module.exports = {
   previewNavCommand,
   canonicalAccelerator,
   MAX_TEXT_BYTES,
+  MAX_ZIP_ENTRIES,
   tmpdir: () => os.tmpdir(),
 };
