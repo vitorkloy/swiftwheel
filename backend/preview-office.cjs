@@ -2,7 +2,7 @@
 
 /**
  * Prévia de Office: deteção (senha / tamanho) e fallback JS.
- * Word: mammoth (docx) + XML (odt) + RTF; Excel: SheetJS; PowerPoint: ZIP/XML.
+ * Word: mammoth (docx) + word-extractor/OLE (doc) + XML (odt) + RTF; Excel: SheetJS; PowerPoint: ZIP/XML + OLE.
  * Sem LibreOffice. O handler nativo do Windows fica no helper C#.
  */
 const fs = require("fs");
@@ -448,6 +448,86 @@ function renderOdp(filePath) {
   return { ok: true, slides, truncated };
 }
 
+function isHarvestChar(code) {
+  if (code === 9 || code === 10 || code === 13) return true;
+  if (code >= 32 && code <= 126) return true;
+  if (code >= 0xa0 && code <= 0x24f) return true;
+  if (code >= 0x1e00 && code <= 0x1eff) return true;
+  return false;
+}
+
+function extractUtf16leStrings(buf, minChars) {
+  const found = [];
+  const seen = Object.create(null);
+  const min = Math.max(4, Number(minChars) || 6);
+  if (!Buffer.isBuffer(buf) || buf.length < min * 2) return found;
+  for (let align = 0; align < 2; align += 1) {
+    let i = align;
+    while (i + 2 <= buf.length) {
+      const start = i;
+      let chars = "";
+      while (i + 2 <= buf.length) {
+        const code = buf.readUInt16LE(i);
+        if (!isHarvestChar(code)) break;
+        chars += String.fromCharCode(code);
+        i += 2;
+      }
+      const text = chars.replace(/\s+/g, " ").trim();
+      if (text.length >= min && /[A-Za-zÀ-ÿ]{3,}/.test(text) && !seen[text]) {
+        const letters = (text.match(/[A-Za-zÀ-ÿ]/g) || []).length;
+        if (letters >= 3 && letters / text.length >= 0.35) {
+          seen[text] = true;
+          found.push(text);
+          if (found.length >= 40) return found;
+        }
+      }
+      i = start + 2;
+    }
+  }
+  return found;
+}
+
+function harvestOleText(filePath) {
+  const st = fs.statSync(filePath);
+  const fd = fs.openSync(filePath, "r");
+  try {
+    const n = Math.min(st.size, MAX_UNCOMPRESSED);
+    const buf = Buffer.alloc(n);
+    fs.readSync(fd, buf, 0, n, 0);
+    return extractUtf16leStrings(buf, 6);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
+async function renderDoc(filePath) {
+  try {
+    const WordExtractor = require("word-extractor");
+    const extracted = await new WordExtractor().extract(filePath);
+    const parts = [];
+    if (extracted && typeof extracted.getBody === "function") {
+      parts.push(extracted.getBody({ filterUnicode: false }));
+    }
+    if (extracted && typeof extracted.getHeaders === "function") {
+      parts.push(extracted.getHeaders({ filterUnicode: false }));
+    }
+    const text = parts.filter(Boolean).join("\n").replace(/\r\n/g, "\n").trim();
+    if (text) return { ok: true, html: paragraphsToHtml(text.split("\n")), truncated: false };
+  } catch { /* OLE malformado ou biblioteca ausente */ }
+  const harvested = harvestOleText(filePath);
+  if (harvested && harvested.length) {
+    return { ok: true, html: paragraphsToHtml(harvested), truncated: harvested.length >= 40 };
+  }
+  return { ok: false, reason: "unsupported" };
+}
+
+function renderPpt(filePath) {
+  const harvested = harvestOleText(filePath);
+  if (!harvested || !harvested.length) return { ok: false, reason: "unsupported" };
+  const html = harvested.map((line) => `<p>${lib.escapeHtml(line)}</p>`).join("");
+  return { ok: true, slides: [{ label: "Slides", html }], truncated: harvested.length >= 40 };
+}
+
 async function renderOfficeJs(filePath, kind, ext) {
   const extension = String(ext || lib.extOf(filePath)).toLowerCase();
   try {
@@ -456,6 +536,7 @@ async function renderOfficeJs(filePath, kind, ext) {
         const out = await renderDocx(filePath);
         return wrapWord(out);
       }
+      if (extension === "doc") return wrapWord(await renderDoc(filePath));
       if (extension === "odt") return wrapWord(renderOdt(filePath));
       if (extension === "rtf") return wrapWord(renderRtf(filePath));
       return fail("unsupported");
@@ -473,6 +554,7 @@ async function renderOfficeJs(filePath, kind, ext) {
         const out = renderPptx(filePath);
         return wrapSlides(out);
       }
+      if (extension === "ppt") return wrapSlides(renderPpt(filePath));
       if (extension === "odp") return wrapSlides(renderOdp(filePath));
       return fail("unsupported");
     }
@@ -527,4 +609,6 @@ module.exports = {
   extractZip,
   zipLooksEncrypted,
   oleLooksEncrypted,
+  extractUtf16leStrings,
+  harvestOleText,
 };

@@ -43,6 +43,7 @@
     "sql.js": "^1.14.1",
     "tailwindcss": "^4.3.0",
     "uiohook-napi": "^1.5.5",
+    "word-extractor": "^1.0.4",
     "xlsx": "^0.18.5"
   },
   "devDependencies": {

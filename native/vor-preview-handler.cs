@@ -235,7 +235,9 @@ static partial class VorPreview
             hostForm.MinimizeBox = false;
             hostForm.MaximizeBox = false;
             hostForm.Text = "";
-            hostForm.BackColor = Color.FromArgb(21, 21, 21);
+            hostForm.AllowTransparency = false;
+            hostForm.Opacity = 1;
+            hostForm.BackColor = Color.FromArgb(255, 21, 21, 21);
             hostForm.Width = 120;
             hostForm.Height = 120;
             hostForm.FormClosing += HostFormClosing;

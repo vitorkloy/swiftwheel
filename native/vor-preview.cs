@@ -904,15 +904,97 @@ static partial class VorPreview
         for (int i = 0; i < paths.Count; i++) Emit("viewitem " + paths[i]);
     }
 
+    static bool HammingCloseName(string a, string b)
+    {
+        if (a == null || b == null) return false;
+        string na = a;
+        string nb = b;
+        try { na = a.Normalize(); nb = b.Normalize(); } catch { }
+        if (na.Length != nb.Length || na.Length == 0) return false;
+        if (!string.Equals(Path.GetExtension(na), Path.GetExtension(nb), StringComparison.OrdinalIgnoreCase)) return false;
+        int d = 0;
+        int i;
+        for (i = 0; i < na.Length; i++)
+        {
+            if (na[i] != nb[i])
+            {
+                d++;
+                if (d > 2) return false;
+            }
+        }
+        return d > 0;
+    }
+
+    static string CanonicalExistingPath(string path)
+    {
+        if (path == null || path.Length == 0) return path;
+        try
+        {
+            if (Directory.Exists(path))
+            {
+                DirectoryInfo folder = new DirectoryInfo(path);
+                if (folder != null && folder.FullName != null && folder.FullName.Length > 0) return folder.FullName;
+            }
+            FileInfo fi = new FileInfo(path);
+            DirectoryInfo dir = null;
+            try { dir = fi.Directory; } catch { }
+            if (dir == null || !dir.Exists) return path;
+            FileInfo[] all = null;
+            try { all = dir.GetFiles(); } catch { return path; }
+            if (all == null) return path;
+            int i;
+            for (i = 0; i < all.Length; i++)
+            {
+                if (string.Equals(all[i].Name, fi.Name, StringComparison.Ordinal)) return all[i].FullName;
+            }
+            for (i = 0; i < all.Length; i++)
+            {
+                if (string.Equals(all[i].Name, fi.Name, StringComparison.OrdinalIgnoreCase)) return all[i].FullName;
+            }
+            FileInfo close = null;
+            int closeHits = 0;
+            for (i = 0; i < all.Length; i++)
+            {
+                if (HammingCloseName(all[i].Name, fi.Name))
+                {
+                    close = all[i];
+                    closeHits++;
+                }
+            }
+            if (closeHits == 1 && close != null) return close.FullName;
+            if (fi.Exists)
+            {
+                long len = 0;
+                DateTime stamp = DateTime.MinValue;
+                try { len = fi.Length; stamp = fi.LastWriteTimeUtc; } catch { }
+                FileInfo unique = null;
+                int hits = 0;
+                for (i = 0; i < all.Length; i++)
+                {
+                    if (all[i].Length == len && all[i].LastWriteTimeUtc == stamp
+                        && string.Equals(all[i].Extension, fi.Extension, StringComparison.OrdinalIgnoreCase))
+                    {
+                        unique = all[i];
+                        hits++;
+                    }
+                }
+                if (hits == 1 && unique != null) return unique.FullName;
+            }
+        }
+        catch { }
+        return path;
+    }
+
     static void EmitViewAndOpen(string path)
     {
+        string resolved = CanonicalExistingPath(path);
         IFolderView fv = GetFolderView(originHwnd);
         if (fv != null)
         {
-            try { EmitView(fv, path); }
+            try { EmitView(fv, resolved); }
             finally { try { Marshal.ReleaseComObject(fv); } catch { } }
         }
-        Emit("open " + path);
+        Emit("open " + resolved);
     }
 
     static bool SameFile(string a, string b)

@@ -205,8 +205,10 @@ function ListPane({ items }: { items: Array<{ name: string; isDir: boolean; size
 }
 
 function HtmlDoc({ session, html }: { session: Session; html: string }) {
+  const page = session.appearance.theme === 'white' ? '#fcfcfd' : '#151515';
+  const ink = session.appearance.theme === 'white' ? '#1a1a1c' : '#eee';
   const doc = `<!doctype html><html><head><meta charset="utf-8"><style>
-    html,body{margin:0;padding:16px 20px 28px;font:15px/1.55 Segoe UI,system-ui,sans-serif;color:${session.appearance.theme === 'white' ? '#1a1a1c' : '#eee'};background:transparent}
+    html,body{margin:0;min-height:100%;height:100%;padding:16px 20px 28px;font:15px/1.55 Segoe UI,system-ui,sans-serif;color:${ink};background:${page};background-color:${page}}
     pre,code{font-family:ui-monospace,Consolas,monospace} pre{overflow:auto;padding:12px;border-radius:8px;background:rgba(127,127,127,.12)}
     a{color:inherit} img{max-width:100%}
     table{border-collapse:collapse;width:max-content;min-width:100%;font:12.5px/1.4 ui-monospace,Consolas,monospace}
@@ -214,7 +216,7 @@ function HtmlDoc({ session, html }: { session: Session; html: string }) {
     th{font-weight:650;background:${session.appearance.theme === 'white' ? 'rgba(0,0,0,.04)' : 'rgba(255,255,255,.06)'};position:sticky;top:0}
     .muted{opacity:.55}
   </style></head><body>${html || ''}</body></html>`;
-  return <iframe key={session.path} className="pv-md" sandbox="" srcDoc={doc} title={session.name} />;
+  return <iframe key={session.path} className="pv-md" sandbox="" srcDoc={doc} title={session.name} style={{ backgroundColor: page }} />;
 }
 
 function SpreadsheetPane({ session }: { session: Session }) {
@@ -403,9 +405,12 @@ export function PreviewApp() {
     <div
       className={`pv-frame ${glass ? 'is-glass' : 'is-solid'}${visible ? ' is-in' : ''}`}
       data-theme={appearance?.theme === 'white' ? 'white' : 'black'}
-      style={{ ...accentStyle, ...(glass ? { backgroundColor: appearance?.theme === 'white' ? `rgba(252,252,253,${opacity})` : `rgba(21,21,21,${opacity})` } : {}) }}
+      style={accentStyle}
     >
-      <header className="pv-bar">
+      <header
+        className="pv-bar"
+        style={glass ? { backgroundColor: appearance?.theme === 'white' ? `rgba(252,252,253,${opacity})` : `rgba(21,21,21,${opacity})` } : undefined}
+      >
         <div className="pv-title" title={session.path}>{session.name}</div>
         <div className="pv-meta">{subtitle}</div>
         <div className="pv-actions" onMouseDown={(event) => event.stopPropagation()}>

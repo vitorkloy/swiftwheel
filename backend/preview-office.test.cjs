@@ -259,7 +259,7 @@ describe("office JS fallbacks", () => {
     }
   });
 
-  it("returns a clear info card for unsupported binary Office (.doc/.ppt)", async () => {
+  it("returns a clear info card for OLE without extractable text", async () => {
     const ole = Buffer.concat([
       Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]),
       Buffer.from("not-encrypted-ole-doc"),
@@ -272,6 +272,31 @@ describe("office JS fallbacks", () => {
       assert.match(out.office.message, /prévia/i);
       const ppt = await office.renderOfficeJs(file, "presentation", "ppt");
       assert.equal(ppt.ok, false);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("extracts text from old .doc/.ppt OLE via UTF-16 harvest", async () => {
+    const ole = Buffer.concat([
+      Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]),
+      Buffer.alloc(24),
+      Buffer.from("Olá documento Word 97 da integração", "utf16le"),
+    ]);
+    const { dir, file } = writeTemp("cartilha.doc", ole);
+    try {
+      const doc = await office.renderOfficeJs(file, "word", "doc");
+      assert.equal(doc.ok, true);
+      assert.match(doc.office.html, /integração/);
+      const pptPath = path.join(dir, "cartilha.ppt");
+      fs.writeFileSync(pptPath, Buffer.concat([
+        Buffer.from([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]),
+        Buffer.alloc(16),
+        Buffer.from("Slide um da cartilha Globalpac", "utf16le"),
+      ]));
+      const ppt = await office.renderOfficeJs(pptPath, "presentation", "ppt");
+      assert.equal(ppt.ok, true);
+      assert.match(ppt.office.slides[0].html, /Globalpac/);
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
@@ -293,6 +318,17 @@ describe("office UI and helper wiring", () => {
     assert.match(css, /\.pv-sheet-tabs/);
     assert.match(css, /\.pv-slides/);
     assert.match(css, /\.pv-native/);
+    assert.match(css, /\.pv-stage \{[\s\S]*?background:\s*var\(--pv-solid\)/);
+    assert.match(css, /\.pv-native \{[\s\S]*?background:\s*var\(--pv-solid\)/);
+    assert.match(css, /\.pv-fallback \{[\s\S]*?background:\s*var\(--pv-solid\)/);
+    assert.match(css, /\.pv-slides \{[\s\S]*?background:\s*var\(--pv-solid\)/);
+    assert.match(css, /\.pv-code \{[\s\S]*?background:\s*var\(--pv-solid\)/);
+    assert.match(css, /\.pv-md \{[\s\S]*?background:\s*var\(--pv-solid\)/);
+    assert.match(app, /background:\$\{page\}/);
+    assert.match(app, /backgroundColor: page/);
+    assert.doesNotMatch(app, /background:transparent/);
+    assert.match(app, /className="pv-bar"/);
+    assert.match(css, /--pv-code:\s*#1c1c1c/);
     assert.match(main, /nativeEngine/);
     assert.match(main, /tryNativePreview/);
     assert.match(main, /cmd === "preview-fail"/);

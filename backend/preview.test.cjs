@@ -106,6 +106,8 @@ describe("native helper source", () => {
     assert.match(src, /viewitem/);
     assert.match(src, /selecti/);
     assert.match(src, /fonte da verdade/);
+    assert.match(src, /CanonicalExistingPath/);
+    assert.match(src, /HammingCloseName/);
     assert.match(src, /ILCombine/);
     assert.match(src, /IPersistFolder2/);
     assert.match(src, /GetCurFolder/);
@@ -123,6 +125,8 @@ describe("native helper source", () => {
     assert.match(handler, /Unload/);
     assert.match(handler, /PREVIEW_TIMEOUT_MS/);
     assert.match(handler, /IsHostForeground/);
+    assert.match(handler, /AllowTransparency = false/);
+    assert.match(handler, /Color\.FromArgb\(255, 21, 21, 21\)/);
     const main = fs.readFileSync(path.join(__dirname, "preview.cjs"), "utf8");
     assert.match(main, /cmd === "view"/);
     assert.match(main, /cmd === "viewitem"/);
@@ -271,6 +275,18 @@ describe("preview helper encoding", () => {
     assert.equal(lib.decodeHelperLine(acp), "open C:\\dl\\Calendário.pdf");
   });
 
+  it("repairs UTF-8 read as latin1 (Ã§Ã£o) and keeps a valid UTF-8 ção", () => {
+    const mojibake = Buffer.from("open Z:\\Cartilha_de_integraÃ§Ã£o.pptx", "utf8");
+    assert.equal(lib.decodeHelperLine(mojibake), "open Z:\\Cartilha_de_integração.pptx");
+    const good = Buffer.from("open Z:\\INTEGRAÇÃO.pptx", "utf8");
+    assert.equal(lib.decodeHelperLine(good), "open Z:\\INTEGRAÇÃO.pptx");
+    assert.equal(lib.repairUtf8Mojibake("Cartilha_de_integraÃ§Ã£o.pptx"), "Cartilha_de_integração.pptx");
+    assert.equal(
+      lib.matchDirName(["Cartilha_de_integração.pptx", "INTEGRAÇÃO.pptx"], "Cartilha_de_integrayýo.pptx"),
+      "Cartilha_de_integração.pptx"
+    );
+  });
+
   it("uses the real directory entry for the display name", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sw-preview-name-"));
     try {
@@ -279,6 +295,20 @@ describe("preview helper encoding", () => {
       assert.equal(lib.displayName(real), "PLANILHA_CONTAS_PAGAS_-_CONCILIAÇÃO.xlsx");
       assert.equal(lib.fileMeta(real).name, "PLANILHA_CONTAS_PAGAS_-_CONCILIAÇÃO.xlsx");
       assert.equal(lib.canonicalizePath(real), fs.realpathSync(real));
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it("recovers Cartilha_de_integração from a yýo helper basename (UNC/share)", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "sw-preview-mojibake-"));
+    try {
+      const real = path.join(dir, "Cartilha_de_integração.pptx");
+      fs.writeFileSync(real, "x");
+      const garbled = path.join(dir, "Cartilha_de_integrayýo.pptx");
+      assert.equal(lib.displayName(garbled), "Cartilha_de_integração.pptx");
+      assert.equal(lib.canonicalizePath(garbled), path.resolve(real));
+      assert.equal(lib.fileMeta(real).name, "Cartilha_de_integração.pptx");
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
