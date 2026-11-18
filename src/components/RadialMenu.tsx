@@ -4,7 +4,7 @@ import { getIcon } from '../iconMap';
 import { CornerUpLeft } from 'lucide-react';
 import { SmartIcon } from './SmartIcon';
 import { RovylLogo } from './RovylLogo';
-import { FilePetalWheel, filePetalDeadZonePx, filePetalIndexAt } from './FilePetalWheel';
+import { FilePetalWheel, filePetalDeadZonePx, filePetalIndexAt, filePetalVisualRadiusPx } from './FilePetalWheel';
 import { getTranslation } from '../translations';
 import { RadialHud } from './RadialHud';
 import {
@@ -737,8 +737,9 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
    * voltar e executar uma fatia. O `× 1.06` acompanha a escala que o hub ganha quando está ativo,
    * que é exatamente o estado em que este clique acontece.
    */
+  const fileWheelScale = config.fileWheelScale ?? 1;
   const deadZoneRadius = fileMode
-    ? filePetalDeadZonePx()
+    ? filePetalDeadZonePx(fileWheelScale)
     : Math.max(
       config.activationThreshold ?? 60,
       Math.ceil((hubDiameter / 2) * 1.06 * Math.SQRT2) + 4,
@@ -1581,6 +1582,11 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
     [bo, backdropRadius, position.x, position.y],
   );
 
+  const fileMaskRadius = filePetalVisualRadiusPx(fileWheelScale);
+  const fileMask = fileMode
+    ? `radial-gradient(circle ${fileMaskRadius}px at ${Math.round(position.x)}px ${Math.round(position.y)}px, #000 ${fileMaskRadius - 1}px, transparent ${fileMaskRadius}px)`
+    : undefined;
+
   return (
     <div
       data-zenith-radial-modal="true"
@@ -1589,6 +1595,14 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
         /* Sem atraso ao fechar — senão o HUD do radial ficava visível por cima/atrás da ilha compacta. */
         visibility: isOpen ? 'visible' : 'hidden',
         pointerEvents: isOpen ? 'auto' : 'none',
+        ...(fileMode
+          ? {
+              WebkitMaskImage: fileMask,
+              maskImage: fileMask,
+              WebkitMaskRepeat: 'no-repeat',
+              maskRepeat: 'no-repeat',
+            }
+          : null),
       }}
     >
         <>
@@ -1659,6 +1673,7 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
                 accent={radialHoverColor}
                 theme={config.appearanceTheme === 'white' ? 'white' : 'black'}
                 surfaceAlpha={surfaceAlpha}
+                scale={fileWheelScale}
                 items={currentLevelApps}
                 activeIndex={activeIndex}
                 centerActive={isCenterActive}

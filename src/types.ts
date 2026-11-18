@@ -175,6 +175,8 @@ export interface UIConfig {
   /** Teclas das rodas de ficheiro. */
   fileWheelKeys?: { convert: "shift" | "ctrl" | "alt"; tools: "shift" | "ctrl" | "alt"; actions: "shift" | "ctrl" | "alt" };
   fileWheelScale?: number;
+  /** Tempo a segurar Shift/Ctrl/Alt durante o arrasto antes da roda abrir (ms). */
+  fileWheelHoldMs?: number;
   fileWheelRadius?: number;
   fileWheelIconSize?: number;
   fileWheelSpacing?: number;

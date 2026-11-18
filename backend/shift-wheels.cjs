@@ -12,6 +12,7 @@ const SLIDES = ["ppt", "pptx", "odp", "key"];
 const SHEETS = ["xlsx", "xls", "ods", "csv", "tsv"];
 const SUBS = ["srt", "vtt"];
 const ARCHIVES = ["zip", "tar", "gz", "rar", "7z"];
+const CERT = ["pfx", "p12", "cer", "crt", "der", "pem"];
 const SOON = "soon";
 const NATIVE = ["png", "jpg", "jpeg", "bmp", "gif", "tif", "tiff"];
 
@@ -299,11 +300,12 @@ function withPassword(args, password) {
   return next;
 }
 
-/** Diálogo simples para pedir a senha do PDF. Cancela → null. */
-function askPdfPassword(filePath, attempt) {
+/** Diálogo simples para pedir uma senha. Cancela → null. */
+function askSecret({ title, hint, fileName }) {
   const { BrowserWindow } = require("electron");
-  const name = path.basename(filePath);
-  const hint = attempt > 1 ? "Senha incorreta. Tenta outra." : "Este PDF está protegido por senha.";
+  const name = String(fileName || "arquivo");
+  const heading = String(title || "Arquivo protegido");
+  const message = String(hint || "Este arquivo está protegido por senha.");
   return new Promise((resolve) => {
     const win = new BrowserWindow({
       width: 380,
@@ -335,6 +337,7 @@ function askPdfPassword(filePath, attempt) {
       const raw = message.slice("VOR_PDF_PW:".length);
       finish(raw === "__cancel__" ? null : raw);
     });
+    const esc = (s) => String(s).replace(/[<>&"]/g, "");
     const html = `<!doctype html><html><head><meta charset="utf-8"><style>
       html,body{margin:0;height:100%;background:#151515;color:#eee;font:13px/1.35 "Segoe UI",sans-serif}
       main{padding:16px 18px;display:flex;flex-direction:column;gap:10px;height:100%;box-sizing:border-box}
@@ -349,8 +352,8 @@ function askPdfPassword(filePath, attempt) {
       .cancel{background:transparent;color:rgba(255,255,255,.8)}
       .ok{background:#fff;color:#111;font-weight:600}
     </style></head><body><main>
-      <h1>PDF protegido</h1>
-      <p>${hint.replace(/</g, "")} <strong>${name.replace(/[<>&"]/g, "")}</strong></p>
+      <h1>${esc(heading)}</h1>
+      <p>${esc(message)} <strong>${esc(name)}</strong></p>
       <input id="pw" type="password" autofocus placeholder="Senha" />
       <div class="row">
         <button class="cancel" type="button" id="cancel">Cancelar</button>
@@ -373,6 +376,13 @@ function askPdfPassword(filePath, attempt) {
       }
     }).catch(() => finish(null));
   });
+}
+
+/** Diálogo simples para pedir a senha do PDF. Cancela → null. */
+function askPdfPassword(filePath, attempt) {
+  const name = path.basename(filePath);
+  const hint = attempt > 1 ? "Senha incorreta. Tenta outra." : "Este PDF está protegido por senha.";
+  return askSecret({ title: "PDF protegido", hint, fileName: name });
 }
 
 /** Tenta sem senha, depois senha vazia (faturas), depois pede a senha ao utilizador. */
@@ -699,6 +709,7 @@ function kindOf(fmt) {
   if (SHEETS.includes(fmt)) return "sheet";
   if (SUBS.includes(fmt)) return "subtitle";
   if (ARCHIVES.includes(fmt)) return "archive";
+  if (CERT.includes(fmt)) return "cert";
   return "other";
 }
 
@@ -721,6 +732,7 @@ function targets(kind, fmt) {
     txt: ["docx", "pdf", "md", "html", "epub", "jpg", "png"],
     subtitle: ["srt", "vtt", "txt"],
     archive: ["zip", "tar", "gz"],
+    cert: ["pem", "cer", "crt", "der"],
   };
   return (table[kind] || []).filter((x) => x !== fmt);
 }
@@ -1202,6 +1214,109 @@ async function convertArchive(filePath, dest, to) {
   }
 }
 
+function isPemBuffer(buf) {
+  return /^\s*-----BEGIN /m.test(buf.slice(0, 256).toString("utf8"));
+}
+
+function pemBlocks(text) {
+  const blocks = [];
+  const re = /-----BEGIN ([^-]+)-----([\s\S]*?)-----END \1-----/g;
+  let m;
+  while ((m = re.exec(text))) {
+    blocks.push({ type: m[1].trim(), body: String(m[2] || "").replace(/\s+/g, "") });
+  }
+  return blocks;
+}
+
+function derToPem(der, type = "CERTIFICATE") {
+  const b64 = Buffer.from(der).toString("base64").replace(/(.{64})/g, "$1\n").replace(/\n$/, "");
+  return `-----BEGIN ${type}-----\n${b64}\n-----END ${type}-----\n`;
+}
+
+function pemToDer(text) {
+  const blocks = pemBlocks(text);
+  const cert = blocks.find((b) => /CERTIFICATE/i.test(b.type) && !/REQUEST/i.test(b.type))
+    || blocks.find((b) => /PUBLIC KEY/i.test(b.type))
+    || blocks[0];
+  if (!cert || !cert.body) throw new Error("Não encontrei um certificado neste PEM");
+  return Buffer.from(cert.body, "base64");
+}
+
+function pfxLocked(err) {
+  return /password|senha|network password|not correct|cannot find the requested object|mac verify/i.test(String(err && err.message));
+}
+
+/** PFX/P12 via X509Certificate2 do Windows — sem OpenSSL nem download. */
+async function exportPfx(filePath, dest, to, password) {
+  const script = `
+    $ErrorActionPreference = 'Stop'
+    $flags = [System.Security.Cryptography.X509Certificates.X509KeyStorageFlags]::Exportable
+    $cert = New-Object System.Security.Cryptography.X509Certificates.X509Certificate2($env:VOR_PFX, $env:VOR_PFX_PW, $flags)
+    $der = $cert.Export([System.Security.Cryptography.X509Certificates.X509ContentType]::Cert)
+    if ($env:VOR_PFX_TO -eq 'pem') {
+      $b64 = [Convert]::ToBase64String($der, [System.Base64FormattingOptions]::InsertLineBreaks)
+      $text = "-----BEGIN CERTIFICATE-----\`r\`n$b64\`r\`n-----END CERTIFICATE-----\`r\`n"
+      try {
+        $rsa = [System.Security.Cryptography.X509Certificates.RSACertificateExtensions]::GetRSAPrivateKey($cert)
+        if ($rsa -ne $null) {
+          $key = $rsa.ExportPkcs8PrivateKey()
+          $kb64 = [Convert]::ToBase64String($key, [System.Base64FormattingOptions]::InsertLineBreaks)
+          $text += "\`r\`n-----BEGIN PRIVATE KEY-----\`r\`n$kb64\`r\`n-----END PRIVATE KEY-----\`r\`n"
+        }
+      } catch {}
+      [IO.File]::WriteAllText($env:VOR_PFX_DEST, $text)
+    } else {
+      [IO.File]::WriteAllBytes($env:VOR_PFX_DEST, $der)
+    }
+  `;
+  await spawnWait("powershell", ["-NoProfile", "-STA", "-Command", script], {
+    env: { ...process.env, VOR_PFX: filePath, VOR_PFX_PW: password == null ? "" : String(password), VOR_PFX_DEST: dest, VOR_PFX_TO: to },
+    timeout: 30000,
+  });
+  return exists(dest);
+}
+
+async function convertPfx(filePath, dest, to) {
+  try {
+    return await exportPfx(filePath, dest, to, "");
+  } catch (err) {
+    if (!pfxLocked(err)) throw err;
+  }
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    const password = await askSecret({
+      title: "Certificado protegido",
+      hint: attempt > 1 ? "Senha incorreta. Tenta outra." : "Este PFX/P12 está protegido por senha.",
+      fileName: path.basename(filePath),
+    });
+    if (password == null) throw new Error("Senha cancelada");
+    try {
+      return await exportPfx(filePath, dest, to, password);
+    } catch (err) {
+      if (!pfxLocked(err)) throw err;
+      if (attempt === 3) throw new Error("Este certificado está protegido por senha");
+    }
+  }
+  throw new Error("Este certificado está protegido por senha");
+}
+
+/** Certificados digitais: PFX→PEM/CER e DER↔PEM, só com APIs do Windows / Node. */
+async function convertCert(filePath, to) {
+  const dir = path.dirname(filePath);
+  const stem = path.parse(filePath).name;
+  const from = fmtOf(filePath);
+  const dest = uniquePath(dir, stem, to);
+  if (from === "pfx" || from === "p12") return convertPfx(filePath, dest, to);
+  const buf = fs.readFileSync(filePath);
+  const der = isPemBuffer(buf) ? pemToDer(buf.toString("utf8")) : buf;
+  if (!der.length) throw new Error("Certificado vazio");
+  if (to === "pem") {
+    fs.writeFileSync(dest, derToPem(der), "utf8");
+    return exists(dest);
+  }
+  fs.writeFileSync(dest, der);
+  return exists(dest);
+}
+
 async function convert(filePath, to) {
   const dir = path.dirname(filePath);
   const stem = path.parse(filePath).name;
@@ -1209,6 +1324,7 @@ async function convert(filePath, to) {
   const kind = kindOf(from);
   const dest = uniquePath(dir, stem, to === "gz" ? "tar.gz" : to);
 
+  if (kind === "cert") return convertCert(filePath, to);
   if (kind === "image") {
     if (nativeConvertible(from, to)) return nativeImage(filePath, dest, to === "tif" ? "tiff" : to);
     // [0]: primeira camada/quadro (PSD, ICO, GIF animado) — evita vários arquivos de saída.

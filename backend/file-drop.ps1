@@ -6,6 +6,8 @@ Add-Type -AssemblyName System.Drawing
 
 $src = @'
 using System;
+using System.Drawing;
+using System.Drawing.Drawing2D;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
@@ -118,6 +120,13 @@ public class VorFileDrop : Form {
         if (!IsHandleCreated) CreateControl();
         ShowWindow(Handle, SW_SHOWNOACTIVATE);
         SetWindowPos(Handle, Topmost, x, y, w, h, SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        using (var path = new GraphicsPath()) {
+            path.AddEllipse(0, 0, Math.Max(8, w), Math.Max(8, h));
+            var next = new Region(path);
+            var prev = Region;
+            Region = next;
+            if (prev != null) prev.Dispose();
+        }
     }
 
     public void HideCatcher() {
