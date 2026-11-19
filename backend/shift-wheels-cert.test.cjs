@@ -54,3 +54,15 @@ describe("PEM ↔ DER roundtrip", () => {
     }
   });
 });
+
+describe("image OCR action", () => {
+  it("offers Copiar texto for raster images and not for PDF or SVG", () => {
+    const png = w.build("C:\\\\temp\\\\shot.png", "actions");
+    assert.ok(png.items.some((item) => item.id === "act:copyText"));
+    assert.equal(png.items.find((item) => item.id === "act:copyText").title, "COPIAR TEXTO");
+    const svg = w.build("C:\\\\temp\\\\icon.svg", "actions");
+    assert.ok(!svg.items.some((item) => item.id === "act:copyText"));
+    const pdf = w.build("C:\\\\temp\\\\doc.pdf", "actions");
+    assert.ok(!pdf.items.some((item) => item.id === "act:copyText"));
+  });
+});

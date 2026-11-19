@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
-import { ArrowUpRight, Check, Circle, CloudFog, Copy, Highlighter, Minus, Move, Palette, Pen, Save, Square, Trash2, Type, Undo2, X } from 'lucide-react';
+import { AppWindow, ArrowUpRight, Check, Circle, CloudFog, Copy, FileText, Highlighter, Maximize, Minus, Move, Palette, Pen, Save, Square, Trash2, Type, Undo2, X } from 'lucide-react';
 
 type ShotFormat = 'png' | 'jpeg' | 'webp';
 
@@ -10,10 +10,13 @@ interface Rect {
   height: number;
 }
 
+type CaptureMode = 'region' | 'window' | 'full';
+
 interface Session {
   frameUrl?: string;
   dataUrl?: string;
   mode: 'region' | 'window';
+  captureMode?: CaptureMode;
   width: number;
   height: number;
   preset: Rect | null;
@@ -24,6 +27,9 @@ interface Session {
   quality: number;
   language: 'pt' | 'en';
   demo?: boolean;
+  monitors?: Rect[];
+  captureMonitors?: Rect[];
+  windows?: Rect[];
 }
 
 type Point = { x: number; y: number };
@@ -47,6 +53,9 @@ const COPY: Record<Session['language'], Record<string, string>> = {
     deleteText: 'Apagar texto', saveText: 'Confirmar texto', textSize: 'Tamanho do texto', moveText: 'Mover texto',
     color: 'Cor', custom: 'Cor personalizada',
     copied: 'Copiado', saved: 'Guardado', select: 'Selecionar área',
+    ocr: 'Copiar texto', ocrCopied: 'Texto copiado', noText: 'Nenhum texto encontrado',
+    modeRegion: 'Retangular', modeWindow: 'Janela', modeFull: 'Tela inteira', modeClose: 'Fechar',
+    pickWindow: 'Clique numa janela', pickFull: 'Clique para capturar o monitor',
   },
   en: {
     pen: 'Pen', shapes: 'Shapes', arrow: 'Arrow', rect: 'Rectangle', ellipse: 'Circle', line: 'Line', highlight: 'Marker', text: 'Text', blur: 'Blur', undo: 'Undo',
@@ -54,8 +63,28 @@ const COPY: Record<Session['language'], Record<string, string>> = {
     deleteText: 'Delete text', saveText: 'Confirm text', textSize: 'Text size', moveText: 'Move text',
     color: 'Color', custom: 'Custom color',
     copied: 'Copied', saved: 'Saved', select: 'Select area',
+    ocr: 'Copy text', ocrCopied: 'Text copied', noText: 'No text found',
+    modeRegion: 'Rectangular', modeWindow: 'Window', modeFull: 'Full screen', modeClose: 'Close',
+    pickWindow: 'Click a window', pickFull: 'Click to capture this display',
   },
 };
+
+function hitRect(rects: Rect[] | undefined, point: Point): Rect | null {
+  if (!rects || !rects.length) return null;
+  return rects.find((rect) => (
+    point.x >= rect.x && point.y >= rect.y && point.x < rect.x + rect.width && point.y < rect.y + rect.height
+  )) || null;
+}
+
+function barAtTop(monitor: Rect | null, width: number, height: number, pad = 12) {
+  if (!monitor) return { x: pad, y: pad, width, height };
+  return {
+    x: Math.round(monitor.x + (monitor.width - width) / 2),
+    y: Math.round(monitor.y + pad),
+    width,
+    height,
+  };
+}
 
 function demoSession(): Session {
   const canvas = document.createElement('canvas');
@@ -87,6 +116,10 @@ function demoSession(): Session {
     quality: 92,
     language: 'pt',
     demo: true,
+    captureMode: 'region',
+    monitors: [{ x: 0, y: 0, width: 1280, height: 720 }],
+    captureMonitors: [{ x: 0, y: 0, width: 1280, height: 720 }],
+    windows: [{ x: 180, y: 120, width: 420, height: 240 }],
   };
 }
 
@@ -371,6 +404,10 @@ export const CaptureOverlay: React.FC = () => {
   const [moving, setMoving] = useState(false);
   const [movingText, setMovingText] = useState(false);
   const [tipAt, setTipAt] = useState<Point | null>(null);
+  const [pickMode, setPickMode] = useState<CaptureMode>('region');
+  const [hoverTarget, setHoverTarget] = useState<Rect | null>(null);
+  const modeBarRef = useRef<HTMLDivElement>(null);
+  const [modeBarBox, setModeBarBox] = useState({ width: 176, height: 40 });
   const draftRef = useRef<Mark | null>(null);
   const dragRef = useRef<
     | { kind: 'create'; origin: Point; current: Point }
@@ -404,12 +441,13 @@ export const CaptureOverlay: React.FC = () => {
         setSession(null);
         setSelection(null);
         setCommitted(false);
+        setPickMode('region');
+        setHoverTarget(null);
         setMarks([]);
         draftRef.current = null;
         setTipAt(null);
         return;
       }
-      const preset = next.preset && next.preset.width > 4 ? next.preset : null;
       const frame = next.frameUrl || next.dataUrl || '';
       if (frameKeyRef.current !== frame) {
         frameKeyRef.current = frame;
@@ -418,12 +456,14 @@ export const CaptureOverlay: React.FC = () => {
         setDimIn(false);
       }
       setSession(next);
+      setPickMode(next.captureMode || 'region');
+      setHoverTarget(null);
       setColorsOpen(false);
-      setSelection(preset);
-      setCommitted(Boolean(preset));
+      setSelection(null);
+      setCommitted(false);
       setMarks([]);
       draftRef.current = null;
-      setTipAt(preset ? null : (next.hintAt || next.cursor || null));
+      setTipAt(next.hintAt || next.cursor || null);
     };
     if (!window.electron?.onScreenshotSession) {
       apply(demoSession());
@@ -529,6 +569,8 @@ export const CaptureOverlay: React.FC = () => {
   const label = COPY[session?.language || 'pt'];
   const bounds = { width: session?.width || 0, height: session?.height || 0 };
   const showBar = Boolean(session) && committed && Boolean(selection);
+  const showModeBar = Boolean(session) && !committed && !closing;
+  const focusRect = selection || (!committed ? hoverTarget : null);
 
   useLayoutEffect(() => {
     const bar = barRef.current;
@@ -536,6 +578,13 @@ export const CaptureOverlay: React.FC = () => {
     const next = { width: bar.offsetWidth, height: bar.offsetHeight };
     setBarBox((current) => (current.width === next.width && current.height === next.height ? current : next));
   }, [showBar, tool, color, size, status, colorsOpen]);
+
+  useLayoutEffect(() => {
+    const bar = modeBarRef.current;
+    if (!bar) return;
+    const next = { width: bar.offsetWidth, height: bar.offsetHeight };
+    setModeBarBox((current) => (current.width === next.width && current.height === next.height ? current : next));
+  }, [showModeBar, pickMode]);
 
   const pointFrom = (event: { clientX: number; clientY: number }): Point => {
     const stage = stageRef.current;
@@ -596,7 +645,46 @@ export const CaptureOverlay: React.FC = () => {
     return renderSelection(imageRef.current, selection, marks, session.cursor, session.format, session.quality);
   }, [marks, selection, session]);
 
-  const run = useCallback(async (action: 'copy' | 'save' | 'pin' | 'wheel' | 'cancel') => {
+  const commitRect = useCallback((rect: Rect) => {
+    const next = clampRect(rect, bounds);
+    if (next.width < 6 || next.height < 6) return;
+    selectionRef.current = next;
+    setSelection(next);
+    setCommitted(true);
+    setHoverTarget(null);
+    remember(next);
+    if (session?.copyOnSelect && imageRef.current) {
+      void renderSelection(imageRef.current, next, marks, session.cursor, session.format, session.quality)
+        .then((shot) => {
+          if (session.demo) return;
+          return window.electron?.screenshotAction?.({
+            action: 'copy',
+            dataUrl: shot.dataUrl,
+            pngDataUrl: shot.pngDataUrl,
+            width: next.width,
+            height: next.height,
+          });
+        })
+        .then(() => setStatus(label.copied))
+        .catch(() => undefined);
+    }
+  }, [bounds, label.copied, marks, session]);
+
+  const chooseMode = useCallback((next: CaptureMode) => {
+    setPickMode(next);
+    setHoverTarget(null);
+    setSelection(null);
+    setCommitted(false);
+    setTipAt(null);
+    if (!session?.demo) {
+      void window.electron?.screenshotAction?.({ action: 'rememberMode', mode: next });
+    }
+    if (next === 'region' && session?.preset && session.preset.width > 4) {
+      commitRect(session.preset);
+    }
+  }, [commitRect, session?.demo, session?.preset]);
+
+  const run = useCallback(async (action: 'copy' | 'save' | 'pin' | 'wheel' | 'cancel' | 'ocr') => {
     if (action === 'cancel') {
       if (session?.demo) {
         setSelection(null);
@@ -627,6 +715,20 @@ export const CaptureOverlay: React.FC = () => {
     }
     const shot = await exportShot();
     if (!shot || !selection) return;
+    if (action === 'ocr') {
+      if (session?.demo) {
+        setStatus(label.ocrCopied);
+        return;
+      }
+      const result = await window.electron?.screenshotAction?.({
+        action: 'ocr',
+        dataUrl: shot.dataUrl,
+        pngDataUrl: shot.pngDataUrl,
+      });
+      if (result?.empty) setStatus(label.noText);
+      else if (result?.ok) setStatus(label.ocrCopied);
+      return;
+    }
     if (session?.demo) {
       const link = document.createElement('a');
       link.href = shot.dataUrl;
@@ -648,7 +750,7 @@ export const CaptureOverlay: React.FC = () => {
       return;
     }
     if (action === 'save') setStatus(label.saved);
-  }, [exportShot, label.saved, selection, session?.demo]);
+  }, [exportShot, label.noText, label.ocrCopied, label.saved, selection, session?.demo]);
 
   const textCancelRef = useRef(false);
   const clearTextDraft = useCallback(() => {
@@ -748,6 +850,11 @@ export const CaptureOverlay: React.FC = () => {
         void run('cancel');
       }
       if (typing) return;
+      if (!committed && (event.key === '1' || event.key === '2' || event.key === '3')) {
+        event.preventDefault();
+        chooseMode(event.key === '1' ? 'region' : event.key === '2' ? 'window' : 'full');
+        return;
+      }
       if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 'z' && !event.shiftKey) {
         event.preventDefault();
         undo();
@@ -763,13 +870,21 @@ export const CaptureOverlay: React.FC = () => {
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [cancelText, run, undo]);
+  }, [cancelText, chooseMode, committed, run, undo]);
 
   const onPointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
     if (!session || event.button !== 0) return;
     setColorsOpen(false);
     setShapesOpen(false);
     const point = pointFrom(event);
+    if (!committed && (pickMode === 'window' || pickMode === 'full')) {
+      event.preventDefault();
+      const target = pickMode === 'window'
+        ? (hoverTarget || hitRect(session.windows, point))
+        : (hoverTarget || hitRect(session.captureMonitors || session.monitors, point));
+      if (target) commitRect(target);
+      return;
+    }
     const textHit = !textAt && selection && inside(point, selection) ? hitText(point, marks) : -1;
     if (textHit >= 0) {
       event.preventDefault();
@@ -843,7 +958,15 @@ export const CaptureOverlay: React.FC = () => {
     const drag = dragRef.current;
     const point = pointFrom(event);
     if (!drag) {
-      if (!selection) setTipAt(point);
+      if (!committed && pickMode === 'window') {
+        const nextHover = hitRect(session?.windows, point);
+        setHoverTarget((current) => current === nextHover ? current : nextHover);
+        setTipAt(point);
+      } else if (!committed && pickMode === 'full') {
+        const nextHover = hitRect(session?.captureMonitors || session?.monitors, point);
+        setHoverTarget((current) => current === nextHover ? current : nextHover);
+        setTipAt(point);
+      } else if (!selection) setTipAt(point);
       else if (tipAt) setTipAt(null);
       if (hoverHandle) {
         setHoverMove(false);
@@ -1023,7 +1146,18 @@ export const CaptureOverlay: React.FC = () => {
   const editingMark = textEditIndex != null ? marks[textEditIndex] : null;
   const textColor = editingMark?.tool === 'text' ? editingMark.color : color;
 
-  const stageCursor = movingText
+  const cursorMonitor = (() => {
+    const monitors = session.monitors && session.monitors.length
+      ? session.monitors
+      : [{ x: 0, y: 0, width: bounds.width, height: bounds.height }];
+    const at = tipAt || session.hintAt || session.cursor || { x: bounds.width / 2, y: 8 };
+    return hitRect(monitors, at) || monitors[0];
+  })();
+  const modeBarPos = barAtTop(cursorMonitor, modeBarBox.width, modeBarBox.height, 12);
+
+  const stageCursor = !committed && pickMode !== 'region'
+    ? 'default'
+    : movingText
     ? 'grabbing'
     : hoverText
       ? 'grab'
@@ -1086,11 +1220,11 @@ export const CaptureOverlay: React.FC = () => {
       <canvas ref={canvasRef} style={{ clipPath: selection ? `inset(${selection.y}px ${Math.max(0, bounds.width - selection.x - selection.width)}px ${Math.max(0, bounds.height - selection.y - selection.height)}px ${selection.x}px)` : undefined }} />
       <canvas ref={draftCanvasRef} style={{ clipPath: selection ? `inset(${selection.y}px ${Math.max(0, bounds.width - selection.x - selection.width)}px ${Math.max(0, bounds.height - selection.y - selection.height)}px ${selection.x}px)` : undefined }} />
       <div ref={veilRef} className={`cap-veil${dimIn ? ' is-in' : ''}`}>
-        {(selection ? [
-          { x: 0, y: 0, width: bounds.width, height: selection.y },
-          { x: 0, y: selection.y + selection.height, width: bounds.width, height: bounds.height - selection.y - selection.height },
-          { x: 0, y: selection.y, width: selection.x, height: selection.height },
-          { x: selection.x + selection.width, y: selection.y, width: bounds.width - selection.x - selection.width, height: selection.height },
+        {(focusRect ? [
+          { x: 0, y: 0, width: bounds.width, height: focusRect.y },
+          { x: 0, y: focusRect.y + focusRect.height, width: bounds.width, height: bounds.height - focusRect.y - focusRect.height },
+          { x: 0, y: focusRect.y, width: focusRect.x, height: focusRect.height },
+          { x: focusRect.x + focusRect.width, y: focusRect.y, width: bounds.width - focusRect.x - focusRect.width, height: focusRect.height },
         ] : [{ x: 0, y: 0, width: bounds.width, height: bounds.height }]).map((rect, index) => (
           <div key={index} className="cap-dim" style={{ transform: `translate(${rect.x}px, ${rect.y}px) scale(${rect.width}, ${rect.height})` }} />
         ))}
@@ -1101,22 +1235,22 @@ export const CaptureOverlay: React.FC = () => {
           style={{
             left: 0,
             top: 0,
-            transform: `translate3d(${Math.min(tipAt.x + 16, Math.max(8, bounds.width - 140))}px, ${Math.min(tipAt.y + 20, Math.max(8, bounds.height - 28))}px, 0)`,
+            transform: `translate3d(${Math.min(tipAt.x + 16, Math.max(8, bounds.width - 220))}px, ${Math.min(tipAt.y + 20, Math.max(8, bounds.height - 28))}px, 0)`,
           }}
         >
-          {label.select}
+          {pickMode === 'window' ? label.pickWindow : pickMode === 'full' ? label.pickFull : label.select}
         </div>
       )}
-      {selection && (
+      {focusRect && (
         <>
-          <div className="cap-sel" style={{ left: 0, top: 0, transform: `translate3d(${selection.x}px, ${selection.y}px, 0)`, width: selection.width, height: selection.height }}>
-            <i className="cap-edge is-horizontal" style={{ transform: `scaleX(${selection.width})` }} />
-            <i className="cap-edge is-horizontal" style={{ transform: `translateY(${selection.height}px) scaleX(${selection.width})` }} />
-            <i className="cap-edge is-vertical" style={{ transform: `scaleY(${selection.height})` }} />
-            <i className="cap-edge is-vertical" style={{ transform: `translateX(${selection.width}px) scaleY(${selection.height})` }} />
-            <span className={`cap-size${selection.y < 28 ? ' is-inside' : ''}`}>{Math.round(selection.width)} × {Math.round(selection.height)}</span>
+          <div className={`cap-sel${committed ? '' : ' is-hover'}`} style={{ left: 0, top: 0, transform: `translate3d(${focusRect.x}px, ${focusRect.y}px, 0)`, width: focusRect.width, height: focusRect.height }}>
+            <i className="cap-edge is-horizontal" style={{ transform: `scaleX(${focusRect.width})` }} />
+            <i className="cap-edge is-horizontal" style={{ transform: `translateY(${focusRect.height}px) scaleX(${focusRect.width})` }} />
+            <i className="cap-edge is-vertical" style={{ transform: `scaleY(${focusRect.height})` }} />
+            <i className="cap-edge is-vertical" style={{ transform: `translateX(${focusRect.width}px) scaleY(${focusRect.height})` }} />
+            <span className={`cap-size${focusRect.y < 28 ? ' is-inside' : ''}`}>{Math.round(focusRect.width)} × {Math.round(focusRect.height)}</span>
           </div>
-          {handles.map((handle) => {
+          {committed && handles.map((handle) => {
             const at = handlePoint(handle);
             return (
               <button
@@ -1139,6 +1273,35 @@ export const CaptureOverlay: React.FC = () => {
             );
           })}
         </>
+      )}
+      {showModeBar && (
+        <div
+          ref={modeBarRef}
+          className="cap-modebar"
+          style={{ left: modeBarPos.x, top: modeBarPos.y }}
+          onPointerDown={(event) => event.stopPropagation()}
+        >
+          {([
+            { id: 'region' as const, label: label.modeRegion, icon: <Square size={16} strokeWidth={1.75} /> },
+            { id: 'window' as const, label: label.modeWindow, icon: <AppWindow size={16} strokeWidth={1.75} /> },
+            { id: 'full' as const, label: label.modeFull, icon: <Maximize size={16} strokeWidth={1.75} /> },
+          ]).map((item) => (
+            <button
+              key={item.id}
+              type="button"
+              className={pickMode === item.id ? 'is-on' : ''}
+              aria-label={item.label}
+              title={item.label}
+              onClick={() => chooseMode(item.id)}
+            >
+              {item.icon}
+            </button>
+          ))}
+          <i className="cap-rule" />
+          <button type="button" aria-label={label.modeClose} title={label.modeClose} onClick={() => void run('cancel')}>
+            <X size={16} strokeWidth={1.75} />
+          </button>
+        </div>
       )}
       {showBar && (
         <div ref={barRef} className="cap-bar" style={{ left: barLeft, top: barTop }} onPointerDown={(event) => event.stopPropagation()}>
@@ -1245,6 +1408,7 @@ export const CaptureOverlay: React.FC = () => {
           </span>
           <i className="cap-rule" />
           <button type="button" aria-label={label.undo} title={label.undo} disabled={marks.length === 0} onClick={undo}><Undo2 size={16} strokeWidth={1.75} /></button>
+          <button type="button" aria-label={label.ocr} title={status === label.ocrCopied || status === label.noText ? status : label.ocr} onClick={() => void run('ocr')}><FileText size={16} strokeWidth={1.75} /></button>
           <button type="button" aria-label={label.copy} title={status === label.copied ? label.copied : label.copy} onClick={() => void run('copy')}><Copy size={16} strokeWidth={1.75} /></button>
           <button type="button" aria-label={label.save} title={status === label.saved ? label.saved : label.save} onClick={() => void run('save')}><Save size={16} strokeWidth={1.75} /></button>
           <button type="button" aria-label={label.cancel} title={label.cancel} onClick={() => void run('cancel')}><X size={16} strokeWidth={1.75} /></button>

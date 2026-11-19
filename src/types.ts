@@ -102,6 +102,8 @@ export interface ScreenshotSettings {
   includeCursor: boolean;
   saveDirectory: string;
   lastRegion: { x: number; y: number; width: number; height: number } | null;
+  /** Retangular / janela / tela inteira — a barra de modos reabre neste. */
+  lastCaptureMode?: "region" | "window" | "full";
   /** A fatia da roda só é oferecida uma vez. Apagar depois não a repõe. */
   wheelSeeded: boolean;
 }
@@ -413,6 +415,7 @@ export interface ElectronAPI {
     frameUrl?: string;
     dataUrl?: string;
     mode: "region" | "window";
+    captureMode?: "region" | "window" | "full";
     width: number;
     height: number;
     preset: { x: number; y: number; width: number; height: number } | null;
@@ -421,12 +424,16 @@ export interface ElectronAPI {
     format: "png" | "jpeg" | "webp";
     quality: number;
     language: "pt" | "en";
+    monitors?: { x: number; y: number; width: number; height: number }[];
+    captureMonitors?: { x: number; y: number; width: number; height: number }[];
+    windows?: { x: number; y: number; width: number; height: number }[];
   } | null>;
   onScreenshotSession?: (
     callback: (session: {
       frameUrl?: string;
       dataUrl?: string;
       mode: "region" | "window";
+      captureMode?: "region" | "window" | "full";
       width: number;
       height: number;
       preset: { x: number; y: number; width: number; height: number } | null;
@@ -435,19 +442,26 @@ export interface ElectronAPI {
       format: "png" | "jpeg" | "webp";
       quality: number;
       language: "pt" | "en";
+      monitors?: { x: number; y: number; width: number; height: number }[];
+      captureMonitors?: { x: number; y: number; width: number; height: number }[];
+      windows?: { x: number; y: number; width: number; height: number }[];
     } | null) => void,
   ) => () => void;
   onScreenshotVisible?: (callback: () => void) => () => void;
   screenshotAction?: (payload: {
-    action: "copy" | "save" | "pin" | "wheel" | "cancel" | "remember" | "ready" | "painted";
+    action: "copy" | "save" | "pin" | "wheel" | "cancel" | "remember" | "rememberMode" | "ready" | "painted" | "ocr";
     dataUrl?: string;
     pngDataUrl?: string;
     width?: number;
     height?: number;
+    mode?: "region" | "window" | "full";
     region?: { x: number; y: number; width: number; height: number } | null;
-  }) => Promise<{ ok: boolean; error?: string; file?: string }>;
+  }) => Promise<{ ok: boolean; error?: string; file?: string; empty?: boolean; text?: string }>;
   onScreenshotRemember?: (
     callback: (region: { x: number; y: number; width: number; height: number }) => void,
+  ) => () => void;
+  onScreenshotRememberMode?: (
+    callback: (mode: "region" | "window" | "full") => void,
   ) => () => void;
   startPreview?: (filePath: string) => Promise<{ ok: boolean; error?: string }>;
 }

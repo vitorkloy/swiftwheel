@@ -7,7 +7,8 @@
 //   e mostra na hora uma janela topmost sem ativação que pinta exatamente esse frame 1:1.
 //   O Electron abre por cima com o mesmo frame e só então esta janela some: zero salto.
 // Protocolo (linhas): stdin  bind <accel>=<mode>;...  | grab <mode> | armed 0|1 | hide | quit
-//                     stdout ready | shot <mode> <path> <x> <y> <w> <h> | esc | log <txt>
+//                     stdout ready | shot <mode> <x> <y> <w> <h> <grabMs> <shownMs> <file>
+//                            win <x> <y> <w> <h> (físico, z-order) | wins-end | esc | log <txt>
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -46,11 +47,21 @@ static class VorCapture
     [DllImport("gdi32.dll")] static extern bool DeleteDC(IntPtr dc);
     [DllImport("user32.dll", EntryPoint = "GetWindowLongPtrW")] static extern IntPtr GetWindowLongPtr(IntPtr h, int i);
     [DllImport("user32.dll", EntryPoint = "SetWindowLongPtrW")] static extern IntPtr SetWindowLongPtr(IntPtr h, int i, IntPtr v);
+    [DllImport("user32.dll")] static extern int GetWindowLong(IntPtr h, int i);
     [DllImport("dwmapi.dll")] static extern int DwmSetWindowAttribute(IntPtr h, int a, ref int v, int s);
+    [DllImport("dwmapi.dll")] static extern int DwmGetWindowAttribute(IntPtr h, int a, out int v, int s);
+    [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc p, IntPtr l);
+    [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
+    [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
+    [DllImport("user32.dll")] static extern bool GetWindowRect(IntPtr h, out RECT r);
+    [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern int GetClassName(IntPtr h, System.Text.StringBuilder s, int n);
+    [DllImport("user32.dll")] static extern uint GetWindowThreadProcessId(IntPtr h, out uint pid);
 
     [StructLayout(LayoutKind.Sequential)] struct MSG { public IntPtr h; public uint msg; public IntPtr w; public IntPtr l; public uint t; public int x; public int y; }
     [StructLayout(LayoutKind.Sequential)] struct KBD { public uint vk; public uint scan; public uint flags; public uint time; public IntPtr extra; }
+    [StructLayout(LayoutKind.Sequential)] struct RECT { public int left, top, right, bottom; }
     delegate IntPtr HookProc(int code, IntPtr w, IntPtr l);
+    delegate bool EnumProc(IntPtr h, IntPtr l);
 
     static readonly object outLock = new object();
     static StreamWriter output;
@@ -233,13 +244,9 @@ static class VorCapture
             BitBlt(memDc, 0, 0, w, h, screenDc, x, y, 0x00CC0020 | 0x40000000); // SRCCOPY | CAPTUREBLT
             ReleaseDC(IntPtr.Zero, screenDc);
             long grabMs = sw.ElapsedMilliseconds;
-            if (mode == "full")
-            {
-                using (var full = Snapshot()) Clipboard.SetImage(full);
-                ReleaseFrame();
-                Emit("full " + grabMs);
-                return;
-            }
+            // Tela cheia também congela: a barra de modos escolhe o monitor com um clique,
+            // e a barra não pode ir para o bitmap (é o overlay Electron por cima).
+            var windows = ListCaptureWindows();
             // Mostra o frame congelado já: posição e tamanho em pixels físicos, sem ativar; pinta com BitBlt.
             SetWindowPos(form.Handle, new IntPtr(-1), x, y, w, h, 0x0010 | 0x0040); // NOACTIVATE | SHOWWINDOW
             form.Invalidate(); form.Update();
@@ -253,6 +260,9 @@ static class VorCapture
             bmp.Dispose();
             armed = true; // fecha a janela até o Node mandar "armed 1"; o close manda "armed 0"
             Emit("shot " + mode + " " + x + " " + y + " " + w + " " + h + " " + grabMs + " " + shownMs + " " + file);
+            foreach (var r in windows)
+                Emit("win " + r.left + " " + r.top + " " + (r.right - r.left) + " " + (r.bottom - r.top));
+            Emit("wins-end");
         }
         catch (Exception e) { Emit("log grab-error " + e.Message.Replace('\n', ' ')); HideFreeze(); }
     }
@@ -270,6 +280,36 @@ static class VorCapture
     {
         ShowWindow(form.Handle, 0);
         ReleaseFrame();
+    }
+
+    /// Top-level visíveis, z-order do topo para baixo. Sem barra de tarefas, desktop nem a janela de freeze.
+    static List<RECT> ListCaptureWindows()
+    {
+        var list = new List<RECT>();
+        uint self = (uint)Process.GetCurrentProcess().Id;
+        EnumWindows((h, l) =>
+        {
+            if (form != null && h == form.Handle) return true;
+            if (!IsWindowVisible(h) || IsIconic(h)) return true;
+            uint pid;
+            GetWindowThreadProcessId(h, out pid);
+            if (pid == self) return true;
+            int cloaked = 0;
+            DwmGetWindowAttribute(h, 14, out cloaked, 4); // DWMWA_CLOAKED
+            if (cloaked != 0) return true;
+            int ex = GetWindowLong(h, -20);
+            if ((ex & 0x80) != 0) return true; // WS_EX_TOOLWINDOW — fora do Alt+Tab
+            var cls = new System.Text.StringBuilder(64);
+            GetClassName(h, cls, 64);
+            string name = cls.ToString();
+            if (name == "Progman" || name == "WorkerW" || name == "Shell_TrayWnd" || name == "Shell_SecondaryTrayWnd") return true;
+            RECT r;
+            if (!GetWindowRect(h, out r)) return true;
+            if (r.right - r.left < 8 || r.bottom - r.top < 8) return true;
+            list.Add(r);
+            return true;
+        }, IntPtr.Zero);
+        return list;
     }
 
     /// Gancho de teste: janela oculta "VorCaptureTestHook". WM_APP+1 abre a captura de região e

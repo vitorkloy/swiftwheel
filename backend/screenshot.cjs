@@ -16,6 +16,14 @@ const {
   protocol,
   screen,
 } = require("electron");
+const {
+  overlayMonitors,
+  mapWindowsToOverlay,
+  mapDisplaysToOverlay,
+  resolveStartMode,
+  normalizeCaptureMode,
+} = require("./capture-mode.cjs");
+const { recognizeDataUrl, ocrOutcome } = require("./ocr.cjs");
 
 const DEFAULT_SCREENSHOT = {
   enabled: true,
@@ -30,6 +38,7 @@ const DEFAULT_SCREENSHOT = {
   includeCursor: false,
   saveDirectory: "",
   lastRegion: null,
+  lastCaptureMode: "region",
   wheelSeeded: false,
 };
 
@@ -139,6 +148,8 @@ function installScreenshot(ctx) {
   let helperUp = false;
   let helperRestarts = 0;
   let helperBindSpec = "";
+  /** @type {{ parts: string[], windows: { x: number, y: number, width: number, height: number }[] } | null} */
+  let pendingHelperShot = null;
   /** @type {Map<string, "region" | "full" | "window">} */
   let shortcutBindings = new Map();
   let shortcutListener = null;
@@ -411,39 +422,6 @@ function installScreenshot(ctx) {
     }
   };
 
-  const activeWindowRect = async (origin, virtual) => {
-    const getActive = ctx.getActiveWin();
-    if (!getActive) return null;
-    let info = null;
-    try { info = await getActive(); } catch { return null; }
-    const bounds = info && info.bounds;
-    if (!bounds || !Number.isFinite(bounds.width) || bounds.width < 8) return null;
-    if (info.owner?.processId === process.pid) return null;
-    let { x, y, width, height } = bounds;
-    const nearest = screen.getDisplayNearestPoint({
-      x: Math.round(x + width / 2),
-      y: Math.round(y + height / 2),
-    });
-    const scale = nearest.scaleFactor || 1;
-    if (scale > 1 && (width > nearest.bounds.width * 1.25 || height > nearest.bounds.height * 1.25)) {
-      x /= scale;
-      y /= scale;
-      width /= scale;
-      height /= scale;
-    }
-    const left = Math.max(virtual.x, x);
-    const top = Math.max(virtual.y, y);
-    const right = Math.min(virtual.x + virtual.width, x + width);
-    const bottom = Math.min(virtual.y + virtual.height, y + height);
-    if (right - left < 8 || bottom - top < 8) return null;
-    return {
-      x: Math.round(left - origin.x),
-      y: Math.round(top - origin.y),
-      width: Math.round(right - left),
-      height: Math.round(bottom - top),
-    };
-  };
-
   const attachShellLifecycle = (win) => {
     win.removeMenu();
     win.on("closed", () => {
@@ -593,9 +571,62 @@ function installScreenshot(ctx) {
     }, 700);
   };
 
+  const dipToScreenRect = (bounds) => {
+    if (typeof screen.dipToScreenRect !== "function") return null;
+    try { return screen.dipToScreenRect(null, bounds); } catch { return null; }
+  };
+
+  const sessionGeometry = (virtual, point, physWindows, virtPhys) => {
+    const overlaySize = { width: virtual.bounds.width, height: virtual.bounds.height };
+    const cursor = {
+      x: point.x - virtual.origin.x,
+      y: point.y - virtual.origin.y,
+    };
+    const monitors = overlayMonitors(virtual.displays, virtual.origin);
+    const mapped = virtPhys
+      ? mapDisplaysToOverlay(virtual.displays, virtual.origin, virtPhys, overlaySize, dipToScreenRect)
+      : monitors.map((dip) => ({ dip, image: dip }));
+    const captureMonitors = mapped.map((item) => item.image);
+    const windows = virtPhys
+      ? mapWindowsToOverlay(physWindows || [], virtPhys, overlaySize)
+      : (physWindows || []);
+    return { cursor, monitors, captureMonitors, windows };
+  };
+
+  const buildSession = (cfg, mode, geometry, extra) => {
+    const language = ctx.language() === "pt" ? "pt" : "en";
+    const captureMode = normalizeCaptureMode(mode);
+    let preset = extra && extra.preset != null ? extra.preset : null;
+    if (captureMode === "region" && cfg.rememberRegion && cfg.lastRegion) preset = cfg.lastRegion;
+    else if (captureMode !== "region") preset = null;
+    return {
+      frameUrl: extra && extra.frameUrl,
+      mode: captureMode === "window" ? "window" : "region",
+      captureMode,
+      width: extra.width,
+      height: extra.height,
+      preset,
+      cursor: cfg.includeCursor ? geometry.cursor : null,
+      hintAt: geometry.cursor,
+      copyOnSelect: !!cfg.copyOnSelect,
+      format: cfg.format === "jpeg" || cfg.format === "webp" ? cfg.format : "png",
+      quality: Math.min(100, Math.max(50, Number(cfg.quality) || 92)),
+      language,
+      monitors: geometry.monitors,
+      captureMonitors: geometry.captureMonitors,
+      windows: geometry.windows,
+    };
+  };
+
+  const rememberMode = (mode) => {
+    const next = normalizeCaptureMode(mode);
+    if (typeof ctx.rememberCaptureMode === "function") ctx.rememberCaptureMode(next);
+  };
+
   const capture = async (mode) => {
     const cfg = settings();
     if (cfg.enabled === false) return;
+    const pick = resolveStartMode(mode, cfg.lastCaptureMode);
     if (busy && Date.now() - busySince > 5000) {
       ctx.diagLog("[Screenshot] busy preso há >5 s, a recuperar");
       busy = false;
@@ -607,12 +638,13 @@ function installScreenshot(ctx) {
       ctx.diagLog("[Screenshot] overlay preso sem sessão ativa, a recuperar");
       closeOverlay();
     }
+    rememberMode(pick);
     if (helperReady()) {
       // Caminho nativo: o helper congela a tela e responde com "shot".
       busy = true;
       busySince = Date.now();
       ctx.setGrabbing(true);
-      helperSend(`grab ${mode}`);
+      helperSend(`grab ${pick}`);
       return;
     }
     busy = true;
@@ -622,44 +654,18 @@ function installScreenshot(ctx) {
     try {
       const point = screen.getCursorScreenPoint();
       const virtual = virtualDesktopBounds();
-      const cursor = {
-        x: point.x - virtual.origin.x,
-        y: point.y - virtual.origin.y,
-      };
-      let preset = null;
-      if (mode === "window") preset = await activeWindowRect(virtual.origin, virtual.bounds);
-      else if (mode === "region" && cfg.rememberRegion && cfg.lastRegion) preset = cfg.lastRegion;
-
-      const shellPromise = mode === "full"
-        ? Promise.resolve(null)
-        : takeOverlayShell(virtual.bounds);
       hideOurWindows();
       const t0 = Date.now();
-      const { image, png, bounds } = await grabVirtualDesktop();
+      const { png, bounds } = await grabVirtualDesktop();
       grabMs = Date.now() - t0;
       openedAt = Date.now();
-      shell = await shellPromise;
-
-      if (mode === "full") {
-        clipboard.writeImage(image);
-        toast(ctx.language() === "pt" ? "Tela copiada." : "Screen copied.");
-        return;
-      }
-
-      const language = ctx.language() === "pt" ? "pt" : "en";
-      await openOverlay(bounds, {
+      shell = await takeOverlayShell(virtual.bounds);
+      const geometry = sessionGeometry(virtual, point, [], null);
+      await openOverlay(bounds, buildSession(cfg, pick, geometry, {
         frameUrl: publishFrame(png),
-        mode: mode === "window" ? "window" : "region",
         width: bounds.width,
         height: bounds.height,
-        preset,
-        cursor: cfg.includeCursor ? cursor : null,
-        hintAt: cursor,
-        copyOnSelect: !!cfg.copyOnSelect,
-        format: cfg.format === "jpeg" || cfg.format === "webp" ? cfg.format : "png",
-        quality: Math.min(100, Math.max(50, Number(cfg.quality) || 92)),
-        language,
-      }, shell);
+      }), shell);
     } catch (e) {
       ctx.diagLog(`[Screenshot] ${e.message}`);
       toast(ctx.language() === "pt" ? "Não foi possível capturar a tela." : "Could not capture the screen.");
@@ -685,7 +691,7 @@ function installScreenshot(ctx) {
     if (!helperReady()) return;
     try { helper.stdin.write(`${line}\n`); } catch { /* ignore */ }
   };
-  const onHelperShot = async (parts) => {
+  const onHelperShot = async (parts, physWindows) => {
     // shot <mode> <x> <y> <w> <h> <grabMs> <shownMs> <file...>
     const mode = parts[1];
     if (overlayActive) {
@@ -703,26 +709,21 @@ function installScreenshot(ctx) {
       hideOurWindows();
       const virtual = virtualDesktopBounds();
       const point = screen.getCursorScreenPoint();
-      const cursor = { x: point.x - virtual.origin.x, y: point.y - virtual.origin.y };
-      let preset = null;
-      if (mode === "window") preset = await activeWindowRect(virtual.origin, virtual.bounds);
-      else if (mode === "region" && cfg.rememberRegion && cfg.lastRegion) preset = cfg.lastRegion;
+      const virtPhys = {
+        x: Number(parts[2]) || 0,
+        y: Number(parts[3]) || 0,
+        width: Number(parts[4]) || virtual.bounds.width,
+        height: Number(parts[5]) || virtual.bounds.height,
+      };
+      const geometry = sessionGeometry(virtual, point, physWindows || [], virtPhys);
       const shell = await takeOverlayShell(virtual.bounds);
       frameFile = file;
       helperSend("armed 1");
-      await openOverlay(virtual.bounds, {
+      await openOverlay(virtual.bounds, buildSession(cfg, mode, geometry, {
         frameUrl: `vor-shot://frame/${Date.now()}`,
-        mode: mode === "window" ? "window" : "region",
         width: virtual.bounds.width,
         height: virtual.bounds.height,
-        preset,
-        cursor: cfg.includeCursor ? cursor : null,
-        hintAt: cursor,
-        copyOnSelect: !!cfg.copyOnSelect,
-        format: cfg.format === "jpeg" || cfg.format === "webp" ? cfg.format : "png",
-        quality: Math.min(100, Math.max(50, Number(cfg.quality) || 92)),
-        language: ctx.language() === "pt" ? "pt" : "en",
-      }, shell);
+      }), shell);
     } catch (e) {
       ctx.diagLog(`[Screenshot] nativo: ${e.message}`);
       helperSend("hide");
@@ -758,11 +759,28 @@ function installScreenshot(ctx) {
           if (overlayHwnd) helperSend(`toolwindow ${overlayHwnd}`);
         } else if (parts[0] === "status") {
           onHelperStatus(line);
-        } else if (parts[0] === "shot") void onHelperShot(parts);
-        else if (parts[0] === "full") {
-          busy = false;
-          ctx.setGrabbing(false);
-          toast(ctx.language() === "pt" ? "Tela copiada." : "Screen copied.");
+        } else if (parts[0] === "shot") {
+          const shotParts = parts;
+          pendingHelperShot = { parts: shotParts, windows: [] };
+          // Helper antigo sem wins-end: não deixar a captura pendurada.
+          setTimeout(() => {
+            if (pendingHelperShot && pendingHelperShot.parts === shotParts) {
+              const pending = pendingHelperShot;
+              pendingHelperShot = null;
+              void onHelperShot(pending.parts, pending.windows);
+            }
+          }, 120);
+        } else if (parts[0] === "win" && pendingHelperShot) {
+          pendingHelperShot.windows.push({
+            x: Number(parts[1]) || 0,
+            y: Number(parts[2]) || 0,
+            width: Number(parts[3]) || 0,
+            height: Number(parts[4]) || 0,
+          });
+        } else if (parts[0] === "wins-end") {
+          const pending = pendingHelperShot;
+          pendingHelperShot = null;
+          if (pending) void onHelperShot(pending.parts, pending.windows);
         } else if (parts[0] === "esc") {
           if (overlay && !overlay.isDestroyed()) closeOverlay();
           else helperSend("hide");
@@ -954,6 +972,28 @@ function installScreenshot(ctx) {
         }
         return { ok: true };
       }
+      if (action === "rememberMode") {
+        rememberMode(payload.mode);
+        return { ok: true };
+      }
+      if (action === "ocr") {
+        const language = ctx.language() === "pt" ? "pt" : "en";
+        try {
+          const text = await recognizeDataUrl(payload.pngDataUrl || payload.dataUrl, {
+            language,
+            helperPath: ctx.ocrHelperPath,
+          });
+          const outcome = ocrOutcome(text, language);
+          if (outcome.ok) clipboard.writeText(outcome.text);
+          toast(outcome.toast);
+          return { ok: outcome.ok, empty: outcome.empty, text: outcome.text };
+        } catch (error) {
+          ctx.diagLog(`[Screenshot] ocr: ${error.message}`);
+          const failed = language === "pt" ? "Não foi possível ler o texto." : "Could not read the text.";
+          toast(failed);
+          return { ok: false, error: error.message };
+        }
+      }
       if (action === "copy") {
         copyImage(payload.pngDataUrl || payload.dataUrl);
         toast(ctx.language() === "pt" ? "Captura copiada." : "Capture copied.");
@@ -986,8 +1026,7 @@ function installScreenshot(ctx) {
   ctx.ipcMain.handle("screenshot-pending", () => pendingSession);
 
   ctx.ipcMain.handle("start-screenshot", async (_event, mode) => {
-    const next = mode === "full" || mode === "window" ? mode : "region";
-    await capture(next);
+    await capture(mode);
     return { ok: true };
   });
 
