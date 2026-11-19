@@ -207,6 +207,8 @@ const PT: Record<string, string> = {
   'Middle button (Wheel), in Click or Hold, plus Alt+Z.': 'Botão do meio (Roda), em Clique ou Segurar, mais Alt+Z.',
   'File wheel': 'Roda de arquivos',
   'Drag a file more than 12 px and hold Shift, Ctrl, or Alt. Those keys alone do not open the app wheel.': 'Arraste um arquivo mais de 12 px e mantenha Shift, Ctrl ou Alt. Essas teclas sozinhas não abrem a roda de apps.',
+  'Hold to open': 'Tempo para abrir',
+  'How long to hold Shift, Ctrl or Alt while dragging before the file wheel opens. A ring fills at the cursor; release cancels.': 'Quanto tempo segurar Shift, Ctrl ou Alt ao arrastar antes da roda abrir. Um anel enche no cursor; soltar cancela.',
   Keyboard: 'Teclado',
   'Global shortcut': 'Atalho global',
   'Open the wheel over any application.': 'Abre a roda por cima de qualquer aplicação.',
@@ -702,6 +704,12 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
           choices: [{ value: 'shift', label: 'Shift' }, { value: 'ctrl', label: 'Ctrl' }, { value: 'alt', label: 'Alt' }],
           onChange: (value) => assignFileWheelKey('actions', value as 'shift' | 'ctrl' | 'alt'),
         },
+        range('file-hold', 'File wheel', 'Hold to open', 'How long to hold Shift, Ctrl or Alt while dragging before the file wheel opens. A ring fills at the cursor; release cancels.',
+          config.fileWheelHoldMs ?? 300, 80, 800, (value) => {
+            const fileWheelHoldMs = Math.round(value);
+            update('fileWheelHoldMs', fileWheelHoldMs);
+            window.electron?.setSettings?.({ fileWheelHoldMs, globalShortcut: config.globalShortcut });
+          }, (value) => `${Math.round(value)} ms`, 10),
       ],
       appearance: [
         {

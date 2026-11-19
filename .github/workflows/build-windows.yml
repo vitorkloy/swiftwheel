@@ -69,6 +69,7 @@ jobs:
           npm run test:persistence-shape
           npm run test:win32-launch
           npm run test:preview
+          npm run test:file-wheel
       - name: Unix platform tests
         if: runner.os != 'Windows'
         run: npm run test:platform-unix

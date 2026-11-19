@@ -34,9 +34,23 @@ export function filePetalIndexAt(dx: number, dy: number, count: number): number 
   return ((index % count) + count) % count;
 }
 
-/** Raio do buraco central em píxeis (viewBox −126…126 desenhado a 200px). */
-export function filePetalDeadZonePx(): number {
-  return Math.ceil(M.inner * (200 / 252)) + 2;
+const FILE_PETAL_BASE_SIZE = 200;
+
+function clampPetalScale(scale: number): number {
+  if (!Number.isFinite(scale)) return 1;
+  return Math.max(0.7, Math.min(1.4, scale));
+}
+
+/** Raio do buraco central em píxeis (viewBox −126…126 desenhado a 200px × escala). */
+export function filePetalDeadZonePx(scale = 1): number {
+  const size = FILE_PETAL_BASE_SIZE * clampPetalScale(scale);
+  return Math.ceil(M.inner * (size / 252)) + 2;
+}
+
+/** Raio visual (disco + rótulos) para máscara circular e clamp à área visível. */
+export function filePetalVisualRadiusPx(scale = 1): number {
+  const size = FILE_PETAL_BASE_SIZE * clampPetalScale(scale);
+  return Math.ceil((size / 2) * 1.32);
 }
 
 function fmt(radius: number, angle: number): string {
@@ -95,6 +109,8 @@ interface FilePetalWheelProps {
   theme?: 'black' | 'white';
   /** 1 = sólido; < 1 = vidro. */
   surfaceAlpha?: number;
+  /** Escala da roda (Definições → Arquivos). */
+  scale?: number;
 }
 
 function readableOn(hex: string): string {
@@ -132,9 +148,9 @@ function palette(theme: 'black' | 'white', accentIn: string, alpha: number) {
  * separadas por um vão, brilho interno no topo, fatia apontada cheia no acento e hub em pílula.
  * Só `transform`/`opacity` animam (60 fps); entrada com leve overshoot, saída curta.
  */
-export function FilePetalWheel({ items, activeIndex, centerActive, formatLabel, bloom, accent = '#FFFFFF', theme = 'black', surfaceAlpha = 0.8 }: FilePetalWheelProps) {
+export function FilePetalWheel({ items, activeIndex, centerActive, formatLabel, bloom, accent = '#FFFFFF', theme = 'black', surfaceAlpha = 0.8, scale: scaleProp = 1 }: FilePetalWheelProps) {
   const count = items.length;
-  const size = 200;
+  const size = FILE_PETAL_BASE_SIZE * clampPetalScale(scaleProp);
   const scale = size / 252;
   const P = palette(theme, accent, surfaceAlpha);
   const shell: React.CSSProperties = {
@@ -182,7 +198,7 @@ export function FilePetalWheel({ items, activeIndex, centerActive, formatLabel, 
 
   return (
     <div className="absolute left-0 top-0 pointer-events-none" style={shell}>
-      <svg viewBox="-126 -126 252 252" width={size} height={size} aria-hidden style={{ overflow: 'visible', filter: `drop-shadow(${P.light ? '0 10px 22px rgba(0,0,0,.16)' : '0 12px 26px rgba(0,0,0,.5)'})` }}>
+      <svg viewBox="-126 -126 252 252" width={size} height={size} aria-hidden style={{ overflow: 'visible' }}>
         <defs>
           <linearGradient id={`${gid}-slice`} x1="0" y1="-1" x2="0" y2="1" gradientUnits="objectBoundingBox">
             <stop offset="0" stopColor={P.sliceTop} />
@@ -193,8 +209,11 @@ export function FilePetalWheel({ items, activeIndex, centerActive, formatLabel, 
             <stop offset="0" stopColor={P.light ? 'rgba(255,255,255,0.9)' : 'rgba(255,255,255,0.06)'} />
             <stop offset="1" stopColor="rgba(255,255,255,0)" />
           </radialGradient>
+          <filter id={`${gid}-shadow`} x="-18%" y="-18%" width="136%" height="136%" colorInterpolationFilters="sRGB">
+            <feDropShadow dx="0" dy="4" stdDeviation="5" floodColor="#000000" floodOpacity={P.light ? 0.22 : 0.45} />
+          </filter>
         </defs>
-        <circle r={M.backdrop} fill={P.disc} />
+        <circle r={M.backdrop} fill={P.disc} filter={`url(#${gid}-shadow)`} />
         <circle r={M.backdrop} fill={`url(#${gid}-disc)`} />
         <circle r={M.backdrop - 0.4} fill="none" stroke={P.discLine} strokeWidth="0.8" />
         {items.map((item, index) => {

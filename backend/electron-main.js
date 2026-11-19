@@ -28,6 +28,14 @@ const win32Launch = require("./win32-launch");
 const unixPlatform = process.platform === "win32" ? null : require("./platform-unix.cjs");
 const { normalizeFullPersistenceBlob } = require("./persistence-normalize.cjs");
 const { detectGameExecutable } = require("./game-detection.cjs");
+const {
+  fileWheelVisualRadiusPx,
+  clampCenterToWorkArea,
+  clampHoldMs,
+} = require("./file-wheel-geometry.cjs");
+/** Espelhado do UIConfig para o gesto da roda de arquivos (main não lê o renderer). */
+let fileWheelUiScale = 1;
+let fileWheelUiHoldMs = 300;
 const { DEFAULT_SCREENSHOT, installScreenshot, createShortcutTracker } = require("./screenshot.cjs");
 const { DEFAULT_PREVIEW, installPreview } = require("./preview.cjs");
 const crypto = require("crypto");
@@ -759,9 +767,17 @@ const MIN_REASONABLE_WINDOWED_H = 360;
  * `workArea` já vem em DIPs, por isso isto cobre 100/125/150/175% de escala do Windows:
  * a 175% em 1080p a área útil ronda 1097×583 DIPs e o rect encolhe em vez de sair do ecrã.
  */
+function displayNearestCursor() {
+  try {
+    return screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  } catch (e) {
+    return screen.getPrimaryDisplay();
+  }
+}
+
 function windowedBoundsForWorkArea() {
   try {
-    const { workArea } = screen.getPrimaryDisplay();
+    const { workArea } = displayNearestCursor();
     const w = Math.min(DEFAULT_WINDOWED_WIDTH, Math.max(MIN_REASONABLE_WINDOWED_W, workArea.width - 80));
     const h = Math.min(DEFAULT_WINDOWED_HEIGHT, Math.max(MIN_REASONABLE_WINDOWED_H, workArea.height - 80));
     return {
@@ -777,6 +793,31 @@ function windowedBoundsForWorkArea() {
       width: DEFAULT_WINDOWED_WIDTH,
       height: DEFAULT_WINDOWED_HEIGHT,
     };
+  }
+}
+
+/** Recoloca o painel windowed no monitor do cursor (launcher / Definições). */
+function moveWindowedBoundsToCursorDisplay() {
+  try {
+    const next = windowedBoundsForWorkArea();
+    const { workArea } = displayNearestCursor();
+    const current = lastWindowedBounds || next;
+    const width = Math.min(
+      Math.max(current.width || next.width, MIN_REASONABLE_WINDOWED_W),
+      workArea.width,
+    );
+    const height = Math.min(
+      Math.max(current.height || next.height, MIN_REASONABLE_WINDOWED_H),
+      workArea.height,
+    );
+    lastWindowedBounds = {
+      width,
+      height,
+      x: Math.round(workArea.x + (workArea.width - width) / 2),
+      y: Math.round(workArea.y + (workArea.height - height) / 2),
+    };
+  } catch (e) {
+    lastWindowedBounds = windowedBoundsForWorkArea();
   }
 }
 
@@ -1249,16 +1290,24 @@ function presentRadialWindow(source = "shortcut", fileWheel = null, anchor = nul
   const followCursor = source === "file" && anchor && Number.isFinite(anchor.x) && Number.isFinite(anchor.y);
   radialAnchorFollowsPoint = followCursor;
 
-  /** A roda de apps fica no centro. A de arquivo nasce no cursor, no monitor do arrasto. */
+  /** A roda de apps fica no centro do monitor do cursor. A de arquivo nasce no arrasto, clampada. */
+  const cursorPoint = screen.getCursorScreenPoint();
   const targetDisplay = followCursor
     ? screen.getDisplayNearestPoint({ x: anchor.x, y: anchor.y })
-    : screen.getPrimaryDisplay();
+    : screen.getDisplayNearestPoint(cursorPoint);
   let radialCenter = followCursor
     ? { x: Math.round(anchor.x), y: Math.round(anchor.y) }
     : {
         x: Math.round(targetDisplay.bounds.x + targetDisplay.bounds.width / 2),
         y: Math.round(targetDisplay.bounds.y + targetDisplay.bounds.height / 2),
       };
+  if (followCursor) {
+    radialCenter = clampCenterToWorkArea(
+      radialCenter,
+      targetDisplay.workArea,
+      fileWheelVisualRadiusPx(fileWheelUiScale),
+    );
+  }
   /**
    * Se o centro real do monitor cabe dentro do HWND do Settings, mantemos o HWND completamente
    * imóvel (sem flash DWM) e desenhamos a roda naquele ponto em coordenadas de cliente. Antes este
@@ -2214,6 +2263,7 @@ function openSettingsFromMainProcess() {
   clearSkipTaskbarHideTimer();
   mainWindow.setSkipTaskbar(false);
   mainWindow.setVisibleOnAllWorkspaces(false);
+  moveWindowedBoundsToCursorDisplay();
   updateWindowSize("windowed");
   mainWindow.setIgnoreMouseEvents(false);
   mainWindow.setOpacity(1);
@@ -2981,6 +3031,11 @@ app.whenReady().then(async () => {
     }
     if (typeof ui.fileWheelScale === "number") {
       currentSettings.fileWheelScale = ui.fileWheelScale;
+      fileWheelUiScale = ui.fileWheelScale;
+    }
+    if (typeof ui.fileWheelHoldMs === "number") {
+      currentSettings.fileWheelHoldMs = ui.fileWheelHoldMs;
+      fileWheelUiHoldMs = clampHoldMs(ui.fileWheelHoldMs);
     }
     if (ui.uiLanguage === "system" || ui.uiLanguage === "en" || ui.uiLanguage === "pt") {
       currentSettings.uiLanguage = ui.uiLanguage;
@@ -4038,6 +4093,98 @@ app.whenReady().then(async () => {
           try { fileDropHelper.stdin.write("hide\n"); } catch { /* ignore */ }
         }, 450);
       };
+      /**
+       * Anel de progresso no cursor: a roda só abre depois de segurar Shift/Ctrl/Alt.
+       * CSS anima; a janela é 56px, ignorada pelo rato, destruída após 60 s ociosa.
+       */
+      let fileHold = null;
+      let fileHoldBlocked = false;
+      let holdRing = null;
+      let holdRingKill = null;
+      const HOLD_RING_SIZE = 56;
+      const HOLD_RING_HTML = `<!doctype html><meta charset="utf-8"><style>
+        :root{--accent:#fff;--track:rgba(255,255,255,.18);--disc:rgba(18,18,20,.42)}
+        [data-theme=white]{--track:rgba(0,0,0,.16);--disc:rgba(250,250,251,.5)}
+        html,body{margin:0;background:transparent;overflow:hidden}
+        .w{width:56px;height:56px;display:grid;place-items:center}
+        svg{display:block;filter:drop-shadow(0 1px 2px rgba(0,0,0,.2))}
+        .disc{fill:var(--disc)}
+        .track{fill:none;stroke:var(--track);stroke-width:2.4}
+        .arc{fill:none;stroke:var(--accent);stroke-width:2.6;stroke-linecap:round;
+          stroke-dasharray:113.1;stroke-dashoffset:113.1;transform:rotate(-90deg);transform-origin:28px 28px}
+        .arc.go{animation:fill var(--ms,300ms) linear forwards}
+        @keyframes fill{to{stroke-dashoffset:0}}
+      </style><div class="w"><svg width="56" height="56" viewBox="0 0 56 56">
+        <circle class="disc" cx="28" cy="28" r="16"/>
+        <circle class="track" cx="28" cy="28" r="18"/>
+        <circle class="arc" id="a" cx="28" cy="28" r="18"/>
+      </svg></div>
+      <script>
+        window.theme=function(a){
+          document.documentElement.dataset.theme=a.theme==='white'?'white':'black';
+          var c=/^#ffffff$/i.test(a.accent||'#ffffff')?(a.theme==='white'?'#101012':'#ffffff'):a.accent;
+          document.documentElement.style.setProperty('--accent',c);
+        };
+        window.play=function(ms){
+          var el=document.getElementById('a');
+          el.style.setProperty('--ms',Math.max(80,ms||300)+'ms');
+          el.classList.remove('go'); void el.offsetWidth; el.classList.add('go');
+        };
+        window.hide=function(){ document.getElementById('a').classList.remove('go'); };
+      </script>`;
+      const placeHoldRing = (x, y) => {
+        if (!holdRing || holdRing.isDestroyed()) return;
+        const size = HOLD_RING_SIZE;
+        try {
+          holdRing.setBounds({ x: Math.round(x - size / 2), y: Math.round(y - size / 2), width: size, height: size });
+        } catch { /* ignore */ }
+      };
+      const hideHoldRing = () => {
+        if (!holdRing || holdRing.isDestroyed()) return;
+        holdRing.webContents.executeJavaScript("window.hide && window.hide()").catch(() => {});
+        try { holdRing.hide(); } catch { /* ignore */ }
+      };
+      const destroyHoldRingLater = () => {
+        if (holdRingKill) clearTimeout(holdRingKill);
+        holdRingKill = setTimeout(() => {
+          holdRingKill = null;
+          try { if (holdRing && !holdRing.isDestroyed()) holdRing.destroy(); } catch { /* ignore */ }
+          holdRing = null;
+        }, 60000);
+      };
+      const showHoldRing = (x, y, ms) => {
+        try {
+          const { BrowserWindow } = require("electron");
+          if (holdRingKill) { clearTimeout(holdRingKill); holdRingKill = null; }
+          const push = () => {
+            if (!holdRing || holdRing.isDestroyed()) return;
+            placeHoldRing(x, y);
+            holdRing.webContents.executeJavaScript(
+              `window.theme && window.theme(${JSON.stringify(vorAppearance)}); window.play && window.play(${Number(ms)})`,
+            ).catch(() => {});
+            if (!holdRing.isVisible()) holdRing.showInactive();
+          };
+          if (!holdRing || holdRing.isDestroyed()) {
+            holdRing = new BrowserWindow({
+              width: HOLD_RING_SIZE, height: HOLD_RING_SIZE,
+              x: Math.round(x - HOLD_RING_SIZE / 2), y: Math.round(y - HOLD_RING_SIZE / 2),
+              frame: false, transparent: true, resizable: false, movable: false, focusable: false,
+              alwaysOnTop: true, skipTaskbar: true, show: false, hasShadow: false,
+              backgroundColor: "#00000000",
+              webPreferences: { contextIsolation: true, sandbox: true, backgroundThrottling: true },
+            });
+            holdRing.setIgnoreMouseEvents(true, { forward: true });
+            holdRing.setAlwaysOnTop(true, "screen-saver");
+            holdRing.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(HOLD_RING_HTML)}`).then(push).catch(() => {});
+          } else push();
+        } catch { /* o anel é só cosmético */ }
+      };
+      const clearFileHold = () => {
+        if (fileHold && fileHold.timer) clearTimeout(fileHold.timer);
+        fileHold = null;
+        hideHoldRing();
+        destroyHoldRingLater();
+      };
       const fileWheelMode = (ev) => {
         const keys = currentSettings.fileWheelKeys || {
           convert: "shift",
@@ -4064,6 +4211,8 @@ app.whenReady().then(async () => {
         return named[code] || named[ev && ev.keycode] || null;
       };
       const releaseFileOverlay = (confirmSelection) => {
+        fileHoldBlocked = false;
+        clearFileHold();
         fileDragOpen = false;
         fileDragPath = "";
         fileDragPaths = [];
@@ -4084,6 +4233,10 @@ app.whenReady().then(async () => {
       const cancelFileWheel = () => releaseFileOverlay();
       const revealFileWheel = (x, y, mode, filePath) => {
         if (!mainWindow || mainWindow.isDestroyed()) return;
+        if (fileHold && fileHold.timer) clearTimeout(fileHold.timer);
+        fileHold = null;
+        hideHoldRing();
+        destroyHoldRingLater();
         const switching = fileDragOpen && mode !== fileDragMode;
         fileDragOpen = true;
         fileDragMode = mode;
@@ -4114,15 +4267,46 @@ app.whenReady().then(async () => {
       setImmediate(() => {
         try { shiftWheels.tools(); } catch { /* a primeira consulta não pode atrasar o gesto */ }
       });
-      const tryOpenHeldFileWheel = () => {
-        if (!fileButtonDown || !fileDragOrigin || fileDragOpen || !fileSourceOk) return;
+      const armFileHold = (mode, x, y) => {
+        if (fileDragOpen || fileHoldBlocked || !mode) return;
+        if (fileHold && fileHold.mode === mode) {
+          placeHoldRing(x, y);
+          return;
+        }
+        clearFileHold();
+        const ms = clampHoldMs(currentSettings.fileWheelHoldMs ?? fileWheelUiHoldMs);
+        fileHold = {
+          mode,
+          timer: setTimeout(() => {
+            fileHold = null;
+            hideHoldRing();
+            destroyHoldRingLater();
+            if (!fileButtonDown || !fileSourceOk || fileHoldBlocked) return;
+            const point = screen.getCursorScreenPoint();
+            revealFileWheel(point.x, point.y, mode, "");
+          }, ms),
+        };
+        showHoldRing(x, y, ms);
+      };
+      const maybeArmFileHold = () => {
+        if (!fileButtonDown || !fileDragOrigin || !fileSourceOk) return;
         const point = screen.getCursorScreenPoint();
         const dx = point.x - fileDragOrigin.x;
         const dy = point.y - fileDragOrigin.y;
         if (dx * dx + dy * dy <= 144) return;
         const mode = fileWheelMode(fileMods);
-        if (!mode) return;
-        revealFileWheel(point.x, point.y, mode, "");
+        if (!mode) {
+          clearFileHold();
+          return;
+        }
+        if (fileDragOpen) {
+          if (mode !== fileDragMode) revealFileWheel(point.x, point.y, mode, fileDragPaths.length ? fileDragPaths : fileDragPath);
+          return;
+        }
+        armFileHold(mode, point.x, point.y);
+      };
+      const tryOpenHeldFileWheel = () => {
+        maybeArmFileHold();
       };
       /** Copia como arquivos (CF_HDROP): colar no Explorer/WhatsApp/e-mail cola os próprios arquivos. */
       const copyFileToClipboard = (target) => {
@@ -4554,45 +4738,41 @@ app.whenReady().then(async () => {
       uIOhook.on("mousemove", (e) => {
         if (!fileButtonDown) return;
         noteFileMods(e);
-        if (!fileDragOrigin || fileDragOpen || !fileSourceOk) return;
-        const dx = e.x - fileDragOrigin.x;
-        const dy = e.y - fileDragOrigin.y;
-        if (dx * dx + dy * dy <= 144) return;
-        const mode = fileWheelMode(e);
-        if (!mode) return;
-        const point = screen.getCursorScreenPoint();
-        revealFileWheel(point.x, point.y, mode, "");
+        if (fileHold) placeHoldRing(e.x, e.y);
+        maybeArmFileHold();
       });
       uIOhook.on("keydown", (e) => {
         const slot = modifierFromEvent(e);
         if (slot) fileMods[slot] = true;
         else noteFileMods(e);
         if (e.keycode === 1) {
+          clearFileHold();
           if (fileDragOpen) cancelFileWheel();
           return;
         }
-        if (!fileDragOrigin || !fileSourceOk) return;
-        const mode = fileWheelMode(e);
-        if (!mode) return;
-        const point = screen.getCursorScreenPoint();
-        if (!fileDragOpen) {
-          const dx = point.x - fileDragOrigin.x;
-          const dy = point.y - fileDragOrigin.y;
-          if (dx * dx + dy * dy <= 144) return;
-          revealFileWheel(point.x, point.y, mode, "");
+        /** Tab / Win / qualquer não-modificador cancela o hold — evita Alt+Tab e Ctrl+Tab. */
+        if (!slot) {
+          if (fileButtonDown && fileSourceOk) {
+            fileHoldBlocked = true;
+            clearFileHold();
+          }
           return;
         }
-        if (mode !== fileDragMode) revealFileWheel(point.x, point.y, mode, fileDragPaths.length ? fileDragPaths : fileDragPath);
+        maybeArmFileHold();
       });
       uIOhook.on("keyup", (e) => {
         const slot = modifierFromEvent(e);
-        if (slot) fileMods[slot] = false;
-        else noteFileMods(e);
+        if (slot) {
+          fileMods[slot] = false;
+          if (!fileMods.shift && !fileMods.ctrl && !fileMods.alt) fileHoldBlocked = false;
+          maybeArmFileHold();
+        } else noteFileMods(e);
       });
       uIOhook.on("mouseup", (e) => {
         if (e.button !== 1) return;
         fileButtonDown = false;
         fileSourceOk = false;
+        fileHoldBlocked = false;
         if (fileDragOpen) {
           try {
             const point = screen.getCursorScreenPoint();
@@ -4600,7 +4780,10 @@ app.whenReady().then(async () => {
             mainWindow?.webContents.send("mmb-release");
           } catch { /* ignore */ }
           releaseFileOverlay(true);
-        } else fileDragOrigin = null;
+        } else {
+          clearFileHold();
+          fileDragOrigin = null;
+        }
       });
       uIOhook.start();
     } catch (e) {
@@ -4904,6 +5087,11 @@ app.whenReady().then(async () => {
     }
     if (typeof settings.fileWheelScale === "number") {
       currentSettings.fileWheelScale = settings.fileWheelScale;
+      fileWheelUiScale = settings.fileWheelScale;
+    }
+    if (typeof settings.fileWheelHoldMs === "number") {
+      currentSettings.fileWheelHoldMs = settings.fileWheelHoldMs;
+      fileWheelUiHoldMs = clampHoldMs(settings.fileWheelHoldMs);
     }
     if (Object.keys(patch).length === 0) return;
 

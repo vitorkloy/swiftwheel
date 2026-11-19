@@ -2410,6 +2410,26 @@ const FileDropTab = ({ config, setConfig }: { config: UIConfig; setConfig: (c: U
                     className="w-full"
                 />
             </label>
+            <label className="block mt-6 max-w-md">
+                <div className="flex justify-between text-[13px] text-white/80 mb-2">
+                    <span>{t('files.hold')}</span>
+                    <span>{Math.round(config.fileWheelHoldMs ?? 300)} ms</span>
+                </div>
+                <p className="text-[12px] text-white/40 mb-2">{t('files.hold_hint')}</p>
+                <input
+                    type="range"
+                    min={80}
+                    max={800}
+                    step={10}
+                    value={config.fileWheelHoldMs ?? 300}
+                    onChange={(e) => {
+                        const fileWheelHoldMs = Number(e.target.value);
+                        setConfig({ ...config, fileWheelHoldMs });
+                        window.electron?.setSettings?.({ fileWheelHoldMs, globalShortcut: config.globalShortcut });
+                    }}
+                    className="w-full"
+                />
+            </label>
             <div className="text-[11px] uppercase tracking-widest text-white/35 mt-8 mb-2">{t('files.tools_status')}</div>
             <div className="grid gap-2 max-w-xl">
                 {names.map(([id, label]) => {
