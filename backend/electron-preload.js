@@ -172,6 +172,11 @@ contextBridge.exposeInMainWorld("electron", {
     ipcRenderer.on("screenshot-remember", listener);
     return () => ipcRenderer.removeListener("screenshot-remember", listener);
   },
+  onScreenshotRememberMode: (callback) => {
+    const listener = (_event, mode) => callback(mode);
+    ipcRenderer.on("screenshot-remember-mode", listener);
+    return () => ipcRenderer.removeListener("screenshot-remember-mode", listener);
+  },
   selectImage: () => ipcRenderer.invoke("select-image"),
   removeManagedCustomIcon: (urlOrPath) =>
     ipcRenderer.invoke("remove-managed-custom-icon", urlOrPath),

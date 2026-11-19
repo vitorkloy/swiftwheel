@@ -460,12 +460,24 @@ export default function App() {
   const [config, setConfig] = useState<UIConfig>(DEFAULT_UI_CONFIG);
   const configRef = useRef(config);
   configRef.current = config;
-  useEffect(() => window.electron?.onScreenshotRemember?.((region) => {
-    setConfig((current) => ({
-      ...current,
-      screenshot: { ...DEFAULT_SCREENSHOT, ...current.screenshot, lastRegion: region },
-    }));
-  }), []);
+  useEffect(() => {
+    const stopRegion = window.electron?.onScreenshotRemember?.((region) => {
+      setConfig((current) => ({
+        ...current,
+        screenshot: { ...DEFAULT_SCREENSHOT, ...current.screenshot, lastRegion: region },
+      }));
+    });
+    const stopMode = window.electron?.onScreenshotRememberMode?.((mode) => {
+      setConfig((current) => ({
+        ...current,
+        screenshot: { ...DEFAULT_SCREENSHOT, ...current.screenshot, lastCaptureMode: mode },
+      }));
+    });
+    return () => {
+      stopRegion?.();
+      stopMode?.();
+    };
+  }, []);
   const targetWorkspaceIndexRef = useRef(config.activeWorkspaceIndex);
   targetWorkspaceIndexRef.current = config.activeWorkspaceIndex;
   const switchDebounceTimer = useRef<NodeJS.Timeout | null>(null);

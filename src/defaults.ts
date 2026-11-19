@@ -13,6 +13,7 @@ export const DEFAULT_SCREENSHOT: ScreenshotSettings = {
   includeCursor: false,
   saveDirectory: "",
   lastRegion: null,
+  lastCaptureMode: "region",
   wheelSeeded: false,
 };
 

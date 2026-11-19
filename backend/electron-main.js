@@ -4619,6 +4619,30 @@ app.whenReady().then(async () => {
             clipboard.writeText(list.join("\r\n"));
             return { ok: true, out: filePath };
           }
+          if (id === "act:copyText") {
+            const { clipboard, Notification } = require("electron");
+            const ocr = require("./ocr.cjs");
+            const language = (currentSettings.uiLanguage === "en" || currentSettings.language === "en") ? "en" : "pt";
+            const chunks = [];
+            for (const p of list) {
+              try {
+                const text = await ocr.recognizeFile(p, {
+                  language,
+                  helperPath: path.join(__dirname, "bin", "vor-ocr.exe").replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`),
+                });
+                if (String(text || "").trim()) chunks.push(String(text).trim());
+              } catch (err) {
+                if (list.length === 1) throw err;
+                diagLog(`[FileWheels] ocr ${p}: ${err && err.message ? err.message : err}`);
+              }
+            }
+            const outcome = ocr.ocrOutcome(chunks.join("\n\n"), language);
+            if (outcome.ok) clipboard.writeText(outcome.text);
+            try {
+              if (Notification.isSupported()) new Notification({ title: PRODUCT_NAME, body: outcome.toast }).show();
+            } catch { /* ignore */ }
+            return { ok: outcome.ok, empty: outcome.empty, out: filePath };
+          }
           if (id === "act:move") {
             const { dialog } = require("electron");
             const picked = await dialog.showOpenDialog({ properties: ["openDirectory", "createDirectory"], title: "Mover para" });
@@ -4845,6 +4869,7 @@ app.whenReady().then(async () => {
     preloadPath: path.join(__dirname, "electron-preload.js"),
     captureHtmlPath: path.join(__dirname, "../dist/capture.html"),
     captureHelperPath: path.join(__dirname, "bin", "vor-capture.exe").replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`),
+    ocrHelperPath: path.join(__dirname, "bin", "vor-ocr.exe").replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`),
     getMainWindow: () => mainWindow,
     getScreenshotSettings: () => currentSettings.screenshot,
     getActiveWin: getActiveWinModule,
@@ -4862,6 +4887,16 @@ app.whenReady().then(async () => {
       };
       if (mainWindow && !mainWindow.isDestroyed()) {
         mainWindow.webContents.send("screenshot-remember", region);
+      }
+    },
+    rememberCaptureMode: (mode) => {
+      currentSettings.screenshot = {
+        ...DEFAULT_SCREENSHOT,
+        ...currentSettings.screenshot,
+        lastCaptureMode: mode,
+      };
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("screenshot-remember-mode", mode);
       }
     },
     showFileWheelAtCursor,
@@ -6405,7 +6440,7 @@ ipcMain.on("execute-command", async (event, command, commandType, options = {}) 
   const trimmedCommand = command.trim();
 
   if (trimmedCommand === "vor:screenshot") {
-    void startScreenshot("region");
+    void startScreenshot();
     return;
   }
 

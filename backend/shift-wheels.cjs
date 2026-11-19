@@ -806,7 +806,8 @@ function toolTitle(id) {
     trimVideo: "TRIM", trimAudio: "TRIM", splitVideo: "SPLIT", changeVideoSpeed: "SPEED",
     organizePDF: "ORGANIZE", audioToVideo: "VISUALIZE",
     createPDF: "CRIAR PDF", createCollage: "COLAGEM", mergePDF: "JUNTAR", zipFiles: "ZIP",
-    airDrop: "SHARE", float: "FLOAT", copy: "COPY", move: "MOVE", copyPath: "COPY PATH", openTerminal: "TERMINAL",
+    airDrop: "SHARE", float: "FLOAT", copy: "COPY", move: "MOVE", copyPath: "COPY PATH",
+    copyText: "COPIAR TEXTO", openTerminal: "TERMINAL",
     preview: "PREVIEW",
   };
   return map[id] || "?";
@@ -922,6 +923,15 @@ function sizeLabel(p) {
 
 const ACTIONS = ["preview", "airDrop", "float", "copy", "move", "copyPath", "openTerminal"];
 
+function actionIds(kind, fmt) {
+  const ids = [...ACTIONS];
+  if (kind === "image" && fmt !== "svg") {
+    const at = ids.indexOf("copy");
+    ids.splice(at < 0 ? ids.length : at + 1, 0, "copyText");
+  }
+  return ids;
+}
+
 /** Ferramentas que trabalham com o lote inteiro de uma vez (um único resultado). */
 const BATCH = new Set(["createPDF", "createCollage", "mergePDF", "zipFiles"]);
 
@@ -952,7 +962,7 @@ function buildMany(paths, mode) {
     ids.push("zipFiles");
     items = ids.map((id) => item(`tool:${id}`, toolTitle(id), toolGate(id)));
   } else {
-    items = ACTIONS.map((id) => item(`act:${id}`, toolTitle(id), toolGate(id)));
+    items = actionIds(kind, kind === "mixed" ? "" : fmtOf(paths[0])).map((id) => item(`act:${id}`, toolTitle(id), toolGate(id)));
   }
   return { mode, format, kind, path: paths[0], paths, items };
 }
@@ -963,7 +973,7 @@ function build(target, mode) {
   const filePath = paths[0];
   if (isDir(filePath)) {
     const items = mode === "tools" ? [item("tool:zipFiles", toolTitle("zipFiles"), ok())]
-      : mode === "actions" ? ACTIONS.map((id) => item(`act:${id}`, toolTitle(id), toolGate(id)))
+      : mode === "actions" ? actionIds("folder", "").map((id) => item(`act:${id}`, toolTitle(id), toolGate(id)))
         : [];
     return { mode, format: "PASTA", kind: "folder", path: filePath, paths, items };
   }
@@ -975,7 +985,7 @@ function build(target, mode) {
   } else if (mode === "tools") {
     items = toolIds(kind, fmt).map((id) => item(`tool:${id}`, toolTitle(id), toolGate(id)));
   } else {
-    items = ACTIONS.map((id) => item(`act:${id}`, toolTitle(id), toolGate(id)));
+    items = actionIds(kind, fmt).map((id) => item(`act:${id}`, toolTitle(id), toolGate(id)));
   }
   const size = sizeLabel(filePath);
   return { mode, format: size ? `${titleOf(fmt)} · ${size}` : titleOf(fmt), kind, path: filePath, paths, items };
