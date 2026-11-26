@@ -1,7 +1,22 @@
 # Architecture
 
+O *porquê* das decisões do SwiftWheel (fork do Rovyl) que parecem arbitrárias até
+você saber o que quebrou. Guia de uso (captura, ShiftDrop, notificações, instalação)
+está no [README](../README.md).
+
 Notes on the parts of SwiftWheel (fork of Rovyl) that are not obvious from reading the
 code, and the reasons behind decisions that look arbitrary until you know what broke.
+
+## Módulos, notificações e sons
+
+Preferências em `backend/prefs.cjs` (`withModulePrefs` / `withNotificationPrefs` /
+`withSoundPrefs`). Persistidas em `config-v2.json` junto com o restante do
+`UIConfig`. O processo principal espelha `livePrefs` para decidir se a roda,
+o ShiftDrop, a captura e a prévia ligam, e se um toast ou som dispara. Sons
+são WAV curtos em `public/sounds/` (renderer) e, no processo principal, o mesmo
+arquivo via `file://`. Sem dependência extra e sem processo ocioso extra: o
+listener de arquivo só existe com o módulo ShiftDrop ligado; a captura só
+instala o overlay quando o módulo está ativo.
 
 ## Layout
 
