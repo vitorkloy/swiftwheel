@@ -38,6 +38,13 @@ let fileWheelUiScale = 1;
 let fileWheelUiHoldMs = 300;
 const { DEFAULT_SCREENSHOT, installScreenshot, createShortcutTracker } = require("./screenshot.cjs");
 const { DEFAULT_PREVIEW, installPreview } = require("./preview.cjs");
+const prefs = require("./prefs.cjs");
+/** Espelho das prefs para o código fora do `whenReady` (toasts, sons). */
+let livePrefs = {
+  modules: { ...prefs.DEFAULT_MODULES },
+  notifications: { ...prefs.DEFAULT_NOTIFICATIONS },
+  sounds: { ...prefs.DEFAULT_SOUNDS },
+};
 const crypto = require("crypto");
 const { GlobalKeyboardListener } = require("node-global-key-listener");
 const http = require("http");
@@ -2864,6 +2871,7 @@ let lastToastedUpdateVersion = null;
  */
 function showUpdateToast(version) {
   if (!version || lastToastedUpdateVersion === version) return;
+  if (!prefs.allowsNotification(livePrefs.notifications, "updates")) return;
   lastToastedUpdateVersion = version;
   try {
     if (!UpdateNotification.isSupported()) return;
@@ -2943,6 +2951,9 @@ app.whenReady().then(async () => {
     openAtLogin: true,
     screenshot: { ...DEFAULT_SCREENSHOT },
     preview: { ...DEFAULT_PREVIEW },
+    modules: { ...prefs.DEFAULT_MODULES },
+    notifications: { ...prefs.DEFAULT_NOTIFICATIONS },
+    sounds: { ...prefs.DEFAULT_SOUNDS },
   };
 
   const removeLegacyWindowsLoginItems = () => {
@@ -3055,9 +3066,28 @@ app.whenReady().then(async () => {
         ...ui.preview,
       };
     }
+    currentSettings.modules = prefs.normalizeModules(ui.modules, currentSettings.screenshot, currentSettings.preview);
+    currentSettings.notifications = prefs.normalizeNotifications(ui.notifications);
+    currentSettings.sounds = prefs.normalizeSounds(ui.sounds);
+    currentSettings.screenshot = {
+      ...DEFAULT_SCREENSHOT,
+      ...currentSettings.screenshot,
+      enabled: currentSettings.modules.capture,
+    };
+    currentSettings.preview = {
+      ...DEFAULT_PREVIEW,
+      ...currentSettings.preview,
+      enabled: currentSettings.modules.preview,
+    };
+    livePrefs = {
+      modules: currentSettings.modules,
+      notifications: currentSettings.notifications,
+      sounds: currentSettings.sounds,
+    };
   };
 
   let rebuildTrayMenu = () => {};
+  let syncShiftDropRuntime = () => {};
   const trayMenuLocale = () => {
     const pref = currentSettings.uiLanguage || (currentSettings.language === "pt" ? "pt" : "system");
     if (pref === "pt") return "pt";
@@ -3378,6 +3408,7 @@ app.whenReady().then(async () => {
       mergeGameModeConfig(ui.gameMode);
     }
     syncMouseHookState();
+    try { syncShiftDropRuntime(); } catch (e) { diagLog(`[ShiftDrop] ${e.message}`); }
     try { rebuildTrayMenu(); } catch (e) { diagLog(`[Tray] ${e.message}`); }
     try {
       refreshShortcutsFromFullConfig?.();
@@ -3938,6 +3969,7 @@ app.whenReady().then(async () => {
     rebuildTrayMenu = () => {
       if (!tray || tray.isDestroyed()) return;
       const pt = trayMenuLocale() === "pt";
+      const version = `v${app.getVersion()}`;
       tray.setContextMenu(Menu.buildFromTemplate([
         {
           label: pt ? "Abrir configurações" : "Open Settings",
@@ -3950,11 +3982,40 @@ app.whenReady().then(async () => {
             }
           },
         },
+        { type: "separator" },
         {
-          label: pt ? "Reiniciar atalho de captura" : "Restart capture shortcut",
-          click: () => restartCaptureShortcut(),
+          label: pt ? "Verificar atualização" : "Check for updates",
+          click: () => {
+            ipcMain.emit("check-for-updates-tray");
+            try {
+              const { autoUpdater } = require("electron-updater");
+              autoUpdater.checkForUpdates().catch((err) => diagLog(`[Tray] update: ${err.message}`));
+            } catch (e) {
+              diagLog(`[Tray] update: ${e.message}`);
+            }
+          },
         },
-        { label: `v${app.getVersion()}`, enabled: false },
+        {
+          label: pt ? "Reportar problema" : "Report an issue",
+          click: () => {
+            shell.openExternal("https://github.com/vitorkloy/swiftwheel/issues/new").catch(() => {});
+          },
+        },
+        {
+          label: pt ? `Sobre (${version})` : `About (${version})`,
+          click: () => {
+            dialog.showMessageBox({
+              type: "info",
+              title: pt ? "Sobre o SwiftWheel" : "About SwiftWheel",
+              message: `SwiftWheel ${version}`,
+              detail: pt
+                ? "Launcher radial. Fork do Rovyl, offline, sem telemetria."
+                : "Radial launcher. Fork of Rovyl, offline, no telemetry.",
+              buttons: ["OK"],
+            }).catch(() => {});
+          },
+        },
+        { type: "separator" },
         { label: pt ? "Sair" : "Quit", click: () => app.quit() },
       ]));
     };
@@ -4421,7 +4482,7 @@ app.whenReady().then(async () => {
           copyFileToClipboard(list);
           try {
             const { Notification } = require("electron");
-            if (Notification.isSupported()) new Notification({ title: PRODUCT_NAME, body: list.length > 1 ? `${list.length} itens copiados — cole no app para compartilhar.` : "Arquivo copiado — cole no app para compartilhar." }).show();
+            notifyOs("other", list.length > 1 ? `${list.length} itens copiados — cole no app para compartilhar.` : "Arquivo copiado — cole no app para compartilhar.");
           } catch { /* ignore */ }
         };
         if (list.length !== 1) { fallback(); return; }
@@ -4590,15 +4651,13 @@ app.whenReady().then(async () => {
         const body = /senha|otimizado|protegido|Não foi possível|não está disponível|Indisponível|instala|não tem/i.test(message)
           ? message.replace(/^[\w.-]+\.exe falhou \(código \d+\):\s*/i, "")
           : "Não foi possível processar este arquivo.";
-        try {
-          const { Notification } = require("electron");
-          if (Notification.isSupported()) new Notification({ title: PRODUCT_NAME, body }).show();
-        } catch { /* ignore */ }
+        notifyOs("fileConvertError", body);
         return body;
       };
       const runFileSliceNow = async (id, list) => {
         const filePath = list[0] || "";
         try {
+          notifyOs("fileConvertStart", `${shiftVerb(id)}…`);
           for (const p of shiftWheels.isBatch(id) ? list.slice(0, 1) : list) {
             await shiftWheels.prepare(id, p, (status) => showShiftToast(status, -1));
           }
@@ -4638,9 +4697,7 @@ app.whenReady().then(async () => {
             }
             const outcome = ocr.ocrOutcome(chunks.join("\n\n"), language);
             if (outcome.ok) clipboard.writeText(outcome.text);
-            try {
-              if (Notification.isSupported()) new Notification({ title: PRODUCT_NAME, body: outcome.toast }).show();
-            } catch { /* ignore */ }
+            notifyOs("other", outcome.toast);
             return { ok: outcome.ok, empty: outcome.empty, out: filePath };
           }
           if (id === "act:move") {
@@ -4668,6 +4725,8 @@ app.whenReady().then(async () => {
             const out = await shiftWheels.runMany(id, list, { onProgress: (f) => showShiftToast(`${shiftVerb(id)}…`, f) });
             showShiftToast(`Pronto: ${path.basename(String(out))}`, 1);
             hideShiftToast(1400);
+            notifyOs("fileConverted", `Pronto: ${path.basename(String(out))}`);
+            playUiSoundFromMain("done");
             return { ok: true, out };
           }
           let out = "";
@@ -4713,6 +4772,10 @@ app.whenReady().then(async () => {
           if (failed) notifyShiftError(failed === list.length ? lastError : `${failed} de ${list.length} itens falharam: ${lastError}`);
           showShiftToast(list.length > 1 ? `Pronto: ${list.length - failed} de ${list.length}` : `Pronto: ${path.basename(String(out))}`, 1);
           hideShiftToast(1400);
+          if (failed < list.length) {
+            notifyOs("fileConverted", list.length > 1 ? `Pronto: ${list.length - failed} de ${list.length}` : `Pronto: ${path.basename(String(out))}`);
+            playUiSoundFromMain("done");
+          }
           return { ok: failed < list.length, out };
         } catch (err) {
           hideShiftToast(0);
@@ -4739,6 +4802,7 @@ app.whenReady().then(async () => {
       const { uIOhook } = require("uiohook-napi");
       uIOhook.on("mousedown", (e) => {
         if (e.button !== 1) return;
+        if (!prefs.moduleOn(currentSettings.modules, "shiftdrop")) return;
         /**
          * Estado exato no instante do clique, não acumulado: `noteFileMods` só faz OR, e um keyup
          * perdido (ex.: atalho engolido por outro hook) deixava Shift/Ctrl/Alt "presos" — qualquer
@@ -4809,11 +4873,22 @@ app.whenReady().then(async () => {
           fileDragOrigin = null;
         }
       });
-      uIOhook.start();
+      const shiftDropWanted = () => prefs.moduleOn(currentSettings.modules, "shiftdrop");
+      const startHook = uIOhook.start.bind(uIOhook);
+      const stopHook = typeof uIOhook.stop === "function" ? uIOhook.stop.bind(uIOhook) : () => {};
+      syncShiftDropRuntime = () => {
+        try {
+          if (shiftDropWanted()) startHook();
+          else stopHook();
+        } catch (err) {
+          diagLog(`[FileWheels] hook: ${err.message}`);
+        }
+      };
+      syncShiftDropRuntime();
     } catch (e) {
       diagLog(`[FileWheels] ${e.message}`);
     }
-    tray.setContextMenu(contextMenu);
+    rebuildTrayMenu();
 
     // Feedback de início
     console.log("SwiftWheel started successfully in the background.");
@@ -4859,6 +4934,8 @@ app.whenReady().then(async () => {
     entries.push(`shot:${shot.enabled}:${shot.shortcutRegion}:${shot.shortcutFull}:${shot.shortcutWindow}`);
     const preview = currentSettings.preview || {};
     entries.push(`preview:${preview.enabled}:${preview.shortcut}`);
+    const modules = prefs.normalizeModules(currentSettings.modules, shot, preview);
+    entries.push(`mod:${modules.radial}:${modules.shiftdrop}:${modules.capture}:${modules.preview}`);
     return entries.join("\u0001");
   };
 
@@ -4872,6 +4949,8 @@ app.whenReady().then(async () => {
     ocrHelperPath: path.join(__dirname, "bin", "vor-ocr.exe").replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`),
     getMainWindow: () => mainWindow,
     getScreenshotSettings: () => currentSettings.screenshot,
+    allowsNotification: (kind) => prefs.allowsNotification(currentSettings.notifications, kind),
+    allowsSound: (kind) => prefs.allowsSound(currentSettings.sounds, kind),
     getActiveWin: getActiveWinModule,
     diagLog,
     language: () => {
@@ -4940,6 +5019,7 @@ app.whenReady().then(async () => {
     }
     lastShortcutRegistrationSignature = registrationSignature;
     globalShortcut.unregisterAll();
+    const radialOn = prefs.moduleOn(currentSettings.modules, "radial");
     let shortcut = currentSettings.globalShortcut || "Alt+Z";
     const openRadialFromShortcut = async (sourceShortcut) => {
       diagLog(`${sourceShortcut} shortcut triggered`);
@@ -4965,6 +5045,12 @@ app.whenReady().then(async () => {
       diagLog(
         `[Shortcut] Normalized 'Win' to 'Super' in shortcut: ${shortcut}`,
       );
+    }
+
+    if (!radialOn) {
+      shotApi.registerShortcuts(globalShortcut);
+      previewApi.registerShortcuts();
+      return;
     }
 
     try {
@@ -6077,7 +6163,7 @@ app.whenReady().then(async () => {
      * todo o rato do sistema passa por lá, serializado. Um watchdog de 15 ms que chamava
      * `Process.GetProcessById` custava 12 ms por tique e engasgava o ecrã inteiro.
      */
-    const wantHook = cachedRadialFlags.enableMouseTrigger;
+    const wantHook = cachedRadialFlags.enableMouseTrigger && prefs.moduleOn(currentSettings.modules, "radial");
     /** Trocar de botão exige relançar a sonda: o VK é passado no arranque do processo. */
     /** Botao OU modo: ambos vao no comando TRIGGER, logo qualquer um exige re-armar a captura. */
     if (
@@ -6402,15 +6488,26 @@ const escapeCommand = (cmd) => {
   return cmd;
 };
 
-/** #17: o único aviso de erro é a notificação do Windows, em PT-BR e com o nome SwiftWheel. */
-const notifyErrorOs = (message) => {
+const playUiSoundFromMain = (name) => {
+  const soundKey = name === "done" ? "convertDone" : name === "shutter" ? "captureShutter" : "wheelOpen";
+  if (!prefs.allowsSound(livePrefs.sounds, soundKey)) return;
+  try {
+    if (mainWindow && !mainWindow.isDestroyed()) mainWindow.webContents.send("play-sound", name);
+  } catch { /* ignore */ }
+};
+
+const notifyOs = (kind, message) => {
   const body = String(message || "").trim();
   if (!body || /^(Cancelado|Senha cancelada)$/i.test(body)) return;
+  if (!prefs.allowsNotification(livePrefs.notifications, kind)) return;
   try {
     const { Notification } = require("electron");
     if (Notification.isSupported()) new Notification({ title: PRODUCT_NAME, body: body.slice(0, 240) }).show();
   } catch { /* ignore */ }
 };
+
+/** #17: o único aviso de erro é a notificação do Windows, em PT-BR e com o nome SwiftWheel. */
+const notifyErrorOs = (message) => notifyOs("fileConvertError", message);
   /** Tema/acento/vidro vindos da Aparência (renderer). As janelas HTML do ShiftDrop leem daqui, ao vivo. */
   ipcMain.on("vor-appearance", (_event, next) => {
     const a = next && typeof next === "object" ? next : {};

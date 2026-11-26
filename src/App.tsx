@@ -9,9 +9,11 @@ import {
   MINIMAL_MAIN_WORKSPACE_APPS,
   stripInternalWidgetApps,
   stripInternalWidgetsFromConfig,
+  withModulePrefs,
   withScreenshotWheel,
   workspaceContainsBundledDemoApp,
 } from './defaults';
+import { playUiSound } from './sounds';
 import { Minus, X, Maximize, Square, ArrowLeft, ArrowRight, PanelLeftClose } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { isLikelyWebUrl, resolveWebsiteIconFields } from './siteFavicon';
@@ -649,6 +651,17 @@ export default function App() {
     setExecutionError(null);
   }, [executionError]);
 
+  useEffect(() => {
+    return window.electron?.onPlaySound?.((name) => {
+      const sounds = configRef.current.sounds;
+      if (sounds?.master === false) return;
+      if (name === 'done' && sounds?.convertDone === false) return;
+      if (name === 'click' && sounds?.wheelOpen === false) return;
+      if (name === 'shutter' && sounds?.captureShutter === false) return;
+      playUiSound(name);
+    });
+  }, []);
+
   // Listen for execution errors from backend
   useEffect(() => {
     let clearErrorTimer: number | undefined;
@@ -1000,6 +1013,18 @@ export default function App() {
               ...DEFAULT_UI_CONFIG.preview,
               ...(finalData.config.preview || {}),
             },
+            modules: {
+              ...DEFAULT_UI_CONFIG.modules,
+              ...(finalData.config.modules || {}),
+            },
+            notifications: {
+              ...DEFAULT_UI_CONFIG.notifications,
+              ...(finalData.config.notifications || {}),
+            },
+            sounds: {
+              ...DEFAULT_UI_CONFIG.sounds,
+              ...(finalData.config.sounds || {}),
+            },
             gameMode: {
               ...DEFAULT_UI_CONFIG.gameMode,
               ...(finalData.config.gameMode || {}),
@@ -1298,7 +1323,7 @@ export default function App() {
       const uiLanguage = nextConfig.uiLanguage ?? (nextConfig.language === 'pt' ? 'pt' : 'system');
       const systemIsPortuguese = (navigator.language || 'en').toLowerCase().startsWith('pt');
       const language = uiLanguage === 'pt' ? 'pt' : uiLanguage === 'en' ? 'en' : (systemIsPortuguese ? 'pt' : 'en');
-      nextConfig = withScreenshotWheel({ ...nextConfig, uiLanguage, language });
+      nextConfig = withModulePrefs(withScreenshotWheel({ ...nextConfig, uiLanguage, language }));
 
       hydratedFromPersistenceRef.current =
         !!(finalData || loadedFromLocalStorageMigration);
@@ -1854,6 +1879,9 @@ export default function App() {
         setIsDashboardOpen(false);
       }
       setIsMenuOpen(true);
+      if (configRef.current?.sounds?.master !== false && configRef.current?.sounds?.wheelOpen !== false) {
+        playUiSound('click');
+      }
       setRadialMountKey((key) => key + 1);
       setRadialPendingPaintToken(
         typeof opts?.paintToken === 'number' ? opts.paintToken : null,

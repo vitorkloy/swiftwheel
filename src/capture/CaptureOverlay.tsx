@@ -30,6 +30,7 @@ interface Session {
   monitors?: Rect[];
   captureMonitors?: Rect[];
   windows?: Rect[];
+  playShutter?: boolean;
 }
 
 type Point = { x: number; y: number };
@@ -371,6 +372,7 @@ export const CaptureOverlay: React.FC = () => {
   const [textSizeOpen, setTextSizeOpen] = useState(false);
   const [textEditIndex, setTextEditIndex] = useState<number | null>(null);
   const textAtRef = useRef<Point | null>(null);
+  const playShutterRef = useRef(true);
   const textValueRef = useRef('');
   const textSizeRef = useRef(4);
   const textEditIndexRef = useRef<number | null>(null);
@@ -455,6 +457,7 @@ export const CaptureOverlay: React.FC = () => {
         setFrameReady(false);
         setDimIn(false);
       }
+      playShutterRef.current = next?.playShutter !== false;
       setSession(next);
       setPickMode(next.captureMode || 'region');
       setHoverTarget(null);
@@ -475,6 +478,13 @@ export const CaptureOverlay: React.FC = () => {
       requestAnimationFrame(() => {
         requestAnimationFrame(() => {
           setDimIn(true);
+          if (playShutterRef.current) {
+            try {
+              const audio = new Audio(new URL('./sounds/shutter.wav', document.baseURI).href);
+              audio.volume = 0.45;
+              void audio.play().catch(() => undefined);
+            } catch { /* ignore */ }
+          }
           // Frame já composto na janela visível: o main pode esconder o congelado nativo (#33).
           requestAnimationFrame(() => {
             void window.electron?.screenshotAction?.({ action: 'painted' });

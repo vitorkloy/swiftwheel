@@ -42,6 +42,9 @@ import {
   LayoutGrid,
   Sparkles,
   Image as ImageIcon,
+  Bell,
+  Volume2,
+  Layers,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -60,9 +63,25 @@ const GROUP_ICONS: Record<string, LucideIcon> = {
   'File wheel': FileImage, Format: ImageIcon, Language: Languages, Performance: Gauge,
   Protection: Shield, Shortcuts: Keyboard, Startup: Power, Theme: SunMoon, Updates: RefreshCw,
   Wheel: Disc3, Workspaces: SquareStack, 'Your workspaces': LayoutGrid, Presence: Sparkles,
+  Modules: Layers, Notifications: Bell, Sounds: Volume2, Events: Bell,
 };
-import type { AppItem, PreviewSettings, ScreenshotSettings, UIConfig, Workspace } from '../types';
-import { DEFAULT_PREVIEW, DEFAULT_SCREENSHOT } from '../defaults';
+import type {
+  AppItem,
+  ModulePrefs,
+  NotificationPrefs,
+  PreviewSettings,
+  ScreenshotSettings,
+  SoundPrefs,
+  UIConfig,
+  Workspace,
+} from '../types';
+import {
+  DEFAULT_MODULES,
+  DEFAULT_NOTIFICATIONS,
+  DEFAULT_PREVIEW,
+  DEFAULT_SCREENSHOT,
+  DEFAULT_SOUNDS,
+} from '../defaults';
 import { getIcon } from '../iconMap';
 import { resolveWebsiteIconFields } from '../siteFavicon';
 import { SmartIcon } from './SmartIcon';
@@ -84,7 +103,7 @@ interface PrecisionSettingsProps {
   isPage?: boolean;
 }
 
-type SectionId = 'general' | 'trigger' | 'appearance' | 'capture' | 'preview' | 'spaces' | 'advanced';
+type SectionId = 'general' | 'trigger' | 'appearance' | 'capture' | 'preview' | 'notifications' | 'spaces' | 'advanced';
 
 /** O modal fica reservado ao que não cabe numa linha: listas longas, gravação e edição. */
 type Editor =
@@ -135,6 +154,7 @@ const SECTIONS: Array<{ id: SectionId; label: string; caption: string; icon: Luc
   { id: 'appearance', label: 'Appearance', caption: 'Shape, presence, and theme.', icon: Palette },
   { id: 'capture', label: 'Screenshots', caption: 'Freeze, mark, and keep a capture.', icon: Camera },
   { id: 'preview', label: 'Preview', caption: 'Instant file preview with Space.', icon: Eye },
+  { id: 'notifications', label: 'Notifications', caption: 'Which alerts and sounds to keep.', icon: Bell },
   { id: 'spaces', label: 'Workspaces', caption: 'Contexts and their shortcuts.', icon: SquareStack },
   { id: 'advanced', label: 'Advanced', caption: 'Performance, protection, and data.', icon: Shield },
 ];
@@ -157,6 +177,47 @@ const PT: Record<string, string> = {
   'Freeze, mark, and keep a capture.': 'Congela, marca e guarda uma captura.',
   Preview: 'Pré-visualização',
   'Instant file preview with Space.': 'Prévia instantânea de arquivos com Espaço.',
+  Notifications: 'Notificações',
+  'Which alerts and sounds to keep.': 'Quais avisos e sons manter.',
+  Modules: 'Módulos',
+  'Turn a module off to drop its shortcuts, listeners and idle work.': 'Desligar um módulo corta atalhos, escutas e trabalho em segundo plano.',
+  'App wheel module': 'Roda de apps',
+  'Middle-button launcher and the global shortcut.': 'Launcher no botão do meio e o atalho global.',
+  'File wheel module': 'Roda de arquivos',
+  'ShiftDrop conversions and tools while dragging a file.': 'Conversões e ferramentas do ShiftDrop ao arrastar um arquivo.',
+  'Capture module': 'Captura',
+  'Print Screen overlay, annotations and OCR.': 'Overlay do Print Screen, anotações e OCR.',
+  'Preview module': 'Pré-visualização',
+  'Space in Explorer opens a QuickLook-style window.': 'Espaço no Explorer abre uma janela estilo QuickLook.',
+  'Master switch': 'Interruptor mestre',
+  'Silence every system notification.': 'Silencia todas as notificações do sistema.',
+  'Capture copied': 'Captura copiada',
+  'After the selection goes to the clipboard.': 'Depois da seleção ir para a área de transferência.',
+  'Capture saved': 'Captura salva',
+  'After the file is written to disk.': 'Depois do arquivo ser gravado no disco.',
+  'Conversion started': 'Conversão iniciada',
+  'When ShiftDrop begins a job. Off by default.': 'Quando o ShiftDrop começa um trabalho. Desligado por padrão.',
+  'File converted': 'Arquivo convertido',
+  'When a conversion or tool finishes.': 'Quando uma conversão ou ferramenta termina.',
+  'Conversion error': 'Erro de conversão',
+  'Failures only, in Portuguese, via the system banner.': 'Só falhas, em português, pela notificação do sistema.',
+  'App updates': 'Atualizações',
+  'A new SwiftWheel version is ready.': 'Uma versão nova do SwiftWheel está pronta.',
+  'Other events': 'Outros eventos',
+  'Share, copy and leftover system banners.': 'Compartilhar, copiar e os demais avisos do sistema.',
+  Sounds: 'Sons',
+  'Play sounds': 'Tocar sons',
+  'Short cues bundled with the app.': 'Cues curtos embutidos no aplicativo.',
+  'Wheel open': 'Abrir a roda',
+  'A light click when the radial appears.': 'Um clique leve quando a roda aparece.',
+  'Capture shutter': 'Obturador da captura',
+  'Plays when the freeze frame appears.': 'Toca quando o ecrã congelado aparece.',
+  'Conversion done': 'Conversão pronta',
+  'A plim when ShiftDrop finishes.': 'Um plim quando o ShiftDrop termina.',
+  Off: 'Desligada',
+  Events: 'Eventos',
+  'Enable Capture': 'Ativar captura',
+  'Off keeps Print Screen with Windows and drops the overlay process.': 'Desligado, o Print Screen fica com o Windows e o overlay não roda.',
   'Enable Preview': 'Ativar pré-visualização',
   'Space on a selected file in Explorer or on the desktop opens a preview. Off keeps Space with Windows.': 'Espaço com um arquivo selecionado no Explorer ou na área de trabalho abre a prévia. Desligado, o Espaço fica com o Windows.',
   'Preview shortcut': 'Atalho da prévia',
@@ -571,19 +632,49 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
   }, [config.fileWheelKeys, config.globalShortcut, update]);
 
   const shot: ScreenshotSettings = { ...DEFAULT_SCREENSHOT, ...config.screenshot };
-  const updateShot = useCallback((patch: Partial<ScreenshotSettings>) => {
+  const preview: PreviewSettings = { ...DEFAULT_PREVIEW, ...config.preview };
+  const modules: ModulePrefs = { ...DEFAULT_MODULES, ...config.modules };
+  const notifications: NotificationPrefs = { ...DEFAULT_NOTIFICATIONS, ...config.notifications };
+  const sounds: SoundPrefs = { ...DEFAULT_SOUNDS, ...config.sounds };
+  const updatePreview = useCallback((patch: Partial<PreviewSettings>) => {
+    setConfig((current) => {
+      const preview = { ...DEFAULT_PREVIEW, ...current.preview, ...patch };
+      const nextModules = { ...DEFAULT_MODULES, ...current.modules };
+      if (typeof patch.enabled === 'boolean') nextModules.preview = patch.enabled;
+      return { ...current, preview, modules: nextModules };
+    });
+  }, [setConfig]);
+  const updateModules = useCallback((patch: Partial<ModulePrefs>) => {
+    setConfig((current) => {
+      const next = { ...DEFAULT_MODULES, ...current.modules, ...patch };
+      return {
+        ...current,
+        modules: next,
+        screenshot: { ...DEFAULT_SCREENSHOT, ...current.screenshot, enabled: next.capture },
+        preview: { ...DEFAULT_PREVIEW, ...current.preview, enabled: next.preview },
+        enableMouseTrigger: next.radial ? (typeof current.enableMouseTrigger === 'boolean' ? current.enableMouseTrigger : true) : current.enableMouseTrigger,
+      };
+    });
+  }, [setConfig]);
+  const updateNotifications = useCallback((patch: Partial<NotificationPrefs>) => {
     setConfig((current) => ({
       ...current,
-      screenshot: { ...DEFAULT_SCREENSHOT, ...current.screenshot, ...patch },
+      notifications: { ...DEFAULT_NOTIFICATIONS, ...current.notifications, ...patch },
     }));
   }, [setConfig]);
-
-  const preview: PreviewSettings = { ...DEFAULT_PREVIEW, ...config.preview };
-  const updatePreview = useCallback((patch: Partial<PreviewSettings>) => {
+  const updateSounds = useCallback((patch: Partial<SoundPrefs>) => {
     setConfig((current) => ({
       ...current,
-      preview: { ...DEFAULT_PREVIEW, ...current.preview, ...patch },
+      sounds: { ...DEFAULT_SOUNDS, ...current.sounds, ...patch },
     }));
+  }, [setConfig]);
+  const updateShot = useCallback((patch: Partial<ScreenshotSettings>) => {
+    setConfig((current) => {
+      const screenshot = { ...DEFAULT_SCREENSHOT, ...current.screenshot, ...patch };
+      const nextModules = { ...DEFAULT_MODULES, ...current.modules };
+      if (typeof patch.enabled === 'boolean') nextModules.capture = patch.enabled;
+      return { ...current, screenshot, modules: nextModules };
+    });
   }, [setConfig]);
 
   const sections = useMemo<Record<SectionId, SettingItem[]>>(() => {
@@ -632,6 +723,30 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
             update('openAtLogin', next);
             window.electron?.setLoginItemSettings?.({ openAtLogin: next });
           },
+        },
+        {
+          key: 'mod-radial', group: 'Modules', title: 'App wheel module',
+          description: 'Middle-button launcher and the global shortcut.',
+          kind: 'bool', enabled: modules.radial,
+          onToggle: () => updateModules({ radial: !modules.radial }),
+        },
+        {
+          key: 'mod-shiftdrop', group: 'Modules', title: 'File wheel module',
+          description: 'ShiftDrop conversions and tools while dragging a file.',
+          kind: 'bool', enabled: modules.shiftdrop,
+          onToggle: () => updateModules({ shiftdrop: !modules.shiftdrop }),
+        },
+        {
+          key: 'mod-capture', group: 'Modules', title: 'Capture module',
+          description: 'Print Screen overlay, annotations and OCR.',
+          kind: 'bool', enabled: modules.capture,
+          onToggle: () => updateModules({ capture: !modules.capture }),
+        },
+        {
+          key: 'mod-preview', group: 'Modules', title: 'Preview module',
+          description: 'Space in Explorer opens a QuickLook-style window.',
+          kind: 'bool', enabled: modules.preview,
+          onToggle: () => updateModules({ preview: !modules.preview }),
         },
         {
           key: 'workspaceSwitchMode', group: 'Workspaces', title: 'Workspace switching',
@@ -770,6 +885,12 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
       ],
       capture: [
         {
+          key: 'shot-enabled', group: 'Capture', title: 'Enable Capture',
+          description: 'Off keeps Print Screen with Windows and drops the overlay process.',
+          kind: 'bool', enabled: shot.enabled !== false,
+          onToggle: () => updateShot({ enabled: shot.enabled === false }),
+        },
+        {
           key: 'shot-note', group: 'Shortcuts', title: 'Screenshots',
           description: 'If Windows opens Snipping Tool instead, turn that Print Screen option off or pick another combination.',
           kind: 'note',
@@ -868,6 +989,80 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
         {
           key: 'preview-note', group: 'Preview', title: 'Windows Explorer and desktop only. Other apps keep the shortcut.',
           kind: 'note',
+        },
+      ],
+      notifications: [
+        {
+          key: 'notif-master', group: 'Notifications', title: 'Master switch',
+          description: 'Silence every system notification.',
+          kind: 'bool', enabled: notifications.master,
+          onToggle: () => updateNotifications({ master: !notifications.master }),
+        },
+        {
+          key: 'notif-copy', group: 'Events', title: 'Capture copied',
+          description: 'After the selection goes to the clipboard.',
+          kind: 'bool', enabled: notifications.captureCopied,
+          onToggle: () => updateNotifications({ captureCopied: !notifications.captureCopied }),
+        },
+        {
+          key: 'notif-save', group: 'Events', title: 'Capture saved',
+          description: 'After the file is written to disk.',
+          kind: 'bool', enabled: notifications.captureSaved,
+          onToggle: () => updateNotifications({ captureSaved: !notifications.captureSaved }),
+        },
+        {
+          key: 'notif-start', group: 'Events', title: 'Conversion started',
+          description: 'When ShiftDrop begins a job. Off by default.',
+          kind: 'bool', enabled: notifications.fileConvertStart,
+          onToggle: () => updateNotifications({ fileConvertStart: !notifications.fileConvertStart }),
+        },
+        {
+          key: 'notif-done', group: 'Events', title: 'File converted',
+          description: 'When a conversion or tool finishes.',
+          kind: 'bool', enabled: notifications.fileConverted,
+          onToggle: () => updateNotifications({ fileConverted: !notifications.fileConverted }),
+        },
+        {
+          key: 'notif-error', group: 'Events', title: 'Conversion error',
+          description: 'Failures only, in Portuguese, via the system banner.',
+          kind: 'bool', enabled: notifications.fileConvertError,
+          onToggle: () => updateNotifications({ fileConvertError: !notifications.fileConvertError }),
+        },
+        {
+          key: 'notif-updates', group: 'Events', title: 'App updates',
+          description: 'A new SwiftWheel version is ready.',
+          kind: 'bool', enabled: notifications.updates,
+          onToggle: () => updateNotifications({ updates: !notifications.updates }),
+        },
+        {
+          key: 'notif-other', group: 'Events', title: 'Other events',
+          description: 'Share, copy and leftover system banners.',
+          kind: 'bool', enabled: notifications.other,
+          onToggle: () => updateNotifications({ other: !notifications.other }),
+        },
+        {
+          key: 'sound-master', group: 'Sounds', title: 'Play sounds',
+          description: 'Short cues bundled with the app.',
+          kind: 'bool', enabled: sounds.master,
+          onToggle: () => updateSounds({ master: !sounds.master }),
+        },
+        {
+          key: 'sound-wheel', group: 'Sounds', title: 'Wheel open',
+          description: 'A light click when the radial appears.',
+          kind: 'bool', enabled: sounds.wheelOpen,
+          onToggle: () => updateSounds({ wheelOpen: !sounds.wheelOpen }),
+        },
+        {
+          key: 'sound-shutter', group: 'Sounds', title: 'Capture shutter',
+          description: 'Plays when the freeze frame appears.',
+          kind: 'bool', enabled: sounds.captureShutter,
+          onToggle: () => updateSounds({ captureShutter: !sounds.captureShutter }),
+        },
+        {
+          key: 'sound-done', group: 'Sounds', title: 'Conversion done',
+          description: 'A plim when ShiftDrop finishes.',
+          kind: 'bool', enabled: sounds.convertDone,
+          onToggle: () => updateSounds({ convertDone: !sounds.convertDone }),
         },
       ],
       spaces: [
@@ -969,7 +1164,7 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
         },
       ],
     };
-  }, [config, gameMode, theme, apps, appVersion, update, updateShot, updatePreview, preview, updateInfo, updateBusy, updateNote, isStoreBuild, runUpdateCheck, onReset, onClose, deleteWorkspace, reorderWorkspaces, assignFileWheelKey]);
+  }, [config, gameMode, theme, apps, appVersion, update, updateShot, updatePreview, updateModules, updateNotifications, updateSounds, modules, notifications, sounds, shot, preview, updateInfo, updateBusy, updateNote, isStoreBuild, runUpdateCheck, onReset, onClose, deleteWorkspace, reorderWorkspaces, assignFileWheelKey]);
 
   const tr = (text?: string) => {
     if (!text) return '';
@@ -999,6 +1194,26 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
   }, [sections, sectionId, trimmedQuery, config.language]);
 
   const isEmpty = results.length === 0;
+
+  const sectionModuleOff = (id: SectionId) =>
+    (id === 'capture' && !modules.capture) || (id === 'preview' && !modules.preview);
+
+  const mouseButtonLabel = () => {
+    const button = config.mouseTriggerButton ?? 'middle';
+    if (button === 'x1') return tr('Back');
+    if (button === 'x2') return tr('Forward');
+    return tr('Wheel');
+  };
+  const appWheelSummary = !modules.radial
+    ? tr('Off')
+    : `${mouseButtonLabel()} · ${tr(config.mouseTriggerMode === 'hold' ? 'Hold' : 'Click')}`;
+  const fileKey = (slot: 'convert' | 'tools' | 'actions') => {
+    const value = (config.fileWheelKeys?.[slot] ?? { convert: 'shift', tools: 'ctrl', actions: 'alt' }[slot]).toUpperCase();
+    return value;
+  };
+  const fileWheelSummary = !modules.shiftdrop
+    ? tr('Off')
+    : `${fileKey('convert')} · ${fileKey('tools')} · ${fileKey('actions')}`;
 
   if (!isOpen) return null;
 
@@ -1040,12 +1255,14 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
           <nav className="zs-nav" aria-label="Settings sections">
             {SECTIONS.map((section) => {
               const Icon = section.icon;
+              const muted = sectionModuleOff(section.id);
+              const active = !trimmedQuery && sectionId === section.id;
               return (
                 <button
                   key={section.id}
                   type="button"
-                  className={!trimmedQuery && sectionId === section.id ? 'is-active' : ''}
-                  aria-current={!trimmedQuery && sectionId === section.id ? 'page' : undefined}
+                  className={`${active ? 'is-active' : ''}${muted ? ' is-muted' : ''}`.trim()}
+                  aria-current={active ? 'page' : undefined}
                   onClick={() => { setSectionId(section.id); setQuery(''); setOpenFold(null); }}
                 >
                   <Icon size={15} strokeWidth={1.8} />
@@ -1089,21 +1306,55 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
                       && (sectionId === 'trigger' || sectionId === 'appearance')
                       && (group.name === 'App wheel' || group.name === 'File wheel');
                     const expanded = !foldable || openFold === group.name;
+                    const moduleOn = group.name === 'App wheel' ? modules.radial : group.name === 'File wheel' ? modules.shiftdrop : true;
+                    const foldSummary = group.name === 'App wheel' ? appWheelSummary : fileWheelSummary;
+                    const pageMuted = !trimmedQuery && (
+                      (sectionId === 'capture' && !modules.capture) ||
+                      (sectionId === 'preview' && !modules.preview)
+                    );
+                    const enableKeys = new Set(['shot-enabled', 'preview-enabled']);
                     return (
-                    <section className={`zs-group${foldable ? ' is-card' : ''}${foldable && expanded ? ' is-open' : ''}`} key={group.name}>
+                    <section className={`zs-group${foldable ? ' is-card' : ''}${foldable && expanded ? ' is-open' : ''}${pageMuted ? ' is-module-off' : ''}`} key={group.name}>
                       {foldable ? (
-                        <button
-                          type="button"
-                          className="zs-fold"
-                          aria-expanded={expanded}
-                          onClick={() => setOpenFold(expanded ? null : group.name)}
-                        >
-                          <span className="zs-fold-label">
-                            {GROUP_ICONS[group.name] ? React.createElement(GROUP_ICONS[group.name], { size: 15, strokeWidth: 1.8, className: 'zs-group-icon' }) : null}
-                            {tr(group.name)}
+                        <div className="zs-fold">
+                          <button
+                            type="button"
+                            className="zs-fold-main"
+                            aria-expanded={expanded}
+                            onClick={() => setOpenFold(expanded ? null : group.name)}
+                          >
+                            <span className="zs-fold-label">
+                              {GROUP_ICONS[group.name] ? React.createElement(GROUP_ICONS[group.name], { size: 15, strokeWidth: 1.8, className: 'zs-group-icon' }) : null}
+                              <span className="zs-fold-copy">
+                                <b>{tr(group.name)}</b>
+                                <small>{foldSummary}</small>
+                              </span>
+                            </span>
+                          </button>
+                          <span className="zs-fold-tools">
+                            <button
+                              type="button"
+                              role="switch"
+                              aria-checked={moduleOn}
+                              aria-label={tr(group.name)}
+                              className="zs-switch"
+                              onClick={() => {
+                                if (group.name === 'App wheel') updateModules({ radial: !modules.radial });
+                                else updateModules({ shiftdrop: !modules.shiftdrop });
+                              }}
+                            >
+                              <i />
+                            </button>
+                            <button
+                              type="button"
+                              className="zs-fold-chevron"
+                              aria-expanded={expanded}
+                              onClick={() => setOpenFold(expanded ? null : group.name)}
+                            >
+                              <ChevronDown size={14} strokeWidth={1.9} style={{ transform: expanded ? 'rotate(180deg)' : 'none' }} />
+                            </button>
                           </span>
-                          <ChevronDown size={14} strokeWidth={1.9} style={{ transform: expanded ? 'rotate(180deg)' : 'none' }} />
-                        </button>
+                        </div>
                       ) : (
                         <h2 className="zs-group-title">
                           {GROUP_ICONS[group.name] ? React.createElement(GROUP_ICONS[group.name], { size: 13, strokeWidth: 1.9, className: 'zs-group-icon' }) : null}
@@ -1123,7 +1374,12 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
                       ) : (
                         <div className="zs-rows">
                           {group.items.map((item) => (
-                            <SettingRow key={item.key} item={item} tr={tr} />
+                            <SettingRow
+                              key={item.key}
+                              item={item}
+                              tr={tr}
+                              locked={Boolean((pageMuted || (foldable && !moduleOn)) && !enableKeys.has(item.key))}
+                            />
                           ))}
                         </div>
                       ))}
@@ -1174,7 +1430,7 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
 };
 
 /** Uma linha, uma estrutura: cópia à esquerda, controlo alinhado à direita. */
-function SettingRow({ item, tr }: { item: SettingItem; tr: (text?: string) => string }) {
+function SettingRow({ item, tr, locked }: { item: SettingItem; tr: (text?: string) => string; locked?: boolean }) {
   const ActionIcon = item.actionIcon;
   const describedBy = item.description ? `${item.key}-desc` : undefined;
   const reorderable = typeof item.reorderIndex === 'number' && Boolean(item.onReorder);
@@ -1221,9 +1477,11 @@ function SettingRow({ item, tr }: { item: SettingItem; tr: (text?: string) => st
     <div
       className={`zs-row${item.kind === 'range' ? ' is-slider' : ''}${item.kind === 'open' ? ' is-openable' : ''}`
         + `${reorderable ? ' is-reorderable' : ''}${isDragging ? ' is-dragging' : ''}`
-        + `${dropEdge === 'above' ? ' is-drop-above' : ''}${dropEdge === 'below' ? ' is-drop-below' : ''}`}
-      onClick={item.kind === 'open' ? item.onOpen : undefined}
-      {...dragProps}
+        + `${dropEdge === 'above' ? ' is-drop-above' : ''}${dropEdge === 'below' ? ' is-drop-below' : ''}`
+        + `${locked ? ' is-locked' : ''}`}
+      onClick={locked ? undefined : item.kind === 'open' ? item.onOpen : undefined}
+      aria-disabled={locked || undefined}
+      {...(locked ? {} : dragProps)}
     >
       {reorderable && (
         <span
@@ -1249,7 +1507,8 @@ function SettingRow({ item, tr }: { item: SettingItem; tr: (text?: string) => st
             aria-labelledby={`${item.key}-label`}
             aria-describedby={describedBy}
             className="zs-switch"
-            onClick={item.onToggle}
+            disabled={locked}
+            onClick={locked ? undefined : item.onToggle}
           >
             <i />
           </button>

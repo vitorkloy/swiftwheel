@@ -180,8 +180,9 @@ function installScreenshot(ctx) {
 
   const settings = () => ({ ...DEFAULT_SCREENSHOT, ...(ctx.getScreenshotSettings() || {}) });
 
-  const toast = (body) => {
+  const toast = (body, kind = "other") => {
     if (!settings().showToasts || !body) return;
+    if (typeof ctx.allowsNotification === "function" && !ctx.allowsNotification(kind)) return;
     try {
       new Notification({ title: "SwiftWheel", body: String(body) }).show();
     } catch (e) {
@@ -615,6 +616,7 @@ function installScreenshot(ctx) {
       monitors: geometry.monitors,
       captureMonitors: geometry.captureMonitors,
       windows: geometry.windows,
+      playShutter: typeof ctx.allowsSound === "function" ? ctx.allowsSound("captureShutter") : true,
     };
   };
 
@@ -985,24 +987,24 @@ function installScreenshot(ctx) {
           });
           const outcome = ocrOutcome(text, language);
           if (outcome.ok) clipboard.writeText(outcome.text);
-          toast(outcome.toast);
+          toast(outcome.toast, "other");
           return { ok: outcome.ok, empty: outcome.empty, text: outcome.text };
         } catch (error) {
           ctx.diagLog(`[Screenshot] ocr: ${error.message}`);
           const failed = language === "pt" ? "Não foi possível ler o texto." : "Could not read the text.";
-          toast(failed);
+          toast(failed, "other");
           return { ok: false, error: error.message };
         }
       }
       if (action === "copy") {
         copyImage(payload.pngDataUrl || payload.dataUrl);
-        toast(ctx.language() === "pt" ? "Captura copiada." : "Capture copied.");
+        toast(ctx.language() === "pt" ? "Captura copiada." : "Capture copied.", "captureCopied");
         return { ok: true };
       }
       if (action === "save" || action === "wheel") {
         const file = writeImage(payload.dataUrl, settings().format);
         if (action === "save") {
-          toast(ctx.language() === "pt" ? "Captura guardada." : "Capture saved.");
+          toast(ctx.language() === "pt" ? "Captura guardada." : "Capture saved.", "captureSaved");
           return { ok: true, file };
         }
         closeOverlay();

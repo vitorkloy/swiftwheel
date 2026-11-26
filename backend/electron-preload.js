@@ -69,6 +69,11 @@ contextBridge.exposeInMainWorld("electron", {
   runFileSlice: (id, filePath) => ipcRenderer.invoke("run-file-slice", id, filePath),
   setAppearance: (appearance) => ipcRenderer.send("vor-appearance", appearance || {}),
   notifyError: (message) => ipcRenderer.send("vor-notify-error", String(message || "")),
+  onPlaySound: (callback) => {
+    const listener = (_event, name) => callback(name);
+    ipcRenderer.on("play-sound", listener);
+    return () => ipcRenderer.removeListener("play-sound", listener);
+  },
   noteFileDragPath: (filePath) => ipcRenderer.invoke("note-file-drag-path", filePath),
   shiftToolStatus: () => ipcRenderer.invoke("shift-tool-status"),
   filePath: (file) => {
