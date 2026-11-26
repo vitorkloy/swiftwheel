@@ -114,6 +114,32 @@ export interface PreviewSettings {
   shortcut: string;
 }
 
+/** Ligar/desligar cada módulo sem o Dock (issue à parte). */
+export interface ModulePrefs {
+  radial: boolean;
+  shiftdrop: boolean;
+  capture: boolean;
+  preview: boolean;
+}
+
+export interface NotificationPrefs {
+  master: boolean;
+  captureCopied: boolean;
+  captureSaved: boolean;
+  fileConvertStart: boolean;
+  fileConverted: boolean;
+  fileConvertError: boolean;
+  updates: boolean;
+  other: boolean;
+}
+
+export interface SoundPrefs {
+  master: boolean;
+  wheelOpen: boolean;
+  captureShutter: boolean;
+  convertDone: boolean;
+}
+
 export interface UIConfig {
   accentColor: string;
   /** Cor aplicada ao item apontado no menu radial. Opcional para compatibilidade com configs antigas. */
@@ -195,6 +221,9 @@ export interface UIConfig {
   };
   screenshot?: ScreenshotSettings;
   preview?: PreviewSettings;
+  modules?: ModulePrefs;
+  notifications?: NotificationPrefs;
+  sounds?: SoundPrefs;
 }
 
 export interface RadialState {
@@ -240,6 +269,7 @@ export interface ElectronAPI {
   noteFileDragPath?: (filePath: string) => Promise<{ ok: boolean }>;
   /** Mostra um erro só como notificação do sistema (PT-BR, título SwiftWheel). */
   notifyError?: (message: string) => void;
+  onPlaySound?: (callback: (name: "click" | "shutter" | "done") => void) => () => void;
   /** Tema/acento/vidro para as janelas do ShiftDrop (estúdio, toast, prateleira), que não são React. */
   setAppearance?: (appearance: { theme: 'black' | 'white'; accent: string; glass: boolean; opacity: number }) => void;
   shiftToolStatus?: () => Promise<Record<string, string | null>>;

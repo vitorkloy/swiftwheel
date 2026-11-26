@@ -1,4 +1,13 @@
-import { AppItem, PreviewSettings, ScreenshotSettings, UIConfig, Workspace } from "./types";
+import {
+  AppItem,
+  ModulePrefs,
+  NotificationPrefs,
+  PreviewSettings,
+  ScreenshotSettings,
+  SoundPrefs,
+  UIConfig,
+  Workspace,
+} from "./types";
 
 export const DEFAULT_SCREENSHOT: ScreenshotSettings = {
   enabled: true,
@@ -20,6 +29,31 @@ export const DEFAULT_SCREENSHOT: ScreenshotSettings = {
 export const DEFAULT_PREVIEW: PreviewSettings = {
   enabled: true,
   shortcut: "Space",
+};
+
+export const DEFAULT_MODULES: ModulePrefs = {
+  radial: true,
+  shiftdrop: true,
+  capture: true,
+  preview: true,
+};
+
+export const DEFAULT_NOTIFICATIONS: NotificationPrefs = {
+  master: true,
+  captureCopied: true,
+  captureSaved: true,
+  fileConvertStart: false,
+  fileConverted: true,
+  fileConvertError: true,
+  updates: true,
+  other: true,
+};
+
+export const DEFAULT_SOUNDS: SoundPrefs = {
+  master: true,
+  wheelOpen: true,
+  captureShutter: true,
+  convertDone: true,
 };
 
 export const SCREENSHOT_WHEEL_APP: AppItem = {
@@ -294,6 +328,9 @@ export const DEFAULT_UI_CONFIG: UIConfig = {
   mainStartMenuDiscoveryDone: false,
   screenshot: DEFAULT_SCREENSHOT,
   preview: DEFAULT_PREVIEW,
+  modules: DEFAULT_MODULES,
+  notifications: DEFAULT_NOTIFICATIONS,
+  sounds: DEFAULT_SOUNDS,
 };
 
 function workspaceHasScreenshot(items: AppItem[]): boolean {
@@ -316,6 +353,26 @@ function repairScreenshotShortcuts(screenshot: ScreenshotSettings): ScreenshotSe
     shortcutRegion: DEFAULT_SCREENSHOT.shortcutRegion,
     shortcutFull: DEFAULT_SCREENSHOT.shortcutFull,
     shortcutWindow: DEFAULT_SCREENSHOT.shortcutWindow,
+  };
+}
+
+/** Completa módulos/notificações/sons e alinha captura/prévia com o interruptor do módulo. */
+export function withModulePrefs(config: UIConfig): UIConfig {
+  const modules = {
+    ...DEFAULT_MODULES,
+    ...(config.modules ?? {}),
+  };
+  if (!config.modules) {
+    modules.capture = config.screenshot?.enabled !== false;
+    modules.preview = config.preview?.enabled !== false;
+  }
+  return {
+    ...config,
+    modules,
+    notifications: { ...DEFAULT_NOTIFICATIONS, ...(config.notifications ?? {}) },
+    sounds: { ...DEFAULT_SOUNDS, ...(config.sounds ?? {}) },
+    screenshot: { ...DEFAULT_SCREENSHOT, ...(config.screenshot ?? {}), enabled: modules.capture },
+    preview: { ...DEFAULT_PREVIEW, ...(config.preview ?? {}), enabled: modules.preview },
   };
 }
 
