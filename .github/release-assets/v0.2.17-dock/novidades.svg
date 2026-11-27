@@ -2,15 +2,15 @@
   <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1b1b1b"/><stop offset="1" stop-color="#121212"/></linearGradient></defs>
   <rect width="1120" height="380" rx="22" fill="url(#bg)"/>
   <rect x=".5" y=".5" width="1119" height="379" rx="21.5" fill="none" stroke="#fff" stroke-opacity=".10"/>
-  <text x="24" y="50" font-family="Inter" font-size="12.5" font-weight="600" letter-spacing="1.4" fill="rgba(255,255,255,.38)">NOVIDADE · MÓDULO DOCK</text>
+  <text x="24" y="50" font-family="Inter" font-size="12.5" font-weight="600" letter-spacing="1.4" fill="rgba(255,255,255,.38)">NOVIDADES DO SWIFTWHEEL 0.2.17 · MÓDULO DOCK</text>
   <text x="1096" y="50" text-anchor="end" font-family="Inter" font-size="13" fill="rgba(255,255,255,.38)">Issue #53 · PR #57</text>
   <rect x="24" y="76" width="352" height="132" rx="16" fill="#fff" fill-opacity=".035"/>
       <rect x="24.5" y="76.5" width="351" height="131" rx="15.5" fill="none" stroke="#fff" stroke-opacity=".08"/>
       <rect x="44" y="96" width="40" height="40" rx="11" fill="#fff" fill-opacity=".07"/>
       <rect x="51" y="113" width="26" height="10" rx="5" fill="none" stroke="#e6e6e6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><circle cx="58" cy="118" r="1.6" fill="#e6e6e6"/><circle cx="64" cy="118" r="1.6" fill="#e6e6e6"/><circle cx="70" cy="118" r="1.6" fill="#e6e6e6"/>
-      <text x="100" y="122" font-family="Inter" font-size="16.5" font-weight="600" fill="rgba(255,255,255,.93)">Pílula no tema VOR</text>
-      <text x="44" y="166" font-family="Inter" font-size="14" fill="rgba(255,255,255,.58)">Glass escuro no lugar da</text>
-      <text x="44" y="187" font-family="Inter" font-size="14" fill="rgba(255,255,255,.58)">barra de tarefas do Windows.</text><rect x="392" y="76" width="352" height="132" rx="16" fill="#fff" fill-opacity=".035"/>
+      <text x="100" y="122" font-family="Inter" font-size="16.5" font-weight="600" fill="rgba(255,255,255,.93)">Dock do SwiftWheel</text>
+      <text x="44" y="166" font-family="Inter" font-size="14" fill="rgba(255,255,255,.58)">Pílula no tema VOR no lugar</text>
+      <text x="44" y="187" font-family="Inter" font-size="14" fill="rgba(255,255,255,.58)">da barra de tarefas do Windows.</text><rect x="392" y="76" width="352" height="132" rx="16" fill="#fff" fill-opacity=".035"/>
       <rect x="392.5" y="76.5" width="351" height="131" rx="15.5" fill="none" stroke="#fff" stroke-opacity=".08"/>
       <rect x="412" y="96" width="40" height="40" rx="11" fill="#fff" fill-opacity=".07"/>
       <rect x="425" y="112" width="14" height="14" rx="4" fill="none" stroke="#e6e6e6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M432 108 v-4 M428.5 107.5 l3.5 -3.5 l3.5 3.5" fill="none" stroke="#e6e6e6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -27,8 +27,8 @@
       <rect x="44" y="244" width="40" height="40" rx="11" fill="#fff" fill-opacity=".07"/>
       <circle cx="64" cy="264" r="11" fill="none" stroke="#e6e6e6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M64 258 v6 l4 3" fill="none" stroke="#e6e6e6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
       <text x="100" y="270" font-family="Inter" font-size="16.5" font-weight="600" fill="rgba(255,255,255,.93)">Mini bandeja</text>
-      <text x="44" y="314" font-family="Inter" font-size="14" fill="rgba(255,255,255,.58)">Relógio, volume, rede, bateria</text>
-      <text x="44" y="335" font-family="Inter" font-size="14" fill="rgba(255,255,255,.58)">e notificações na própria Dock.</text><rect x="392" y="224" width="352" height="132" rx="16" fill="#fff" fill-opacity=".035"/>
+      <text x="44" y="314" font-family="Inter" font-size="14" fill="rgba(255,255,255,.58)">Relógio, volume, rede, bateria e</text>
+      <text x="44" y="335" font-family="Inter" font-size="14" fill="rgba(255,255,255,.58)">notificações dentro do SwiftWheel.</text><rect x="392" y="224" width="352" height="132" rx="16" fill="#fff" fill-opacity=".035"/>
       <rect x="392.5" y="224.5" width="351" height="131" rx="15.5" fill="none" stroke="#fff" stroke-opacity=".08"/>
       <rect x="412" y="244" width="40" height="40" rx="11" fill="#fff" fill-opacity=".07"/>
       <rect x="418" y="255" width="16" height="12" rx="2.5" fill="none" stroke="#e6e6e6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><rect x="430" y="260" width="16" height="12" rx="2.5" fill="none" stroke="#e6e6e6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
@@ -39,6 +39,6 @@
       <rect x="780" y="244" width="40" height="40" rx="11" fill="#fff" fill-opacity=".07"/>
       <path d="M800 251 l10 4 v8 c0 7 -5 11 -10 13 c-5 -2 -10 -6 -10 -13 v-8z" fill="none" stroke="#e6e6e6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/><path d="M795.5 264 l3 3 l6 -6" fill="none" stroke="#e6e6e6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
       <text x="836" y="270" font-family="Inter" font-size="16.5" font-weight="600" fill="rgba(255,255,255,.93)">Desliga sem susto</text>
-      <text x="780" y="314" font-family="Inter" font-size="14" fill="rgba(255,255,255,.58)">A barra do Windows volta na</text>
-      <text x="780" y="335" font-family="Inter" font-size="14" fill="rgba(255,255,255,.58)">hora, mesmo se o app travar.</text>
+      <text x="780" y="314" font-family="Inter" font-size="14" fill="rgba(255,255,255,.58)">A barra do Windows volta na hora,</text>
+      <text x="780" y="335" font-family="Inter" font-size="14" fill="rgba(255,255,255,.58)">mesmo se o SwiftWheel travar.</text>
 </svg>

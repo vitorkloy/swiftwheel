@@ -60,7 +60,7 @@
   </g>
 </svg>
   <text x="72" y="236" font-family="Space Grotesk" font-size="68" font-weight="600" letter-spacing="-2" fill="rgba(255,255,255,.93)">SwiftWheel<tspan dx="16" fill="rgba(255,255,255,.38)" font-weight="500">0.2.17</tspan></text>
-  <text x="74" y="278" font-family="Inter" font-size="21" fill="rgba(255,255,255,.58)">Uma Dock no lugar da barra do Windows.</text>
+  <text x="74" y="278" font-family="Inter" font-size="21" fill="rgba(255,255,255,.58)">O SwiftWheel agora tem uma Dock própria no Windows.</text>
   <g>
     <rect x="72" y="310" width="168" height="38" rx="19" fill="#fff"/>
     <text x="156" y="335" text-anchor="middle" font-family="Inter" font-size="15" font-weight="650" fill="#0a0a0b">Módulo Dock</text>

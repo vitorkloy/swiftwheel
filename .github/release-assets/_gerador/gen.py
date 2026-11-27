@@ -109,7 +109,7 @@ def banner():
 
   {logo(72, 72, 88)}
   <text x="72" y="236" font-family="{FONT_D}" font-size="68" font-weight="600" letter-spacing="-2" fill="{T1}">SwiftWheel<tspan dx="16" fill="{T3}" font-weight="500">0.2.17</tspan></text>
-  <text x="74" y="278" font-family="{FONT_UI}" font-size="21" fill="{T2}">Uma Dock no lugar da barra do Windows.</text>
+  <text x="74" y="278" font-family="{FONT_UI}" font-size="21" fill="{T2}">O SwiftWheel agora tem uma Dock própria no Windows.</text>
   <g>
     <rect x="72" y="310" width="168" height="38" rx="19" fill="#fff"/>
     <text x="156" y="335" text-anchor="middle" font-family="{FONT_UI}" font-size="15" font-weight="650" fill="#0a0a0b">Módulo Dock</text>
@@ -136,8 +136,8 @@ def btn_primary():
   <rect x=".5" y=".5" width="{W-1}" height="{H-1}" rx="19.5" fill="none" stroke="#000" stroke-opacity=".08"/>
   <rect x="18" y="18" width="48" height="48" rx="13" fill="#0a0a0b"/>
   {win_glyph(30, 30, 24, "#fff")}
-  <text x="84" y="39" font-family="{FONT_D}" font-size="22" font-weight="600" letter-spacing="-.4" fill="#0a0a0b">Baixar para Windows</text>
-  <text x="84" y="61" font-family="{FONT_UI}" font-size="14" fill="rgba(0,0,0,.55)">Instalador .exe · 96 MB · com o módulo Dock</text>
+  <text x="84" y="39" font-family="{FONT_D}" font-size="22" font-weight="600" letter-spacing="-.4" fill="#0a0a0b">Baixar SwiftWheel para Windows</text>
+  <text x="84" y="61" font-family="{FONT_UI}" font-size="14" fill="rgba(0,0,0,.55)">Instalador .exe · 96 MB · inclui o módulo Dock</text>
   {arrow(W-42, H/2, 20, "#0a0a0b", "#fff")}
 </svg>'''
 
@@ -160,10 +160,10 @@ def buttons():
     lx = lambda: si_glyph(LINUX, 23, 22, 22, "#f2f2f2")
     return {
         "btn-windows": btn_primary(),
-        "btn-macos-arm64": btn_secondary(ap(), "macOS · Apple Silicon", ".dmg · 122 MB · M1 a M4", "a"),
-        "btn-macos-x64": btn_secondary(ap(), "macOS · Intel", ".dmg · 126 MB", "b"),
-        "btn-linux-appimage": btn_secondary(lx(), "Linux · AppImage", "Qualquer distro · 145 MB", "c"),
-        "btn-linux-deb": btn_secondary(lx(), "Linux · .deb", "Debian e Ubuntu · 92 MB", "d"),
+        "btn-macos-arm64": btn_secondary(ap(), "macOS · Apple Silicon", "SwiftWheel .dmg · 122 MB", "a"),
+        "btn-macos-x64": btn_secondary(ap(), "macOS · Intel", "SwiftWheel .dmg · 126 MB", "b"),
+        "btn-linux-appimage": btn_secondary(lx(), "Linux · AppImage", "SwiftWheel · 145 MB", "c"),
+        "btn-linux-deb": btn_secondary(lx(), "Linux · .deb", "SwiftWheel · 92 MB", "d"),
     }
 
 # ── Card de novidades ───────────────────────────────────────────────────
@@ -181,12 +181,12 @@ def ico(kind, x, y):
 
 def features():
     items = [
-        ("pill", "Pílula no tema VOR", "Glass escuro no lugar da", "barra de tarefas do Windows."),
+        ("pill", "Dock do SwiftWheel", "Pílula no tema VOR no lugar", "da barra de tarefas do Windows."),
         ("lift", "Ícones sobem 6 px", "Levantadinha no hover, com", "magnificação opcional."),
         ("fast", "Some em 150 ms", "Auto-hide rápido ao tirar", "o mouse, configurável."),
-        ("tray", "Mini bandeja", "Relógio, volume, rede, bateria", "e notificações na própria Dock."),
+        ("tray", "Mini bandeja", "Relógio, volume, rede, bateria e", "notificações dentro do SwiftWheel."),
         ("multi", "Multi-monitor", "Segue o ponteiro ou fica no", "principal. Embaixo ou nas laterais."),
-        ("safe", "Desliga sem susto", "A barra do Windows volta na", "hora, mesmo se o app travar."),
+        ("safe", "Desliga sem susto", "A barra do Windows volta na hora,", "mesmo se o SwiftWheel travar."),
     ]
     W, cols, cw, ch, g, top = 1120, 3, 352, 132, 16, 76
     H = top + 2*ch + g + 24
@@ -204,33 +204,12 @@ def features():
   <defs><linearGradient id="bg" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#1b1b1b"/><stop offset="1" stop-color="#121212"/></linearGradient></defs>
   <rect width="{W}" height="{H}" rx="22" fill="url(#bg)"/>
   <rect x=".5" y=".5" width="{W-1}" height="{H-1}" rx="21.5" fill="none" stroke="#fff" stroke-opacity=".10"/>
-  <text x="24" y="50" font-family="{FONT_UI}" font-size="12.5" font-weight="600" letter-spacing="1.4" fill="{T3}">NOVIDADE · MÓDULO DOCK</text>
+  <text x="24" y="50" font-family="{FONT_UI}" font-size="12.5" font-weight="600" letter-spacing="1.4" fill="{T3}">NOVIDADES DO SWIFTWHEEL 0.2.17 · MÓDULO DOCK</text>
   <text x="{W-24}" y="50" text-anchor="end" font-family="{FONT_UI}" font-size="13" fill="{T3}">Issue #53 · PR #57</text>
   {cards}
 </svg>'''
 
-def steps():
-    items = [("1", "Saia do Windhawk", "ou desative o taskbar-styler"),
-             ("2", "Instale o .exe", "botão Windows acima"),
-             ("3", "Definições → Dock", "e ligue o módulo")]
-    W, H = 1120, 112
-    cw = (W - 48 - 2*16) / 3
-    out = ""
-    for i, (n, t, s) in enumerate(items):
-        x = 24 + i*(cw+16)
-        out += f'''<rect x="{x}" y="20" width="{cw}" height="72" rx="16" fill="#fff" fill-opacity=".035"/>
-      <rect x="{x+.5}" y="20.5" width="{cw-1}" height="71" rx="15.5" fill="none" stroke="#fff" stroke-opacity=".08"/>
-      <circle cx="{x+40}" cy="56" r="17" fill="#fff"/>
-      <text x="{x+40}" y="62" text-anchor="middle" font-family="{FONT_D}" font-size="17" font-weight="700" fill="#0a0a0b">{n}</text>
-      <text x="{x+70}" y="52" font-family="{FONT_UI}" font-size="16" font-weight="600" fill="{T1}">{t}</text>
-      <text x="{x+70}" y="72" font-family="{FONT_UI}" font-size="13.5" fill="{T3}">{s}</text>'''
-    return f'''<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" viewBox="0 0 {W} {H}">
-  <rect width="{W}" height="{H}" rx="22" fill="#151515"/>
-  <rect x=".5" y=".5" width="{W-1}" height="{H-1}" rx="21.5" fill="none" stroke="#fff" stroke-opacity=".10"/>
-  {out}
-</svg>'''
-
-files = {"banner": banner(), "novidades": features(), "como-testar": steps(), **buttons()}
+files = {"banner": banner(), "novidades": features(), **buttons()}
 for name, svg in files.items():
     (OUT / f"{name}.svg").write_text(svg)
 print(" ".join(files))
