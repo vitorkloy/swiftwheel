@@ -393,6 +393,7 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
     if (!window.electron?.checkForUpdates) return;
     setUpdateBusy(true);
     setUpdateNote(null);
+    const pt = config.language === 'pt';
     const withV = (version?: string) => {
       const raw = String(version || '').trim();
       if (!raw) return '';
@@ -403,25 +404,33 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
       if (!result?.ok) {
         setUpdateNote(
           result?.code === 'UNSUPPORTED'
-            ? 'Atualizações só na versão instalada.'
+            ? (pt ? 'Atualizações só na versão instalada.' : 'Updates run in the installed app only.')
             : result?.code === 'STORE_BUILD'
-              ? 'Esta versão é atualizada pela Microsoft Store.'
-              : 'Não foi possível verificar atualizações.',
+              ? (pt ? 'Esta versão é atualizada pela Microsoft Store.' : 'This build is updated by the Microsoft Store.')
+              : (pt ? 'Não foi possível verificar atualizações.' : 'Could not reach the update server.'),
         );
       } else if (result.state === 'current') {
         const label = withV(result.version);
-        setUpdateNote(label ? `Você está na versão mais recente (${label})` : 'Você está na versão mais recente.');
+        setUpdateNote(
+          pt
+            ? (label ? `Você está na versão mais recente (${label})` : 'Você está na versão mais recente.')
+            : (label ? `You're on the latest version (${label})` : "You're on the latest version."),
+        );
       } else {
         const label = withV(result.version);
-        setUpdateNote(label ? `Atualização encontrada (${label})` : 'Atualização encontrada.');
+        setUpdateNote(
+          pt
+            ? (label ? `Atualização encontrada (${label})` : 'Atualização encontrada.')
+            : (label ? `Update found (${label})` : 'Update found.'),
+        );
         setUpdateInfo({ state: result.state || 'downloading', version: result.version });
       }
     } catch (e) {
-      setUpdateNote('Não foi possível verificar atualizações.');
+      setUpdateNote(pt ? 'Não foi possível verificar atualizações.' : 'Could not reach the update server.');
     } finally {
       setUpdateBusy(false);
     }
-  }, []);
+  }, [config.language]);
   const reduceMotion = useReducedMotion();
 
   /**

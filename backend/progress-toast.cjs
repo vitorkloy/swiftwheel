@@ -31,12 +31,20 @@ const TOAST_HTML = `<!doctype html><meta charset="utf-8"><style>
 function createProgressToast({ BrowserWindow, screen, getAppearance }) {
   let win = null;
   let hideTimer = null;
+  let fadeTimer = null;
   let killTimer = null;
+
+  const clearTimer = (name) => {
+    if (name === "hide" && hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
+    if (name === "fade" && fadeTimer) { clearTimeout(fadeTimer); fadeTimer = null; }
+    if (name === "kill" && killTimer) { clearTimeout(killTimer); killTimer = null; }
+  };
 
   const show = (text, pct) => {
     try {
-      if (hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
-      if (killTimer) { clearTimeout(killTimer); killTimer = null; }
+      clearTimer("hide");
+      clearTimer("fade");
+      clearTimer("kill");
       const appearance = typeof getAppearance === "function" ? getAppearance() : {};
       const push = () => {
         if (!win || win.isDestroyed()) return;
@@ -61,13 +69,18 @@ function createProgressToast({ BrowserWindow, screen, getAppearance }) {
   };
 
   const hide = (delay = 0) => {
-    if (hideTimer) clearTimeout(hideTimer);
+    clearTimer("hide");
+    clearTimer("fade");
     hideTimer = setTimeout(() => {
       hideTimer = null;
       if (!win || win.isDestroyed()) return;
       win.webContents.executeJavaScript("window.set && window.set(document.getElementById('l').textContent, 1, false)").catch(() => {});
-      setTimeout(() => { try { if (win && !win.isDestroyed()) win.hide(); } catch { /* ignore */ } }, 180);
-      if (killTimer) clearTimeout(killTimer);
+      clearTimer("fade");
+      fadeTimer = setTimeout(() => {
+        fadeTimer = null;
+        try { if (win && !win.isDestroyed()) win.hide(); } catch { /* ignore */ }
+      }, 180);
+      clearTimer("kill");
       killTimer = setTimeout(() => {
         killTimer = null;
         try { if (win && !win.isDestroyed()) win.destroy(); } catch { /* ignore */ }
