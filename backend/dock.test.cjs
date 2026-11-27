@@ -2,6 +2,7 @@
 
 const { describe, it } = require("node:test");
 const assert = require("node:assert/strict");
+const { EventEmitter } = require("events");
 const fs = require("fs");
 const path = require("path");
 const lib = require("./dock-lib.cjs");
@@ -94,6 +95,50 @@ describe("dock-lib", () => {
   });
 });
 
+describe("helper pipes", () => {
+  it("não escreve em stdin destruído, ended ou nulo", () => {
+    assert.equal(lib.helperStdinWritable(null), false);
+    assert.equal(lib.writeHelperLine(null, "arm 1"), false);
+    const ended = { destroyed: false, writableEnded: true, writable: true, write() { throw new Error("no"); } };
+    assert.equal(lib.writeHelperLine(ended, "arm 1"), false);
+    const dead = { destroyed: true, writable: true, write() { throw new Error("no"); } };
+    assert.equal(lib.writeHelperLine(dead, "arm 1"), false);
+  });
+
+  it("writeHelperLine engole throw síncrono (EPIPE)", () => {
+    const stdin = {
+      destroyed: false,
+      writableEnded: false,
+      writable: true,
+      write() { const err = new Error("write EPIPE"); err.code = "EPIPE"; throw err; },
+    };
+    assert.equal(lib.writeHelperLine(stdin, "arm 1"), false);
+  });
+
+  it("guardHelperPipes engole error no stdin sem lançar", () => {
+    const child = new EventEmitter();
+    child.stdin = new EventEmitter();
+    const seen = [];
+    lib.guardHelperPipes(child, (err) => seen.push(err && err.code));
+    const err = new Error("write EPIPE");
+    err.code = "EPIPE";
+    child.stdin.emit("error", err);
+    child.emit("error", err);
+    assert.deepEqual(seen, ["EPIPE", "EPIPE"]);
+  });
+
+  it("helperChildAlive exige processo ainda a correr", () => {
+    assert.equal(lib.helperChildAlive(null), false);
+    assert.equal(lib.helperChildAlive({ killed: true, exitCode: null, stdin: { writable: true } }), false);
+    assert.equal(lib.helperChildAlive({ killed: false, exitCode: 1, stdin: { writable: true } }), false);
+    assert.equal(lib.helperChildAlive({
+      killed: false,
+      exitCode: null,
+      stdin: { destroyed: false, writableEnded: false, writable: true },
+    }), true);
+  });
+});
+
 describe("prefs.dock", () => {
   it("módulo Dock nasce desligado, mesmo sem chave", () => {
     const modules = prefs.normalizeModules({});
@@ -143,6 +188,12 @@ describe("native helper source", () => {
     assert.match(src, /CallNextHookEx/);
   });
 
+  it("engole error do stdin no helper (EPIPE)", () => {
+    const libSrc = fs.readFileSync(path.join(__dirname, "dock-lib.cjs"), "utf8");
+    assert.match(libSrc, /stdin\.on\("error"/);
+    assert.match(libSrc, /helperStdinWritable/);
+  });
+
   it("GetModuleHandle vem do kernel32 e o hook de rato só liga com edge on", () => {
     assert.match(src, /\[DllImport\("kernel32\.dll"[^\n]*GetModuleHandle/);
     assert.doesNotMatch(src, /\[DllImport\("user32\.dll"[^\n]*GetModuleHandle/);
@@ -172,9 +223,25 @@ describe("native helper source", () => {
     assert.match(main, /pinsSeeded/);
     assert.match(main, /showGen/);
     assert.match(main, /creating/);
+    assert.match(main, /guardHelperPipes/);
+    assert.match(main, /disableDock/);
+    assert.match(main, /helperCrashed/);
+    assert.doesNotMatch(main, /helperRestarts/);
+    assert.doesNotMatch(main, /setTimeout\(\s*\(\)\s*=>\s*startHelper/);
     assert.match(settings, /id: 'dock'/);
     assert.match(settings, /dock-enabled/);
     assert.match(settings, /150/);
+  });
+
+  it("o hook de rato não escreve no pipe e nunca engole o evento", () => {
+    const mouseCb = /static IntPtr MouseCallback[\s\S]*?static void ConsiderPoint/.exec(src);
+    assert.ok(mouseCb);
+    assert.doesNotMatch(mouseCb[0], /\bEmit\(/);
+    assert.match(mouseCb[0], /CallNextHookEx\(IntPtr\.Zero/);
+    assert.match(src, /MSG_MOUSE/);
+    assert.match(src, /EnableWindow/);
+    assert.match(src, /SWP_SHOWWINDOW/);
+    assert.match(src, /InvokeUi/);
   });
 });
 

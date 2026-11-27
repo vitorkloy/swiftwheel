@@ -5049,6 +5049,24 @@ app.whenReady().then(async () => {
         mainWindow.webContents.send("dock-pins", { pins: nextPins, pinsSeeded });
       }
     },
+    disableDock: (why) => {
+      currentSettings.dock = { ...DEFAULT_DOCK, ...currentSettings.dock, enabled: false };
+      currentSettings.modules = { ...currentSettings.modules, dock: false };
+      livePrefs = { ...livePrefs, modules: currentSettings.modules };
+      diagLog(`[Dock] módulo desligado (${why || "helper"}) — barra do Windows restaurada`);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        try { mainWindow.webContents.send("dock-failed", { reason: String(why || "") }); } catch { /* ignore */ }
+      }
+      const body = "A Dock nativa falhou. A barra do Windows foi restaurada e o módulo foi desligado.";
+      try {
+        const { Notification } = require("electron");
+        if (Notification.isSupported()) {
+          new Notification({ title: PRODUCT_NAME, body }).show();
+          return;
+        }
+      } catch { /* ignore */ }
+      try { dialog.showErrorBox("SwiftWheel — Dock", body); } catch { /* ignore */ }
+    },
   });
   stopDockHelper = () => dockApi.dispose();
 

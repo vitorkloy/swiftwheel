@@ -2,6 +2,7 @@
 // Fora de escopo: injetar no explorer.exe, reservar AppBar, ou engolir Win+número.
 // - Esconde/restaura Shell_TrayWnd (e Shell_SecondaryTrayWnd) só com ShowWindow.
 // - WH_MOUSE_LL só com auto-hide (edge on): emite edge in/out, sem poll do cursor.
+//   O callback nunca escreve no pipe nem engole o evento (CallNextHookEx já); senão o Start/clique congelam.
 // - SetWinEventHook (OUTOFCONTEXT) refresca a lista de janelas com debounce.
 // - Se o processo pai morrer (WaitForSingleObject no PID), a barra volta sozinha.
 // - WTS_SESSION_LOCK / disconnect restauram; unlock volta a esconder se ainda armado.
@@ -31,6 +32,8 @@ static class VorDock
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindow(string cls, string title);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern IntPtr FindWindowEx(IntPtr parent, IntPtr child, string cls, string title);
     [DllImport("user32.dll")] static extern bool ShowWindow(IntPtr h, int c);
+    [DllImport("user32.dll")] static extern bool EnableWindow(IntPtr h, bool enable);
+    [DllImport("user32.dll")] static extern bool SetWindowPos(IntPtr h, IntPtr after, int x, int y, int cx, int cy, uint flags);
     [DllImport("user32.dll")] static extern bool IsWindowVisible(IntPtr h);
     [DllImport("user32.dll")] static extern bool IsIconic(IntPtr h);
     [DllImport("user32.dll")] static extern bool EnumWindows(EnumProc p, IntPtr l);
@@ -132,6 +135,12 @@ static class VorDock
     const uint WINEVENT_SKIPOWNPROCESS = 2;
     const uint MSG_HOOK_ON = 0x8001;
     const uint MSG_HOOK_OFF = 0x8002;
+    const uint MSG_MOUSE = 0x8003;
+    const uint SWP_NOSIZE = 0x0001;
+    const uint SWP_NOMOVE = 0x0002;
+    const uint SWP_NOACTIVATE = 0x0010;
+    const uint SWP_SHOWWINDOW = 0x0040;
+    const uint SWP_HIDEWINDOW = 0x0080;
 
     static readonly object outLock = new object();
     static IntPtr stdoutHandle;
@@ -154,6 +163,9 @@ static class VorDock
     static IntPtr winHookFg = IntPtr.Zero;
     static WinEventProc winProc = OnWinEvent;
     static System.Threading.Timer listDebounce;
+    static volatile int pendingX;
+    static volatile int pendingY;
+    static volatile int pendingMouse;
 
     static void Emit(string s)
     {
@@ -227,7 +239,11 @@ static class VorDock
                 int sp = l.IndexOf(' ');
                 if (sp > 0) { cmd = l.Substring(0, sp); arg = l.Substring(sp + 1).Trim(); }
                 if (cmd == "parent") WatchParent(arg);
-                else if (cmd == "arm") SetArmed(arg == "1");
+                else if (cmd == "arm")
+                {
+                    bool on = arg == "1";
+                    InvokeUi(delegate { SetArmed(on); });
+                }
                 else if (cmd == "edge") SetEdge(arg);
                 else if (cmd == "slop")
                 {
@@ -274,13 +290,27 @@ static class VorDock
         t.Start();
     }
 
+    static void InvokeUi(Action a)
+    {
+        try
+        {
+            if (form != null && form.IsHandleCreated)
+            {
+                form.BeginInvoke(a);
+                return;
+            }
+        }
+        catch { }
+        try { a(); } catch { }
+    }
+
     static void SetArmed(bool value)
     {
         armed = value;
         if (value)
         {
-            HideTray();
             StartWinEvents();
+            HideTray();
         }
         else
         {
@@ -307,9 +337,18 @@ static class VorDock
     static void StartWinEvents()
     {
         if (winHookFg != IntPtr.Zero) return;
-        winProc = OnWinEvent;
-        winHookFg = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, winProc, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
-        winHookObj = SetWinEventHook(EVENT_OBJECT_CREATE, EVENT_OBJECT_HIDE, IntPtr.Zero, winProc, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+        try
+        {
+            winProc = OnWinEvent;
+            winHookFg = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, winProc, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+            winHookObj = SetWinEventHook(EVENT_OBJECT_CREATE, EVENT_OBJECT_HIDE, IntPtr.Zero, winProc, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+        }
+        catch (Exception ex)
+        {
+            Emit("log winevent " + Clean(ex.Message));
+            Emit("fail winevent");
+            RestoreTray();
+        }
     }
 
     static void StopWinEvents()
@@ -374,17 +413,32 @@ static class VorDock
         SetTrayVisible(true);
     }
 
+    static void ApplyTrayWindow(IntPtr h, bool show)
+    {
+        if (h == IntPtr.Zero) return;
+        if (show)
+        {
+            ShowWindow(h, SW_SHOW);
+            ShowWindow(h, SW_RESTORE);
+            EnableWindow(h, true);
+            SetWindowPos(h, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+        }
+        else
+        {
+            ShowWindow(h, SW_HIDE);
+            SetWindowPos(h, IntPtr.Zero, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_HIDEWINDOW);
+        }
+    }
+
     static void SetTrayVisible(bool show)
     {
-        int cmd = show ? SW_SHOW : SW_HIDE;
-        IntPtr tray = FindWindow("Shell_TrayWnd", null);
-        if (tray != IntPtr.Zero) ShowWindow(tray, cmd);
+        ApplyTrayWindow(FindWindow("Shell_TrayWnd", null), show);
         IntPtr sec = IntPtr.Zero;
         while (true)
         {
             sec = FindWindowEx(IntPtr.Zero, sec, "Shell_SecondaryTrayWnd", null);
             if (sec == IntPtr.Zero) break;
-            ShowWindow(sec, cmd);
+            ApplyTrayWindow(sec, show);
         }
     }
 
@@ -411,7 +465,12 @@ static class VorDock
         if (mouseHook != IntPtr.Zero) return;
         if (mouseProc == null) mouseProc = MouseCallback;
         mouseHook = SetWindowsHookEx(WH_MOUSE_LL, mouseProc, GetModuleHandle(null), 0);
-        if (mouseHook == IntPtr.Zero) Emit("log hook-fail " + Marshal.GetLastWin32Error());
+        if (mouseHook == IntPtr.Zero)
+        {
+            Emit("log hook-fail " + Marshal.GetLastWin32Error());
+            Emit("fail hook");
+            RestoreTray();
+        }
     }
 
     static void RemoveMouseHook()
@@ -432,6 +491,18 @@ static class VorDock
             {
                 if (m.msg == MSG_HOOK_ON) { InstallMouseHook(); continue; }
                 if (m.msg == MSG_HOOK_OFF) { RemoveMouseHook(); continue; }
+                if (m.msg == MSG_MOUSE)
+                {
+                    if (pendingMouse != 0)
+                    {
+                        pendingMouse = 0;
+                        POINT pt;
+                        pt.x = pendingX;
+                        pt.y = pendingY;
+                        ConsiderPoint(pt);
+                    }
+                    continue;
+                }
                 TranslateMessage(ref m);
                 DispatchMessage(ref m);
             }
@@ -445,12 +516,16 @@ static class VorDock
 
     static IntPtr MouseCallback(int code, IntPtr w, IntPtr l)
     {
+        // Nunca Emit/WriteFile aqui: bloqueia o input do sistema (Start, clique, Win).
         if (code >= 0 && edgeWatch)
         {
             MSLLHOOKSTRUCT info = (MSLLHOOKSTRUCT)Marshal.PtrToStructure(l, typeof(MSLLHOOKSTRUCT));
-            ConsiderPoint(info.pt);
+            pendingX = info.pt.x;
+            pendingY = info.pt.y;
+            pendingMouse = 1;
+            if (hookThread != 0) PostThreadMessage(hookThread, MSG_MOUSE, IntPtr.Zero, IntPtr.Zero);
         }
-        return CallNextHookEx(mouseHook, code, w, l);
+        return CallNextHookEx(IntPtr.Zero, code, w, l);
     }
 
     static void ConsiderPoint(POINT pt)

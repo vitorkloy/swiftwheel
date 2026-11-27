@@ -184,6 +184,39 @@ function mergeDockItems(pins, running) {
   return items;
 }
 
+/** stdin ainda aceita write — não usar depois de exit/close (EPIPE). */
+function helperStdinWritable(stdin) {
+  return !!(stdin && stdin.destroyed !== true && stdin.writableEnded !== true && stdin.writable !== false);
+}
+
+function helperChildAlive(child) {
+  return !!(child && child.killed !== true && child.exitCode == null && helperStdinWritable(child.stdin));
+}
+
+function writeHelperLine(stdin, line) {
+  if (!helperStdinWritable(stdin)) return false;
+  try {
+    stdin.write(`${line}\n`, "utf8");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** EPIPE/ECONNRESET no pipe não pode virar uncaughtException no main. */
+function guardHelperPipes(child, onError) {
+  if (!child) return;
+  const swallow = (err) => {
+    if (typeof onError === "function") {
+      try { onError(err); } catch { /* ignore */ }
+    }
+  };
+  if (child.stdin && typeof child.stdin.on === "function") child.stdin.on("error", swallow);
+  if (child.stdout && typeof child.stdout.on === "function") child.stdout.on("error", swallow);
+  if (child.stderr && typeof child.stderr.on === "function") child.stderr.on("error", swallow);
+  if (typeof child.on === "function") child.on("error", swallow);
+}
+
 module.exports = {
   DEFAULT_DOCK,
   normalizeDockSettings,
@@ -196,4 +229,8 @@ module.exports = {
   pinsForMerge,
   sameCommand,
   pointInRect,
+  helperStdinWritable,
+  helperChildAlive,
+  writeHelperLine,
+  guardHelperPipes,
 };

@@ -524,6 +524,7 @@ export interface ElectronAPI {
   startPreview?: (filePath: string) => Promise<{ ok: boolean; error?: string }>;
   /** Pins da Dock gravados no processo principal (fixar/desafixar no próprio Dock). */
   onDockPins?: (callback: (payload: { pins: DockPin[]; pinsSeeded?: boolean }) => void) => () => void;
+  onDockFailed?: (callback: (payload: { reason?: string }) => void) => () => void;
 }
 
 declare global {

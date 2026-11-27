@@ -20,7 +20,8 @@ function installDock(ctx) {
   let creating = null;
   let helper = null;
   let helperUp = false;
-  let helperRestarts = 0;
+  let helperStopping = false;
+  let helperCrashed = false;
   let visible = false;
   let hideTimer = null;
   let pending = null;
@@ -44,8 +45,8 @@ function installDock(ctx) {
   const language = () => (typeof ctx.language === "function" && ctx.language() === "en" ? "en" : "pt");
 
   const helperSend = (line) => {
-    if (!helper || !helper.stdin || helper.stdin.destroyed) return;
-    try { helper.stdin.write(`${line}\n`, "utf8"); } catch { /* ignore */ }
+    if (!lib.helperChildAlive(helper)) return false;
+    return lib.writeHelperLine(helper.stdin, line);
   };
 
   const restoreTaskbarOnce = () => {
@@ -369,6 +370,9 @@ function installDock(ctx) {
       if (settings().enabled) syncHelper();
     } else if (cmd === "gone") {
       ctx.diagLog("[Dock] helper perdeu o pai — barra restaurada");
+    } else if (cmd === "fail") {
+      ctx.diagLog(`[Dock] helper falhou (${arg || "desconhecido"})`);
+      failDock(arg || "helper");
     } else if (cmd === "log") {
       ctx.diagLog(`[Dock] ${arg}`);
     }
@@ -385,9 +389,24 @@ function installDock(ctx) {
     incomingWindows = [];
     incomingPins = [];
     seedPins = [];
-    const child = spawn(exe, [], { windowsHide: true, stdio: ["pipe", "pipe", "ignore"] });
+    helperStopping = false;
+    const child = spawn(exe, [], { windowsHide: true, stdio: ["pipe", "pipe", "pipe"] });
     helper = child;
     helperUp = false;
+    const onGone = (why) => {
+      if (helper !== child) return;
+      helper = null;
+      helperUp = false;
+      restoreTaskbarOnce();
+      hideDock();
+      if (helperStopping) return;
+      failDock(why);
+    };
+    lib.guardHelperPipes(child, (err) => {
+      const code = err && err.code;
+      ctx.diagLog(`[Dock] pipe ${code || (err && err.message) || "error"}`);
+      if (code === "EPIPE" || code === "ECONNRESET" || code === "ERR_STREAM_DESTROYED") onGone(code || "pipe");
+    });
     let buf = Buffer.alloc(0);
     child.stdout.on("data", (chunk) => {
       buf = Buffer.concat([buf, Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk)]);
@@ -400,42 +419,65 @@ function installDock(ctx) {
         if (line) onHelperLine(line);
       }
     });
-    child.on("exit", () => {
-      if (helper !== child) return;
-      helper = null;
-      helperUp = false;
-      restoreTaskbarOnce();
-      if (!windowsOnly() || settings().enabled === false) return;
-      helperRestarts += 1;
-      if (helperRestarts > 20) return;
-      const wait = Math.min(8000, 400 * helperRestarts);
-      setTimeout(() => startHelper(), wait);
-    });
+    if (child.stderr) {
+      child.stderr.on("data", (chunk) => {
+        const text = String(chunk || "").trim();
+        if (text) ctx.diagLog(`[Dock] stderr ${text.slice(0, 400)}`);
+      });
+    }
+    child.on("exit", (code, signal) => onGone(`código ${code}${signal ? `/${signal}` : ""}`));
+    child.on("close", () => onGone("close"));
     return true;
   };
 
+  const failDock = (why) => {
+    helperCrashed = true;
+    restoreTaskbarOnce();
+    hideDock();
+    helperStopping = true;
+    if (helper) {
+      const child = helper;
+      helper = null;
+      helperUp = false;
+      try { if (child) child.kill(); } catch { /* ignore */ }
+    }
+    ctx.diagLog(`[Dock] a desligar o módulo — ${why || "helper saiu"}`);
+    if (typeof ctx.disableDock === "function") ctx.disableDock(String(why || "helper saiu"));
+  };
+
   const stopHelper = () => {
+    helperStopping = true;
+    helperSend("edge off");
     helperSend("arm 0");
     helperSend("quit");
-    try { if (helper) helper.kill(); } catch { /* ignore */ }
+    const child = helper;
     helper = null;
     helperUp = false;
+    try { if (child && child.stdin && !child.stdin.destroyed) child.stdin.end(); } catch { /* ignore */ }
+    try { if (child) child.kill(); } catch { /* ignore */ }
     restoreTaskbarOnce();
   };
 
   const syncHelper = () => {
     const cfg = settings();
     if (!windowsOnly() || !cfg.enabled) {
-      helperSend("arm 0");
-      helperSend("edge off");
+      helperCrashed = false;
       stopHelper();
       hideDock();
       return;
     }
-    if (!helper) startHelper();
-    helperSend("arm 1");
+    if (helperCrashed) {
+      restoreTaskbarOnce();
+      return;
+    }
+    if (!lib.helperChildAlive(helper)) {
+      helper = null;
+      startHelper();
+    }
+    // Hook de auto-hide antes de esconder a barra: sem hook o utilizador fica sem as duas.
     helperSend(`slop 2`);
     helperSend(cfg.autoHide ? `edge ${cfg.position}` : "edge off");
+    helperSend("arm 1");
     sendDockHwnd();
     helperSend("pins");
     helperSend("list");

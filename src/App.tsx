@@ -482,7 +482,7 @@ export default function App() {
     };
   }, []);
   useEffect(() => {
-    return window.electron?.onDockPins?.((payload) => {
+    const stopPins = window.electron?.onDockPins?.((payload) => {
       const pins = Array.isArray(payload) ? payload : payload?.pins;
       const pinsSeeded = Array.isArray(payload) ? undefined : payload?.pinsSeeded;
       setConfig((current) => ({
@@ -495,6 +495,17 @@ export default function App() {
         },
       }));
     });
+    const stopFail = window.electron?.onDockFailed?.(() => {
+      setConfig((current) => ({
+        ...current,
+        dock: { ...DEFAULT_DOCK, ...current.dock, enabled: false },
+        modules: { ...current.modules, dock: false },
+      }));
+    });
+    return () => {
+      stopPins?.();
+      stopFail?.();
+    };
   }, []);
   const targetWorkspaceIndexRef = useRef(config.activeWorkspaceIndex);
   targetWorkspaceIndexRef.current = config.activeWorkspaceIndex;
