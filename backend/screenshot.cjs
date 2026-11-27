@@ -25,6 +25,7 @@ const {
 } = require("./capture-mode.cjs");
 const { recognizeDataUrl, ocrOutcome } = require("./ocr.cjs");
 const desktop = require("./window-desktop.cjs");
+const { createMainWindowVisibilityGuard } = require("./settings-panel.cjs");
 
 const DEFAULT_SCREENSHOT = {
   enabled: true,
@@ -157,6 +158,12 @@ function installScreenshot(ctx) {
     if (!helperReady()) return;
     try { helper.stdin.write(`${line}\n`); } catch { /* ignore */ }
   };
+  /**
+   * hide() na main (as Definições) sem restore deixava o HWND escondido para sempre:
+   * o overlay cobre o ecrã, depois o park faz restorefg num HWND invisível e a
+   * janela de Configurações "fecha sozinha".
+   */
+  const mainWindowGuard = createMainWindowVisibilityGuard(() => ctx.getMainWindow());
   /** @type {{ parts: string[], windows: { x: number, y: number, width: number, height: number }[] } | null} */
   let pendingHelperShot = null;
   /** @type {Map<string, "region" | "full" | "window">} */
@@ -301,6 +308,8 @@ function installScreenshot(ctx) {
     pendingSession = null;
     revealOverlay = () => {};
     overlayActive = false;
+    // Devolver a main ANTES do park: restorefg precisa do HWND visível (Definições).
+    mainWindowGuard.restoreAfterCapture();
     const win = overlay;
     overlay = null;
     if (!win || win.isDestroyed()) {
@@ -358,10 +367,7 @@ function installScreenshot(ctx) {
   };
 
   const hideOurWindows = () => {
-    const main = ctx.getMainWindow();
-    if (main && !main.isDestroyed() && main.isVisible()) {
-      try { main.hide(); } catch { /* ignore */ }
-    }
+    mainWindowGuard.hideForCapture();
   };
 
   const virtualDesktopBounds = () => {
@@ -719,12 +725,16 @@ function installScreenshot(ctx) {
         width: bounds.width,
         height: bounds.height,
       }), shell);
+      // Overlay já está topmost: a main volta a ficar por baixo, visível para o restorefg.
+      mainWindowGuard.restoreAfterCapture();
     } catch (e) {
       ctx.diagLog(`[Screenshot] ${e.message}`);
       toast(ctx.language() === "pt" ? "Não foi possível capturar a tela." : "Could not capture the screen.");
       if (shell && !shell.isDestroyed()) {
         overlay = shell;
         closeOverlay();
+      } else {
+        mainWindowGuard.restoreAfterCapture();
       }
     } finally {
       ctx.setGrabbing(false);
@@ -754,7 +764,7 @@ function installScreenshot(ctx) {
     ctx.diagLog(`[Screenshot] nativo: BitBlt ${grabMs} ms, congelado visível em ${parts[7]} ms`);
     const cfg = settings();
     try {
-      hideOurWindows();
+      // BitBlt nativo já correu com a main visível; escondê-la só impedia o restorefg.
       const virtual = virtualDesktopBounds();
       const point = screen.getCursorScreenPoint();
       const virtPhys = {

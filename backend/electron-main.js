@@ -36,6 +36,7 @@ const win32Launch = require("./win32-launch");
 const unixPlatform = process.platform === "win32" ? null : require("./platform-unix.cjs");
 const { normalizeFullPersistenceBlob } = require("./persistence-normalize.cjs");
 const { detectGameExecutable } = require("./game-detection.cjs");
+const { shouldKeepSettingsPanel } = require("./settings-panel.cjs");
 const {
   fileWheelVisualRadiusPx,
   clampCenterToWorkArea,
@@ -1056,27 +1057,30 @@ async function createWindow() {
   // Close → hide to tray (unless app.quit() is in progress — then allow real close).
   // Without syncing React (window-hid-to-tray), the renderer still thinks the dashboard is open;
   // reopening from the tray skips showWindow and hit-testing stays broken in the old window rect.
+  // Já escondida (captura/roda): preventDefault sem IPC — senão um close em cascata
+  // destruía o HWND das Definições e o restore nunca as trazia de volta.
   newWindow.on("close", (event) => {
     if (isAppQuitting) {
       return;
     }
-    if (newWindow.isVisible()) {
-      event.preventDefault();
-      // Notify renderer before native hide so it can sync-save while webContents is still fully alive.
-      try {
-        if (
-          !newWindow.isDestroyed() &&
-          newWindow.webContents &&
-          !newWindow.webContents.isDestroyed()
-        ) {
-          newWindow.webContents.send("window-hid-to-tray");
-        }
-      } catch (e) {
-        /* ignore */
-      }
-      newWindow.hide();
-      newWindow.setSkipTaskbar(true);
+    event.preventDefault();
+    if (!newWindow.isVisible()) {
+      return;
     }
+    // Notify renderer before native hide so it can sync-save while webContents is still fully alive.
+    try {
+      if (
+        !newWindow.isDestroyed() &&
+        newWindow.webContents &&
+        !newWindow.webContents.isDestroyed()
+      ) {
+        newWindow.webContents.send("window-hid-to-tray");
+      }
+    } catch (e) {
+      /* ignore */
+    }
+    newWindow.hide();
+    newWindow.setSkipTaskbar(true);
   });
 
   // Setup window content immediately to trigger loading -> ready-to-show
@@ -1379,6 +1383,10 @@ function presentRadialWindow(source = "shortcut", fileWheel = null, anchor = nul
   if (!rendererPanelVisible) {
     panelOverlayActive = false;
     panelOverlayKeptWindow = false;
+  } else if (isMainWindowOnScreen()) {
+    // Definições à vista: o radial não pode mandar keepPanel=false só porque
+    // o centro do monitor não cabe no HWND (o renderer fechava o painel).
+    panelOverlayActive = true;
   }
 
   /**
@@ -1566,6 +1574,10 @@ function presentRadialWindow(source = "shortcut", fileWheel = null, anchor = nul
       paintTimeout.unref?.();
     }
 
+    const keepPanel = shouldKeepSettingsPanel({
+      panelVisible: rendererPanelVisible,
+      overlayActive: panelOverlayActive,
+    });
     mainWindow.webContents.send("open-menu", {
       /** Centro real do monitor; nunca usar estas coordenadas como posição livre do cursor. */
       x: radialCenter.x,
@@ -1576,7 +1588,7 @@ function presentRadialWindow(source = "shortcut", fileWheel = null, anchor = nul
       /** Main já chamou `updateWindowSize('fullscreen')` (exceto minimizado: bounds em fila). */
       preSizedByMain: !wasMinimized,
       /** O painel continua no ecrã por baixo do radial — o renderer não o pode fechar. */
-      keepPanel: source === "file" ? false : panelOverlayActive,
+      keepPanel,
       /**
        * Rect de ecrã do painel, SEMPRE que ele fica por baixo do radial.
        *
@@ -1588,7 +1600,7 @@ function presentRadialWindow(source = "shortcut", fileWheel = null, anchor = nul
        * Mandá-lo sempre remove a ambiguidade: no caminho sem resize o rect coincide com os bounds
        * da janela, portanto posicionar dá exatamente o mesmo resultado que `inset-0`.
        */
-      panelRect: panelOverlayActive ? { ...lastWindowedBounds } : null,
+      panelRect: keepPanel && lastWindowedBounds ? { ...lastWindowedBounds } : null,
       /** Não depender de window.screenX/Y no primeiro tick após setBounds: ainda podem ser os do Settings. */
       clientPosition: radialClientPosition,
       windowOrigin: radialWindowOrigin,

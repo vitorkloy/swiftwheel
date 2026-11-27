@@ -1234,6 +1234,7 @@ const RadialMenuInner: React.FC<RadialMenuProps> = ({
       // diagLog(`[RadialMenu.tsx] KeyDown detected: ${e.key}, Ctrl: ${e.ctrlKey}, Alt: ${e.altKey}, Shift: ${e.shiftKey}`);
       if (e.key === 'Escape') {
         e.preventDefault();
+        e.stopPropagation();
         onClose(null);
         return;
       }
