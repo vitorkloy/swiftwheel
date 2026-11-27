@@ -2188,7 +2188,7 @@ export default function App() {
       void openMenuRef.current(data.x, data.y, data.source === 'file' ? 'mmb' : (data.source ?? 'shortcut'), 'screen', {
         preSizedByMain: data.preSizedByMain === true,
         showInactive: data.source === 'file',
-        keepPanel: data.keepPanel === true,
+        keepPanel: typeof data.keepPanel === "boolean" ? data.keepPanel : undefined,
         panelRect: data.panelRect ?? null,
         clientPosition: data.clientPosition ?? null,
         windowOrigin: data.windowOrigin ?? null,
@@ -2486,7 +2486,9 @@ export default function App() {
 
     if (command === 'vor:screenshot' && isDesktopMode && window.electron) {
       setIsMenuOpen(false);
-      window.electron.hideWindow();
+      if (!electronShrinkGateRef.current.panelSurfaceOpen) {
+        window.electron.hideWindow();
+      }
       window.electron.executeCommand(command, commandType, options);
       return;
     }

@@ -502,6 +502,8 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
     if (!isOpen) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key === 'Escape') {
+        // A roda (capture) já consumiu o Escape: não fechar Definições por baixo.
+        if (event.defaultPrevented) return;
         if (editor) setEditor(null);
         else onClose();
         return;
