@@ -7,8 +7,10 @@
 //   e mostra na hora uma janela topmost sem ativação que pinta exatamente esse frame 1:1.
 //   O Electron abre por cima com o mesmo frame e só então esta janela some: zero salto.
 // Protocolo (linhas): stdin  bind <accel>=<mode>;...  | grab <mode> | armed 0|1 | hide | quit
+//                            todesktop <hwnd> | restorefg
 //                     stdout ready | shot <mode> <x> <y> <w> <h> <grabMs> <shownMs> <file>
 //                            win <x> <y> <w> <h> (físico, z-order) | wins-end | esc | log <txt>
+//                            todesktop ok|fail
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -114,6 +116,19 @@ static class VorCapture
                 else if (cmd == "armed") armed = arg == "1";
                 else if (cmd == "grab") { string m = arg; form.BeginInvoke((Action)(() => Grab(m))); }
                 else if (cmd == "hide") form.BeginInvoke((Action)HideFreeze);
+                else if (cmd == "todesktop")
+                {
+                    long n = 0;
+                    IntPtr h = long.TryParse(arg, out n) ? new IntPtr(n) : IntPtr.Zero;
+                    form.BeginInvoke((Action)(() =>
+                    {
+                        bool ok = VirtualDesktop.MoveToCurrent(h);
+                        if (ok && !VirtualDesktop.IsOnCurrent(h)) ok = false;
+                        Emit("todesktop " + (ok ? "ok" : "fail"));
+                    }));
+                }
+                else if (cmd == "restorefg")
+                    form.BeginInvoke((Action)VirtualDesktop.RestoreForeground);
                 else if (cmd == "status")
                     Emit("status hook=" + (hook != IntPtr.Zero ? 1 : 0) + " bindings=" + bindings.Count + " lastkey=" + (lastKeyAt == 0 ? -1 : Environment.TickCount - lastKeyAt) + " armed=" + (armed ? 1 : 0));
                 else if (cmd == "toolwindow")
@@ -235,6 +250,11 @@ static class VorCapture
         var sw = Stopwatch.StartNew();
         try
         {
+            // Grava a desktop e o HWND em primeiro plano ANTES de mostrar o freeze.
+            // SetWindowPos no form criado no arranque (outra desktop) sem este move
+            // ou mostra o freeze na desktop errada ou troca a área de trabalho.
+            VirtualDesktop.RememberForeground();
+            VirtualDesktop.MoveToCurrent(form.Handle);
             int x = GetSystemMetrics(76), y = GetSystemMetrics(77), w = GetSystemMetrics(78), h = GetSystemMetrics(79);
             ReleaseFrame();
             IntPtr screenDc = GetDC(IntPtr.Zero);

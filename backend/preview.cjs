@@ -12,6 +12,7 @@ const { BrowserWindow, app: electronApp, net, protocol, screen, shell } = requir
 const lib = require("./preview-lib.cjs");
 const navLib = require("./preview-nav.cjs");
 const office = require("./preview-office.cjs");
+const desktop = require("./window-desktop.cjs");
 
 const DEFAULT_PREVIEW = {
   enabled: true,
@@ -415,6 +416,7 @@ function installPreview(ctx) {
     });
     try { window.setHasShadow(false); } catch { /* ignore */ }
     attachLifecycle(window);
+    desktop.pinToAllWorkspaces(window);
     window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
     window.webContents.on("will-navigate", (event, url) => {
       if (/^https?:\/\/localhost:5173\//i.test(url) || url.startsWith("file:")) return;
@@ -521,7 +523,10 @@ function installPreview(ctx) {
         visible = true;
         setArmed();
         shownAt = Date.now();
-        if (!window.isVisible()) window.show();
+        // show() + focus() numa janela reaproveitada noutro Virtual Desktop troca a
+        // área de trabalho. showInactive depois de todesktop mantém o Explorer focado
+        // (o helper nativo já trata Esc/setas) e não muda a desktop.
+        desktop.presentInactiveOnCurrentDesktop(window, { helperSend });
         sendHostRect();
         if (office.isOfficeKind(session.kind)) {
           const filled = await fillOfficeSession(session, job.filePath);

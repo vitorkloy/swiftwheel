@@ -2,7 +2,8 @@
 
 /**
  * Toast de progresso do ShiftDrop ("Convertendo para PDF…"), numa janela leve
- * reaproveitada. Criada só no primeiro uso e destruída após 60 s sem trabalho.
+ * reaproveitada enquanto o trabalho corre. Depois do fade, a janela é destruída
+ * (não hide): um HWND escondido fica preso noutro Virtual Desktop.
  * O mesmo cartão serve a verificação manual de atualizações.
  */
 const TOAST_HTML = `<!doctype html><meta charset="utf-8"><style>
@@ -32,19 +33,16 @@ function createProgressToast({ BrowserWindow, screen, getAppearance }) {
   let win = null;
   let hideTimer = null;
   let fadeTimer = null;
-  let killTimer = null;
 
   const clearTimer = (name) => {
     if (name === "hide" && hideTimer) { clearTimeout(hideTimer); hideTimer = null; }
     if (name === "fade" && fadeTimer) { clearTimeout(fadeTimer); fadeTimer = null; }
-    if (name === "kill" && killTimer) { clearTimeout(killTimer); killTimer = null; }
   };
 
   const show = (text, pct) => {
     try {
       clearTimer("hide");
       clearTimer("fade");
-      clearTimer("kill");
       const appearance = typeof getAppearance === "function" ? getAppearance() : {};
       const push = () => {
         if (!win || win.isDestroyed()) return;
@@ -63,6 +61,7 @@ function createProgressToast({ BrowserWindow, screen, getAppearance }) {
         });
         win.setIgnoreMouseEvents(true);
         win.setAlwaysOnTop(true, "screen-saver");
+        try { win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch { /* ignore */ }
         win.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(TOAST_HTML)}`).then(push).catch(() => {});
       } else push();
     } catch { /* toast é só cosmético */ }
@@ -78,14 +77,10 @@ function createProgressToast({ BrowserWindow, screen, getAppearance }) {
       clearTimer("fade");
       fadeTimer = setTimeout(() => {
         fadeTimer = null;
-        try { if (win && !win.isDestroyed()) win.hide(); } catch { /* ignore */ }
-      }, 180);
-      clearTimer("kill");
-      killTimer = setTimeout(() => {
-        killTimer = null;
+        // Destruir depois do fade: reaproveitar um HWND escondido prende o toast noutro Virtual Desktop.
         try { if (win && !win.isDestroyed()) win.destroy(); } catch { /* ignore */ }
         win = null;
-      }, 60000);
+      }, 180);
     }, delay);
   };
 

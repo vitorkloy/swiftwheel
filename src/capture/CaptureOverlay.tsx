@@ -669,6 +669,7 @@ export const CaptureOverlay: React.FC = () => {
           if (session.demo) return;
           return window.electron?.screenshotAction?.({
             action: 'copy',
+            stayOpen: true,
             dataUrl: shot.dataUrl,
             pngDataUrl: shot.pngDataUrl,
             width: next.width,
@@ -1074,6 +1075,7 @@ export const CaptureOverlay: React.FC = () => {
             if (session.demo) return;
             return window.electron?.screenshotAction?.({
               action: 'copy',
+              stayOpen: true,
               dataUrl: shot.dataUrl,
               pngDataUrl: shot.pngDataUrl,
               width: next.width,

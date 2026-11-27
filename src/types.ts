@@ -486,6 +486,7 @@ export interface ElectronAPI {
     height?: number;
     mode?: "region" | "window" | "full";
     region?: { x: number; y: number; width: number; height: number } | null;
+    stayOpen?: boolean;
   }) => Promise<{ ok: boolean; error?: string; file?: string; empty?: boolean; text?: string }>;
   onScreenshotRemember?: (
     callback: (region: { x: number; y: number; width: number; height: number }) => void,

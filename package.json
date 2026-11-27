@@ -26,7 +26,7 @@
     "test:platform-unix": "node --test backend/platform-unix.test.cjs",
     "test:preview": "node --test backend/preview.test.cjs backend/preview-office.test.cjs",
     "test:file-wheel": "node --test backend/file-wheel-geometry.test.cjs backend/shift-wheels-cert.test.cjs",
-    "test:capture": "node --test backend/capture-mode.test.cjs backend/ocr.test.cjs",
+    "test:capture": "node --test backend/capture-mode.test.cjs backend/ocr.test.cjs backend/window-desktop.test.cjs",
     "test:prefs": "node --test backend/prefs.test.cjs",
     "test:update-check": "node --test backend/update-check-feedback.test.cjs backend/progress-toast.test.cjs"
   },

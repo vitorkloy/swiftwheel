@@ -24,6 +24,7 @@ const {
   normalizeCaptureMode,
 } = require("./capture-mode.cjs");
 const { recognizeDataUrl, ocrOutcome } = require("./ocr.cjs");
+const desktop = require("./window-desktop.cjs");
 
 const DEFAULT_SCREENSHOT = {
   enabled: true,
@@ -144,10 +145,18 @@ function installScreenshot(ctx) {
   let overlayActive = false;
   let overlayHwnd = "";
   let helperHideTimer = null;
+  /** @type {((ok: boolean) => void)[]} */
+  let desktopWaiters = [];
+  let pendingCopyToast = null;
   let helper = null;
   let helperUp = false;
   let helperRestarts = 0;
   let helperBindSpec = "";
+  const helperReady = () => !!(helper && helperUp && !helper.killed);
+  const helperSend = (line) => {
+    if (!helperReady()) return;
+    try { helper.stdin.write(`${line}\n`); } catch { /* ignore */ }
+  };
   /** @type {{ parts: string[], windows: { x: number, y: number, width: number, height: number }[] } | null} */
   let pendingHelperShot = null;
   /** @type {Map<string, "region" | "full" | "window">} */
@@ -224,26 +233,56 @@ function installScreenshot(ctx) {
    * A janela do overlay nunca faz show/hide depois do arranque (#33): o Windows animava o show com
    * zoom+fade (o "pulo"). Ociosa fica visível mas transparente, atravessável por cliques, sem foco,
    * fora do Alt+Tab e sem alwaysOnTop (não atrapalha jogos em tela cheia). Na captura sobe ao topo.
+   *
+   * Reaproveitar este HWND noutro Virtual Desktop e chamar focus()/moveTop() é o que troca a
+   * área de trabalho do utilizador ao copiar o print. Park devolve o foreground à app de origem
+   * ANTES de setFocusable(false); senão o Windows ativa a main/preview noutro desktop.
    */
   const parkWindow = (win) => {
     if (!win || win.isDestroyed()) return;
     try {
-      // Ociosa = opacidade 0: nada visível mesmo que a superfície do Chromium saia opaca (cinza).
-      win.setOpacity(0);
-      win.setIgnoreMouseEvents(true);
-      win.setAlwaysOnTop(false);
-      win.setFocusable(false);
-      win.webContents.send("screenshot-session", null);
+      desktop.parkCaptureOverlay(win, { helperSend });
     } catch (e) { ctx.diagLog(`[Screenshot] park: ${e.message}`); }
   };
+  const waitDesktopMove = () => new Promise((resolve) => {
+    if (!helperReady() || !overlayHwnd) {
+      resolve(null);
+      return;
+    }
+    const timer = setTimeout(() => resolve(false), 250);
+    desktopWaiters.push((ok) => {
+      clearTimeout(timer);
+      resolve(ok);
+    });
+    helperSend(`todesktop ${overlayHwnd}`);
+  });
+  const ensureOverlayOnCurrentDesktop = async (bounds) => {
+    let win = await takeOverlayShell(bounds);
+    if (!win || win.isDestroyed()) return win;
+    desktop.pinToAllWorkspaces(win);
+    const hwnd = desktop.hwndFromWindow(win);
+    if (hwnd) overlayHwnd = hwnd;
+    const moved = await waitDesktopMove();
+    if (desktop.shouldRecreateOverlay({ movedToCurrentDesktop: moved })) {
+      ctx.diagLog("[Screenshot] overlay preso noutro desktop, a recriar na atual");
+      try { if (!win.isDestroyed()) win.close(); } catch { /* ignore */ }
+      overlay = null;
+      warmShell = null;
+      overlayHwnd = "";
+      win = await buildOverlayShell(bounds);
+      overlay = win;
+    }
+    return win;
+  };
   const activateWindow = (win) => {
-    win.setFocusable(true);
-    win.setIgnoreMouseEvents(false);
-    // focus() antes do topmost: ao trocar o foreground o shell reergue a Shell_TrayWnd
-    // (também topmost) por cima; por isso o topmost vem depois e é reafirmado.
-    win.focus();
-    win.setAlwaysOnTop(true, "screen-saver");
-    win.moveTop();
+    if (!win || win.isDestroyed()) return;
+    // todesktop já correu em ensureOverlayOnCurrentDesktop; focus() aqui é seguro
+    // porque o HWND está na desktop atual (ou a janela acabou de nascer nela).
+    desktop.activateCaptureOverlay(win, {
+      hwnd: overlayHwnd,
+      helperSend: () => {},
+      allowFocus: true,
+    });
     const reassert = () => {
       if (!overlayActive || overlay !== win || win.isDestroyed()) return;
       try { win.moveTop(); } catch { /* ignore */ }
@@ -257,6 +296,8 @@ function installScreenshot(ctx) {
     clearTimeout(helperHideTimer);
     helperSend("armed 0");
     helperSend("hide");
+    const toastLater = pendingCopyToast;
+    pendingCopyToast = null;
     pendingSession = null;
     revealOverlay = () => {};
     overlayActive = false;
@@ -264,6 +305,7 @@ function installScreenshot(ctx) {
     overlay = null;
     if (!win || win.isDestroyed()) {
       queueMicrotask(() => { void primeWarmShell(); });
+      if (toastLater) toast(toastLater.body, toastLater.kind);
       return;
     }
     parkWindow(win);
@@ -271,6 +313,7 @@ function installScreenshot(ctx) {
       try { warmShell.close(); } catch { /* ignore */ }
     }
     warmShell = win;
+    if (toastLater) toast(toastLater.body, toastLater.kind);
   };
 
   const pinImage = (dataUrl, width, height) => {
@@ -296,6 +339,7 @@ function installScreenshot(ctx) {
       alwaysOnTop: true,
       skipTaskbar: false,
       autoHideMenuBar: true,
+      show: false,
       backgroundColor: "#111111",
       webPreferences: { contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
@@ -305,7 +349,12 @@ function installScreenshot(ctx) {
       fs.rm(dir, { recursive: true, force: true }, () => {});
     });
     win.removeMenu();
-    void win.loadFile(path.join(dir, "index.html"));
+    void win.loadFile(path.join(dir, "index.html")).then(() => {
+      if (win.isDestroyed()) return;
+      desktop.pinToAllWorkspaces(win);
+      desktop.presentInactiveOnCurrentDesktop(win, { helperSend });
+      try { win.focus(); } catch { /* ignore */ }
+    });
   };
 
   const hideOurWindows = () => {
@@ -465,9 +514,11 @@ function installScreenshot(ctx) {
       },
     });
     attachShellLifecycle(win);
+    disableTransitions(win);
     if (ctx.isDev) await win.loadURL("http://localhost:5173/capture.html");
     else await win.loadFile(ctx.captureHtmlPath);
     if (!win.isDestroyed()) {
+      desktop.pinToAllWorkspaces(win);
       win.setBounds(bounds);
       win.setIgnoreMouseEvents(true);
       // Único show da vida da janela, com opacidade 0: no arranque a superfície do Chromium podia
@@ -538,7 +589,7 @@ function installScreenshot(ctx) {
   const openOverlay = async (bounds, session, prepared) => {
     const win = prepared && !prepared.isDestroyed()
       ? prepared
-      : await takeOverlayShell(bounds);
+      : await ensureOverlayOnCurrentDesktop(bounds);
     if (win.isDestroyed()) return;
     overlay = win;
     let revealed = false;
@@ -661,7 +712,7 @@ function installScreenshot(ctx) {
       const { png, bounds } = await grabVirtualDesktop();
       grabMs = Date.now() - t0;
       openedAt = Date.now();
-      shell = await takeOverlayShell(virtual.bounds);
+      shell = await ensureOverlayOnCurrentDesktop(virtual.bounds);
       const geometry = sessionGeometry(virtual, point, [], null);
       await openOverlay(bounds, buildSession(cfg, pick, geometry, {
         frameUrl: publishFrame(png),
@@ -688,11 +739,6 @@ function installScreenshot(ctx) {
    * Node a cada tecla do sistema; com o main ocupado (grab de 300–850 ms) o hook estourava o
    * LowLevelHooksTimeout e o Windows removia-o em silêncio: o atalho morria e o resto do SwiftWheel seguia.
    */
-  const helperReady = () => !!(helper && helperUp && !helper.killed);
-  const helperSend = (line) => {
-    if (!helperReady()) return;
-    try { helper.stdin.write(`${line}\n`); } catch { /* ignore */ }
-  };
   const onHelperShot = async (parts, physWindows) => {
     // shot <mode> <x> <y> <w> <h> <grabMs> <shownMs> <file...>
     const mode = parts[1];
@@ -718,7 +764,7 @@ function installScreenshot(ctx) {
         height: Number(parts[5]) || virtual.bounds.height,
       };
       const geometry = sessionGeometry(virtual, point, physWindows || [], virtPhys);
-      const shell = await takeOverlayShell(virtual.bounds);
+      const shell = await ensureOverlayOnCurrentDesktop(virtual.bounds);
       frameFile = file;
       helperSend("armed 1");
       await openOverlay(virtual.bounds, buildSession(cfg, mode, geometry, {
@@ -783,6 +829,11 @@ function installScreenshot(ctx) {
           const pending = pendingHelperShot;
           pendingHelperShot = null;
           if (pending) void onHelperShot(pending.parts, pending.windows);
+        } else if (parts[0] === "todesktop") {
+          const ok = parts[1] === "ok";
+          const waiters = desktopWaiters;
+          desktopWaiters = [];
+          for (const fn of waiters) fn(ok);
         } else if (parts[0] === "esc") {
           if (overlay && !overlay.isDestroyed()) closeOverlay();
           else helperSend("hide");
@@ -998,7 +1049,10 @@ function installScreenshot(ctx) {
       }
       if (action === "copy") {
         copyImage(payload.pngDataUrl || payload.dataUrl);
-        toast(ctx.language() === "pt" ? "Captura copiada." : "Capture copied.", "captureCopied");
+        const body = ctx.language() === "pt" ? "Captura copiada." : "Capture copied.";
+        // copyOnSelect deixa o overlay aberto: o "Copiado" já está na barra. Não disparar
+        // Notification agora — no Windows o toast pode ativar a main noutro desktop.
+        if (!payload.stayOpen) pendingCopyToast = { body, kind: "captureCopied" };
         return { ok: true };
       }
       if (action === "save" || action === "wheel") {

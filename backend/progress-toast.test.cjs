@@ -45,9 +45,10 @@ describe("progress-toast", () => {
     toast.show("Você está na versão mais recente (v0.2.17)", 1);
     mock.timers.tick(180);
     assert.equal(calls.hide, 0);
+    assert.equal(calls.destroy, 0);
   });
 
-  it("esconde depois dos 180 ms quando não há trabalho novo", () => {
+  it("destrói depois dos 180 ms quando não há trabalho novo", () => {
     mock.timers.enable({ apis: ["setTimeout"] });
     const { win, calls } = mockWindow();
     const toast = createProgressToast({
@@ -63,6 +64,7 @@ describe("progress-toast", () => {
     toast.hide(0);
     mock.timers.tick(0);
     mock.timers.tick(180);
-    assert.equal(calls.hide, 1);
+    assert.equal(calls.hide, 0);
+    assert.equal(calls.destroy, 1);
   });
 });

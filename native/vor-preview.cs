@@ -6,7 +6,7 @@
 // - O item selecionado e a lista de irmãos vêm da view do Explorer (IFolderView).
 // Protocolo (linhas UTF-8):
 //   stdin  bind <accel> | armed 0|1 | pinned 0|1 | hwnd <n> | openwith <path> | select <path> | selecti <index>
-//          | preview <path> | preview-clear | hostrect <l> <t> <w> <h> | quit | status
+//          | preview <path> | preview-clear | hostrect <l> <t> <w> <h> | todesktop <n> | quit | status
 //   stdout ready | view <index> <count> | viewitem <path> | open <path> | close | next | prev | launch
 //          | openwith-done | preview-ok | preview-fail <why> | log <txt> | status ...
 // Com a prévia armada o Explorer fica com o teclado (o Windows recusa o foco à janela
@@ -281,6 +281,21 @@ static partial class VorPreview
                     long n = 0;
                     if (long.TryParse(arg, out n)) previewHwnd = new IntPtr(n);
                     try { if (hostForm != null) hostForm.BeginInvoke((Action)PositionHost); } catch { }
+                }
+                else if (cmd == "todesktop")
+                {
+                    long n = 0;
+                    IntPtr h = long.TryParse(arg, out n) ? new IntPtr(n) : (previewHwnd);
+                    try
+                    {
+                        form.BeginInvoke((Action)(() =>
+                        {
+                            VirtualDesktop.RememberForeground();
+                            bool ok = VirtualDesktop.MoveToCurrent(h);
+                            Emit("log todesktop " + (ok ? "ok" : "fail"));
+                        }));
+                    }
+                    catch { Emit("log todesktop fail"); }
                 }
                 else if (cmd == "preview")
                 {
