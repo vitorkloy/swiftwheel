@@ -46,6 +46,7 @@ let fileWheelUiScale = 1;
 let fileWheelUiHoldMs = 300;
 const { DEFAULT_SCREENSHOT, installScreenshot, createShortcutTracker } = require("./screenshot.cjs");
 const { DEFAULT_PREVIEW, installPreview } = require("./preview.cjs");
+const { DEFAULT_DOCK, installDock } = require("./dock.cjs");
 const prefs = require("./prefs.cjs");
 /** Espelho das prefs para o código fora do `whenReady` (toasts, sons). */
 let livePrefs = {
@@ -93,6 +94,7 @@ let screenshotGrabbing = false;
 let startScreenshot = async () => {};
 let restartCaptureShortcut = () => {};
 let stopPreviewHelper = () => {};
+let stopDockHelper = () => {};
 let startPreviewFile = async () => ({ ok: false });
 
 /**
@@ -2774,6 +2776,7 @@ function beginUpdateInstall() {
   stopRadialMouseBlocker();
   stopForegroundFocusHelper();
   stopPreviewHelper();
+  stopDockHelper();
 
   try {
     autoUpdater.quitAndInstall(true, true);
@@ -3007,6 +3010,7 @@ app.whenReady().then(async () => {
     openAtLogin: true,
     screenshot: { ...DEFAULT_SCREENSHOT },
     preview: { ...DEFAULT_PREVIEW },
+    dock: { ...DEFAULT_DOCK },
     modules: { ...prefs.DEFAULT_MODULES },
     notifications: { ...prefs.DEFAULT_NOTIFICATIONS },
     sounds: { ...prefs.DEFAULT_SOUNDS },
@@ -3122,7 +3126,19 @@ app.whenReady().then(async () => {
         ...ui.preview,
       };
     }
-    currentSettings.modules = prefs.normalizeModules(ui.modules, currentSettings.screenshot, currentSettings.preview);
+    if (ui.dock && typeof ui.dock === "object") {
+      currentSettings.dock = {
+        ...DEFAULT_DOCK,
+        ...currentSettings.dock,
+        ...ui.dock,
+      };
+    }
+    currentSettings.modules = prefs.normalizeModules(
+      ui.modules,
+      currentSettings.screenshot,
+      currentSettings.preview,
+      currentSettings.dock,
+    );
     currentSettings.notifications = prefs.normalizeNotifications(ui.notifications);
     currentSettings.sounds = prefs.normalizeSounds(ui.sounds);
     currentSettings.screenshot = {
@@ -3134,6 +3150,11 @@ app.whenReady().then(async () => {
       ...DEFAULT_PREVIEW,
       ...currentSettings.preview,
       enabled: currentSettings.modules.preview,
+    };
+    currentSettings.dock = {
+      ...DEFAULT_DOCK,
+      ...currentSettings.dock,
+      enabled: currentSettings.modules.dock,
     };
     livePrefs = {
       modules: currentSettings.modules,
@@ -4924,8 +4945,10 @@ app.whenReady().then(async () => {
     entries.push(`shot:${shot.enabled}:${shot.shortcutRegion}:${shot.shortcutFull}:${shot.shortcutWindow}`);
     const preview = currentSettings.preview || {};
     entries.push(`preview:${preview.enabled}:${preview.shortcut}`);
-    const modules = prefs.normalizeModules(currentSettings.modules, shot, preview);
-    entries.push(`mod:${modules.radial}:${modules.shiftdrop}:${modules.capture}:${modules.preview}`);
+    const dock = currentSettings.dock || {};
+    entries.push(`dock:${dock.enabled}:${dock.autoHide}:${dock.autoHideDelayMs}:${dock.position}:${dock.monitor}:${dock.iconSize}:${dock.liftPx}:${dock.magnification}`);
+    const modules = prefs.normalizeModules(currentSettings.modules, shot, preview, dock);
+    entries.push(`mod:${modules.radial}:${modules.shiftdrop}:${modules.capture}:${modules.preview}:${modules.dock}`);
     return entries.join("\u0001");
   };
 
@@ -5002,6 +5025,51 @@ app.whenReady().then(async () => {
   stopPreviewHelper = () => previewApi.dispose();
   ipcMain.handle("start-preview", (_event, filePath) => previewApi.open(String(filePath || "")));
 
+  const dockApi = installDock({
+    ipcMain,
+    app,
+    isDev,
+    preloadPath: path.join(__dirname, "dock-preload.js"),
+    dockHtmlPath: path.join(__dirname, "../dist/dock.html"),
+    dockHelperPath: unpacked(path.join(__dirname, "bin", "vor-dock.exe")),
+    getDockSettings: () => currentSettings.dock,
+    getAppearance: () => vorAppearance,
+    onAppearance: (hook) => vorAppearanceHooks.add(hook),
+    language: () => {
+      if (currentSettings.uiLanguage === "pt" || currentSettings.language === "pt") return "pt";
+      if (currentSettings.uiLanguage === "en" || currentSettings.language === "en") return "en";
+      return String(app.getLocale() || "").toLowerCase().startsWith("pt") ? "pt" : "en";
+    },
+    diagLog,
+    patchDockPins: (pins, extra) => {
+      const nextPins = Array.isArray(pins) ? pins : [];
+      const pinsSeeded = extra && extra.pinsSeeded === false ? false : true;
+      currentSettings.dock = { ...DEFAULT_DOCK, ...currentSettings.dock, pins: nextPins, pinsSeeded };
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        mainWindow.webContents.send("dock-pins", { pins: nextPins, pinsSeeded });
+      }
+    },
+    disableDock: (why) => {
+      currentSettings.dock = { ...DEFAULT_DOCK, ...currentSettings.dock, enabled: false };
+      currentSettings.modules = { ...currentSettings.modules, dock: false };
+      livePrefs = { ...livePrefs, modules: currentSettings.modules };
+      diagLog(`[Dock] módulo desligado (${why || "helper"}) — barra do Windows restaurada`);
+      if (mainWindow && !mainWindow.isDestroyed()) {
+        try { mainWindow.webContents.send("dock-failed", { reason: String(why || "") }); } catch { /* ignore */ }
+      }
+      const body = "A Dock nativa falhou. A barra do Windows foi restaurada e o módulo foi desligado.";
+      try {
+        const { Notification } = require("electron");
+        if (Notification.isSupported()) {
+          new Notification({ title: PRODUCT_NAME, body }).show();
+          return;
+        }
+      } catch { /* ignore */ }
+      try { dialog.showErrorBox("SwiftWheel — Dock", body); } catch { /* ignore */ }
+    },
+  });
+  stopDockHelper = () => dockApi.dispose();
+
   const registerGlobalShortcut = (force = false) => {
     const registrationSignature = shortcutRegistrationSignature();
     if (!force && registrationSignature === lastShortcutRegistrationSignature) {
@@ -5040,6 +5108,7 @@ app.whenReady().then(async () => {
     if (!radialOn) {
       shotApi.registerShortcuts(globalShortcut);
       previewApi.registerShortcuts();
+      dockApi.sync();
       return;
     }
 
@@ -5132,6 +5201,7 @@ app.whenReady().then(async () => {
     }
     shotApi.registerShortcuts(globalShortcut);
     previewApi.registerShortcuts();
+    dockApi.sync();
   };
 
   const unregisterWorkspaceShortcuts = () => {
@@ -8531,6 +8601,10 @@ app.on("window-all-closed", (e) => {
   e.preventDefault();
 });
 
+app.on("before-quit", () => {
+  try { stopDockHelper(); } catch { /* ignore */ }
+});
+
 app.on("will-quit", () => {
   if (unixPlatform) unixPlatform.stopHook();
   /** Primeiro os helpers: enquanto viverem, o instalador não consegue tocar na pasta. */
@@ -8538,6 +8612,7 @@ app.on("will-quit", () => {
   stopRadialMouseBlocker();
   stopForegroundFocusHelper();
   stopPreviewHelper();
+  stopDockHelper();
   saveIconCache({ sync: true });
   globalShortcut.unregisterAll();
 });

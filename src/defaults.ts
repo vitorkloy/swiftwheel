@@ -1,5 +1,6 @@
 import {
   AppItem,
+  DockSettings,
   ModulePrefs,
   NotificationPrefs,
   PreviewSettings,
@@ -31,11 +32,25 @@ export const DEFAULT_PREVIEW: PreviewSettings = {
   shortcut: "Space",
 };
 
+export const DEFAULT_DOCK: DockSettings = {
+  enabled: false,
+  iconSize: 48,
+  liftPx: 6,
+  magnification: false,
+  autoHide: true,
+  autoHideDelayMs: 150,
+  position: "bottom",
+  monitor: "follow-mouse",
+  pins: [],
+  pinsSeeded: false,
+};
+
 export const DEFAULT_MODULES: ModulePrefs = {
   radial: true,
   shiftdrop: true,
   capture: true,
   preview: true,
+  dock: false,
 };
 
 export const DEFAULT_NOTIFICATIONS: NotificationPrefs = {
@@ -328,6 +343,7 @@ export const DEFAULT_UI_CONFIG: UIConfig = {
   mainStartMenuDiscoveryDone: false,
   screenshot: DEFAULT_SCREENSHOT,
   preview: DEFAULT_PREVIEW,
+  dock: DEFAULT_DOCK,
   modules: DEFAULT_MODULES,
   notifications: DEFAULT_NOTIFICATIONS,
   sounds: DEFAULT_SOUNDS,
@@ -356,7 +372,7 @@ function repairScreenshotShortcuts(screenshot: ScreenshotSettings): ScreenshotSe
   };
 }
 
-/** Completa módulos/notificações/sons e alinha captura/prévia com o interruptor do módulo. */
+/** Completa módulos/notificações/sons e alinha captura/prévia/dock com o interruptor do módulo. */
 export function withModulePrefs(config: UIConfig): UIConfig {
   const modules = {
     ...DEFAULT_MODULES,
@@ -365,6 +381,7 @@ export function withModulePrefs(config: UIConfig): UIConfig {
   if (!config.modules) {
     modules.capture = config.screenshot?.enabled !== false;
     modules.preview = config.preview?.enabled !== false;
+    modules.dock = config.dock?.enabled === true;
   }
   return {
     ...config,
@@ -373,6 +390,7 @@ export function withModulePrefs(config: UIConfig): UIConfig {
     sounds: { ...DEFAULT_SOUNDS, ...(config.sounds ?? {}) },
     screenshot: { ...DEFAULT_SCREENSHOT, ...(config.screenshot ?? {}), enabled: modules.capture },
     preview: { ...DEFAULT_PREVIEW, ...(config.preview ?? {}), enabled: modules.preview },
+    dock: { ...DEFAULT_DOCK, ...(config.dock ?? {}), enabled: modules.dock },
   };
 }
 

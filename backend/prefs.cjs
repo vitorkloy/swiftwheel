@@ -7,6 +7,7 @@ const DEFAULT_MODULES = {
   shiftdrop: true,
   capture: true,
   preview: true,
+  dock: false,
 };
 
 /** Início de conversão desligado por padrão (#7); o resto ligado. */
@@ -32,15 +33,17 @@ function asBool(value, fallback) {
   return typeof value === "boolean" ? value : fallback;
 }
 
-function normalizeModules(raw, screenshot, preview) {
+function normalizeModules(raw, screenshot, preview, dock) {
   const src = raw && typeof raw === "object" ? raw : {};
   const captureFromShot = screenshot && screenshot.enabled === false ? false : true;
   const previewFromCfg = preview && preview.enabled === false ? false : true;
+  const dockFromCfg = dock && dock.enabled === true ? true : false;
   return {
     radial: asBool(src.radial, true),
     shiftdrop: asBool(src.shiftdrop, true),
     capture: asBool(src.capture, captureFromShot),
     preview: asBool(src.preview, previewFromCfg),
+    dock: asBool(src.dock, dockFromCfg),
   };
 }
 

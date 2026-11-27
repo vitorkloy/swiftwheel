@@ -4,6 +4,7 @@ import { RadialMenu } from './components/RadialMenu';
 import { Toast } from './components/Toast';
 import { Coordinates, AppItem, UIConfig, UserProfile, Workspace } from './types';
 import {
+  DEFAULT_DOCK,
   DEFAULT_SCREENSHOT,
   DEFAULT_UI_CONFIG,
   MINIMAL_MAIN_WORKSPACE_APPS,
@@ -478,6 +479,32 @@ export default function App() {
     return () => {
       stopRegion?.();
       stopMode?.();
+    };
+  }, []);
+  useEffect(() => {
+    const stopPins = window.electron?.onDockPins?.((payload) => {
+      const pins = Array.isArray(payload) ? payload : payload?.pins;
+      const pinsSeeded = Array.isArray(payload) ? undefined : payload?.pinsSeeded;
+      setConfig((current) => ({
+        ...current,
+        dock: {
+          ...DEFAULT_DOCK,
+          ...current.dock,
+          pins: Array.isArray(pins) ? pins : current.dock?.pins ?? [],
+          ...(typeof pinsSeeded === "boolean" ? { pinsSeeded } : {}),
+        },
+      }));
+    });
+    const stopFail = window.electron?.onDockFailed?.(() => {
+      setConfig((current) => ({
+        ...current,
+        dock: { ...DEFAULT_DOCK, ...current.dock, enabled: false },
+        modules: { ...current.modules, dock: false },
+      }));
+    });
+    return () => {
+      stopPins?.();
+      stopFail?.();
     };
   }, []);
   const targetWorkspaceIndexRef = useRef(config.activeWorkspaceIndex);

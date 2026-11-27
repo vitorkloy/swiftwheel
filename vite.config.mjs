@@ -23,6 +23,7 @@ export default defineConfig({
         main: resolve(root, "index.html"),
         capture: resolve(root, "capture.html"),
         preview: resolve(root, "preview.html"),
+        dock: resolve(root, "dock.html"),
       },
       output: {
         manualChunks(id) {

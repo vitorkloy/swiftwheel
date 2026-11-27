@@ -64,6 +64,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends libx11-dev libxtst-dev libxt-dev libxinerama-dev libxrandr-dev libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libxkbfile-dev
       - run: npm ci
       - name: Unit tests
+        shell: bash
         run: |
           npm run test:user-data-migrate
           npm run test:persistence-shape
@@ -72,6 +73,8 @@ jobs:
           npm run test:file-wheel
           npm run test:capture
           npm run test:update-check
+          npm run test:prefs
+          npm run test:dock
       - name: Unix platform tests
         if: runner.os != 'Windows'
         run: npm run test:platform-unix

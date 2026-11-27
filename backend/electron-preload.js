@@ -172,6 +172,16 @@ contextBridge.exposeInMainWorld("electron", {
   },
   screenshotAction: (payload) => ipcRenderer.invoke("screenshot-action", payload),
   startPreview: (filePath) => ipcRenderer.invoke("start-preview", filePath),
+  onDockPins: (callback) => {
+    const listener = (_event, pins) => callback(pins);
+    ipcRenderer.on("dock-pins", listener);
+    return () => ipcRenderer.removeListener("dock-pins", listener);
+  },
+  onDockFailed: (callback) => {
+    const listener = (_event, payload) => callback(payload);
+    ipcRenderer.on("dock-failed", listener);
+    return () => ipcRenderer.removeListener("dock-failed", listener);
+  },
   onScreenshotRemember: (callback) => {
     const listener = (_event, region) => callback(region);
     ipcRenderer.on("screenshot-remember", listener);

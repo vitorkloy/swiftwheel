@@ -114,12 +114,38 @@ export interface PreviewSettings {
   shortcut: string;
 }
 
-/** Ligar/desligar cada módulo sem o Dock (issue à parte). */
+export interface DockPin {
+  id: string;
+  label: string;
+  command: string;
+  commandType?: "app" | "url" | "folder";
+  iconPath?: string;
+}
+
+export interface DockSettings {
+  enabled: boolean;
+  iconSize: number;
+  /** Hover-lift estilo macOS, em px. Padrão 6. */
+  liftPx: number;
+  /** Magnificação dos vizinhos no hover. Desligada por padrão. */
+  magnification: boolean;
+  autoHide: boolean;
+  /** Delay para esconder depois que o ponteiro sai, em ms. Padrão 150. */
+  autoHideDelayMs: number;
+  position: "bottom" | "left" | "right";
+  monitor: "follow-mouse" | "primary";
+  pins: DockPin[];
+  /** True depois da primeira semente da taskbar; pins vazio passa a ser intencional. */
+  pinsSeeded?: boolean;
+}
+
+/** Ligar/desligar cada módulo. Desligado: sem hooks, listeners ou processos. */
 export interface ModulePrefs {
   radial: boolean;
   shiftdrop: boolean;
   capture: boolean;
   preview: boolean;
+  dock: boolean;
 }
 
 export interface NotificationPrefs {
@@ -221,6 +247,7 @@ export interface UIConfig {
   };
   screenshot?: ScreenshotSettings;
   preview?: PreviewSettings;
+  dock?: DockSettings;
   modules?: ModulePrefs;
   notifications?: NotificationPrefs;
   sounds?: SoundPrefs;
@@ -495,6 +522,9 @@ export interface ElectronAPI {
     callback: (mode: "region" | "window" | "full") => void,
   ) => () => void;
   startPreview?: (filePath: string) => Promise<{ ok: boolean; error?: string }>;
+  /** Pins da Dock gravados no processo principal (fixar/desafixar no próprio Dock). */
+  onDockPins?: (callback: (payload: { pins: DockPin[]; pinsSeeded?: boolean }) => void) => () => void;
+  onDockFailed?: (callback: (payload: { reason?: string }) => void) => () => void;
 }
 
 declare global {

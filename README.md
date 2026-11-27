@@ -30,8 +30,15 @@ Cada um liga e desliga nas Definições → Geral → Módulos. Desligado, some 
 | **Roda de arquivos (ShiftDrop)** | Arraste um arquivo no Explorer e segure Shift (converter), Ctrl (ferramentas) ou Alt (ações). |
 | **Captura** | Print Screen no estilo Lightshot: congela a tela, recorta, anota, copia/salva, OCR. |
 | **Pré-visualização** | Espaço no Explorer ou na área de trabalho abre uma prévia (estilo QuickLook, sem copiar código GPL). |
+| **Dock** | Pílula estilo macOS (tema VOR, hover-lift de 6 px, auto-hide 150 ms). Esconde a barra do Windows enquanto está ligada. **Desligada por padrão.** |
 
-O módulo Dock **não** faz parte deste repositório.
+## Dock
+
+Definições → **Dock**. Ligada, a barra de tarefas do Windows (`Shell_TrayWnd`) some e a pílula assume os ícones fixados e os apps abertos. Clique foca ou abre; botão direito fixa, desafixa ou fecha a janela. O relógio e um mini tray (volume, rede, notificações) ficam na própria Dock.
+
+Auto-hide: a Dock aparece ao encostar o ponteiro na borda e some no delay configurado (padrão 150 ms). **Não reserva área de trabalho** — janelas maximizadas usam a tela inteira. Atalhos **Win+número** continuam com o Explorer.
+
+A barra do Windows volta ao desligar o módulo, ao sair do app, ao bloquear a sessão e se o processo morrer. Sem Windhawk e sem injeção no `explorer.exe`.
 
 ## Captura de tela
 
@@ -102,6 +109,7 @@ Login Google (opcional) usa credenciais **suas**: copie `.env.example` para `.en
 | `npm run test:capture` | Modos de captura e OCR |
 | `npm run test:file-wheel` | Geometria da roda de arquivos |
 | `npm run test:preview` | Prévia e Office |
+| `npm run test:dock` | Dock: defaults, geometria, helper nativo |
 | `npm run test:win32-launch` | Parsing/quoting de comandos |
 | `npm run test:user-data-migrate` | Migração VOR → SwiftWheel |
 | `npm run test:persistence-shape` | Normalização do blob persistido |
