@@ -88,10 +88,9 @@ app.whenReady().then(async () => {
     shelf.webContents.send("shelf-items", ["photo.jpg", "image.png", "doc.pdf", "video.mp4"].map((n) => ({ path: path.join(samples, n), name: n, icon: "" })));
     await shoot("shelf", shelf, theme); shelf.destroy();
 
-    const src = fs.readFileSync(path.join(backend, "electron-main.js"), "utf8");
-    const m = src.match(/const SHIFT_TOAST_HTML = `([\s\S]*?)`;/);
+    const { TOAST_HTML } = require(path.join(backend, "progress-toast.cjs"));
     const toast = make(340, 100);
-    await toast.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(m[1])}`);
+    await toast.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(TOAST_HTML)}`);
     await toast.webContents.executeJavaScript(`window.theme(${JSON.stringify(appearance)}); window.set("Comprimindo photo.jpg 2 de 3", 0.55, true)`);
     await shoot("toast", toast, theme); toast.destroy();
   }

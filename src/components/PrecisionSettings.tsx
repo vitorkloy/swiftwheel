@@ -326,6 +326,13 @@ const PT: Record<string, string> = {
   English: 'English',
   'Português (Brasil)': 'Português (Brasil)',
   'Idioma do sistema': 'Idioma do sistema',
+  Updates: 'Atualizações',
+  'Check for updates': 'Verificar atualização',
+  'Check now': 'Verificar agora',
+  'Checking…': 'Procurando…',
+  'Restart now': 'Reiniciar agora',
+  'Downloaded and verified. SwiftWheel restarts to finish.': 'Baixada e verificada. O SwiftWheel reinicia para concluir.',
+  'SwiftWheel checks automatically a few seconds after launch.': 'O SwiftWheel verifica sozinho alguns segundos depois de abrir.',
 };
 
 export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
@@ -386,26 +393,44 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
     if (!window.electron?.checkForUpdates) return;
     setUpdateBusy(true);
     setUpdateNote(null);
+    const pt = config.language === 'pt';
+    const withV = (version?: string) => {
+      const raw = String(version || '').trim();
+      if (!raw) return '';
+      return raw.charAt(0).toLowerCase() === 'v' ? raw : `v${raw}`;
+    };
     try {
       const result = await window.electron.checkForUpdates();
       if (!result?.ok) {
         setUpdateNote(
           result?.code === 'UNSUPPORTED'
-            ? 'Updates run in the installed app only.'
-            : 'Could not reach the update server.',
+            ? (pt ? 'Atualizações só na versão instalada.' : 'Updates run in the installed app only.')
+            : result?.code === 'STORE_BUILD'
+              ? (pt ? 'Esta versão é atualizada pela Microsoft Store.' : 'This build is updated by the Microsoft Store.')
+              : (pt ? 'Não foi possível verificar atualizações.' : 'Could not reach the update server.'),
         );
       } else if (result.state === 'current') {
-        setUpdateNote(`You're on the latest version (${result.version}).`);
+        const label = withV(result.version);
+        setUpdateNote(
+          pt
+            ? (label ? `Você está na versão mais recente (${label})` : 'Você está na versão mais recente.')
+            : (label ? `You're on the latest version (${label})` : "You're on the latest version."),
+        );
       } else {
-        setUpdateNote(`Version ${result.version} is downloading.`);
-        setUpdateInfo({ state: 'downloading', version: result.version });
+        const label = withV(result.version);
+        setUpdateNote(
+          pt
+            ? (label ? `Atualização encontrada (${label})` : 'Atualização encontrada.')
+            : (label ? `Update found (${label})` : 'Update found.'),
+        );
+        setUpdateInfo({ state: result.state || 'downloading', version: result.version });
       }
     } catch (e) {
-      setUpdateNote('Could not reach the update server.');
+      setUpdateNote(pt ? 'Não foi possível verificar atualizações.' : 'Could not reach the update server.');
     } finally {
       setUpdateBusy(false);
     }
-  }, []);
+  }, [config.language]);
   const reduceMotion = useReducedMotion();
 
   /**
@@ -1091,7 +1116,9 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
           ? [{
               key: 'update-ready',
               group: 'Updates',
-              title: `Version ${updateInfo.version ?? ''} is ready`.replace(/\s+/g, ' ').trim(),
+              title: (config.language === 'pt'
+                ? `A versão ${updateInfo.version ?? ''} está pronta`
+                : `Version ${updateInfo.version ?? ''} is ready`).replace(/\s+/g, ' ').trim(),
               description: 'Downloaded and verified. SwiftWheel restarts to finish.',
               kind: 'action' as const,
               actionLabel: 'Restart now',
@@ -1108,7 +1135,9 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
               description:
                 updateNote ??
                 (updateInfo.state === 'downloading'
-                  ? `Downloading version ${updateInfo.version ?? ''}…`.replace(/\s+/g, ' ')
+                  ? (config.language === 'pt'
+                    ? `Baixando a versão ${updateInfo.version ?? ''}…`
+                    : `Downloading version ${updateInfo.version ?? ''}…`).replace(/\s+/g, ' ')
                   : 'SwiftWheel checks automatically a few seconds after launch.'),
               kind: 'action' as const,
               actionLabel: updateBusy ? 'Checking…' : 'Check now',
