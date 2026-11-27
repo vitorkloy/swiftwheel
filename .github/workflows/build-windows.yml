@@ -71,6 +71,7 @@ jobs:
           npm run test:preview
           npm run test:file-wheel
           npm run test:capture
+          npm run test:update-check
       - name: Unix platform tests
         if: runner.os != 'Windows'
         run: npm run test:platform-unix

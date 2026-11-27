@@ -12,9 +12,17 @@ const {
   session,
   protocol,
 } = require("electron");
+const { createProgressToast } = require("./progress-toast.cjs");
+const updateCheckFeedback = require("./update-check-feedback.cjs");
 /** Aparência atual (Definições → Aparência), espelhada do renderer para as janelas do ShiftDrop. */
 let vorAppearance = { theme: "black", accent: "#FFFFFF", glass: true, opacity: 0.8 };
 const vorAppearanceHooks = new Set();
+/** Toast de progresso (ShiftDrop e verificação manual de atualizações). A janela só nasce no primeiro `show`. */
+const progressToast = createProgressToast({
+  BrowserWindow,
+  screen,
+  getAppearance: () => vorAppearance,
+});
 const { autoUpdater } = require("electron-updater");
 const { Notification: UpdateNotification } = require("electron");
 const { PRODUCT_NAME, APP_ID } = require("./product.cjs");
@@ -2864,6 +2872,54 @@ function configureAutoUpdates() {
 
 const UPDATE_CHECK_INTERVAL_MS = 15 * 60 * 1000;
 let lastToastedUpdateVersion = null;
+let manualUpdateCheckInFlight = null;
+
+function showManualUpdateToast(view) {
+  if (!view) return;
+  progressToast.show(view.text, view.pct);
+  if (view.hideMs > 0) progressToast.hide(view.hideMs);
+}
+
+/**
+ * Verificação a pedido (bandeja e Definições). O intervalo automático não passa daqui —
+ * o toast de progresso só existe neste caminho.
+ */
+async function performManualUpdateCheck() {
+  if (!app.isPackaged) {
+    const result = { ok: false, code: "UNSUPPORTED", state: lastKnownUpdate.state };
+    showManualUpdateToast(updateCheckFeedback.resultToast(result));
+    return result;
+  }
+  if (isStoreBuild()) {
+    const result = { ok: false, code: "STORE_BUILD", state: "idle" };
+    showManualUpdateToast(updateCheckFeedback.resultToast(result));
+    return result;
+  }
+  showManualUpdateToast(updateCheckFeedback.searchingToast());
+  try {
+    const check = await autoUpdater.checkForUpdates();
+    const version = check?.updateInfo?.version;
+    const result = isNewerThanInstalled(version)
+      ? { ok: true, state: canSelfInstallUpdate() ? "downloading" : "ready", version }
+      : { ok: true, state: "current", version: app.getVersion() };
+    showManualUpdateToast(updateCheckFeedback.resultToast(result));
+    return result;
+  } catch (error) {
+    diagLog(`[Update] Manual check failed: ${error?.message || error}`);
+    const result = { ok: false, code: "CHECK_FAILED", error: error?.message || String(error) };
+    showManualUpdateToast(updateCheckFeedback.resultToast(result));
+    return result;
+  }
+}
+
+function runManualUpdateCheck() {
+  if (manualUpdateCheckInFlight) return manualUpdateCheckInFlight;
+  const job = performManualUpdateCheck().finally(() => {
+    manualUpdateCheckInFlight = null;
+  });
+  manualUpdateCheckInFlight = job;
+  return job;
+}
 
 /**
  * Notificação nativa do Windows, uma vez por versão (como o `maybe_toast` do ShiftDrop).
@@ -3986,13 +4042,7 @@ app.whenReady().then(async () => {
         {
           label: pt ? "Verificar atualização" : "Check for updates",
           click: () => {
-            ipcMain.emit("check-for-updates-tray");
-            try {
-              const { autoUpdater } = require("electron-updater");
-              autoUpdater.checkForUpdates().catch((err) => diagLog(`[Tray] update: ${err.message}`));
-            } catch (e) {
-              diagLog(`[Tray] update: ${e.message}`);
-            }
+            runManualUpdateCheck().catch((err) => diagLog(`[Tray] update: ${err.message}`));
           },
         },
         {
@@ -4567,74 +4617,9 @@ app.whenReady().then(async () => {
           }
         });
       });
-      /**
-       * Toast de progresso do ShiftDrop ("Convertendo 2 de 3"), numa janela leve reaproveitada.
-       * Criada só no primeiro uso e destruída após 60 s sem trabalho, para não ficar com RAM parada.
-       */
-      let shiftToast = null;
-      let shiftToastHide = null;
-      let shiftToastKill = null;
-      /** Toast no estilo Tangerine: cartão de vidro pequeno, ação + arquivo + "N de M" e barra fina no acento. */
-      const SHIFT_TOAST_HTML = `<!doctype html><meta charset="utf-8"><style>
-        :root{--bg:rgba(24,24,26,.9);--line:rgba(255,255,255,.12);--text:rgba(255,255,255,.94);--text2:rgba(255,255,255,.55);--track:rgba(255,255,255,.12);--accent:#fff;--elev:0 14px 34px rgba(0,0,0,.45)}
-        [data-theme=white]{--bg:rgba(250,250,251,.94);--line:rgba(0,0,0,.09);--text:rgba(0,0,0,.88);--text2:rgba(0,0,0,.52);--track:rgba(0,0,0,.08);--elev:0 14px 34px rgba(0,0,0,.16)}
-        html,body{margin:0;background:transparent;overflow:hidden;font:12.5px/1.3 "Segoe UI Variable Text","Segoe UI",sans-serif;color:var(--text);-webkit-font-smoothing:antialiased}
-        .t{margin:10px;padding:11px 14px 12px;border-radius:14px;background:var(--bg);background-image:linear-gradient(180deg,rgba(255,255,255,.06),rgba(255,255,255,0));
-           box-shadow:inset 0 0 0 1px var(--line),var(--elev);opacity:0;transform:translateY(8px) scale(.97);transition:opacity .14s,transform .22s cubic-bezier(.2,1.3,.35,1)}
-        .t.on{opacity:1;transform:none}
-        .r{display:flex;align-items:baseline;gap:8px}
-        .l{flex:1;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .n{color:var(--text2);font-variant-numeric:tabular-nums;font-size:11.5px;white-space:nowrap}
-        .b{margin-top:9px;height:3px;border-radius:2px;background:var(--track);overflow:hidden}
-        .f{height:100%;width:100%;background:var(--accent);border-radius:2px;transform-origin:0 50%;transform:scaleX(0);transition:transform .2s cubic-bezier(.22,1,.36,1)}
-        .f.i{width:30%;transform:none;animation:k 1.1s cubic-bezier(.45,0,.55,1) infinite}
-        @keyframes k{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}
-      </style><div class="t" id="t"><div class="r"><div class="l" id="l"></div><div class="n" id="n"></div></div><div class="b"><div class="f" id="f"></div></div></div>
-      <script>window.theme=function(a){document.documentElement.dataset.theme=a.theme==='white'?'white':'black';var c=/^#ffffff$/i.test(a.accent||'#ffffff')?(a.theme==='white'?'#101012':'#ffffff'):a.accent;document.documentElement.style.setProperty('--accent',c);};
-      window.set=function(text,pct,on){var m=String(text).match(/^(.*?)\s(\d+ de \d+)$/);document.getElementById('l').textContent=m?m[1]:text;document.getElementById('n').textContent=m?m[2]:'';var f=document.getElementById('f');
-      if(pct<0){f.className='f i';f.style.transform='';}else{f.className='f';f.style.transform='scaleX('+Math.max(0,Math.min(1,pct))+')';}
-      document.getElementById('t').className=on?'t on':'t';};</script>`;
-      const showShiftToast = (text, pct) => {
-        try {
-          const { BrowserWindow } = require("electron");
-          if (shiftToastHide) { clearTimeout(shiftToastHide); shiftToastHide = null; }
-          if (shiftToastKill) { clearTimeout(shiftToastKill); shiftToastKill = null; }
-          const push = () => {
-            if (!shiftToast || shiftToast.isDestroyed()) return;
-            shiftToast.webContents.executeJavaScript(`window.theme && window.theme(${JSON.stringify(vorAppearance)}); window.set && window.set(${JSON.stringify(text)}, ${Number(pct)}, true)`).catch(() => {});
-            if (!shiftToast.isVisible()) shiftToast.showInactive();
-          };
-          if (!shiftToast || shiftToast.isDestroyed()) {
-            const area = screen.getDisplayNearestPoint(screen.getCursorScreenPoint()).workArea;
-            const w = 320;
-            const h = 80;
-            shiftToast = new BrowserWindow({
-              width: w, height: h, x: area.x + area.width - w - 12, y: area.y + area.height - h - 12,
-              frame: false, transparent: true, resizable: false, movable: false, focusable: false,
-              alwaysOnTop: true, skipTaskbar: true, show: false, hasShadow: false,
-              webPreferences: { contextIsolation: true, sandbox: true },
-            });
-            shiftToast.setIgnoreMouseEvents(true);
-            shiftToast.setAlwaysOnTop(true, "screen-saver");
-            shiftToast.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(SHIFT_TOAST_HTML)}`).then(push).catch(() => {});
-          } else push();
-        } catch { /* toast é só cosmético */ }
-      };
-      const hideShiftToast = (delay = 0) => {
-        if (shiftToastHide) clearTimeout(shiftToastHide);
-        shiftToastHide = setTimeout(() => {
-          shiftToastHide = null;
-          if (!shiftToast || shiftToast.isDestroyed()) return;
-          shiftToast.webContents.executeJavaScript("window.set && window.set(document.getElementById('l').textContent, 1, false)").catch(() => {});
-          setTimeout(() => { try { if (shiftToast && !shiftToast.isDestroyed()) shiftToast.hide(); } catch { /* ignore */ } }, 180);
-          if (shiftToastKill) clearTimeout(shiftToastKill);
-          shiftToastKill = setTimeout(() => {
-            shiftToastKill = null;
-            try { if (shiftToast && !shiftToast.isDestroyed()) shiftToast.destroy(); } catch { /* ignore */ }
-            shiftToast = null;
-          }, 60000);
-        }, delay);
-      };
+      /** Mesmo toast de progresso do ShiftDrop — a janela vive em `progress-toast.cjs`. */
+      const showShiftToast = (text, pct) => progressToast.show(text, pct);
+      const hideShiftToast = (delay = 0) => progressToast.hide(delay);
       const SHIFT_VERB = {
         compress: "Comprimindo", removeMetadata: "Limpando metadados", normalizeAudio: "Normalizando", audioChannels: "Ajustando canais",
         muteVideo: "Silenciando", videoSnapshots: "Capturando quadros", resize50: "Redimensionando", resize1080: "Redimensionando",
@@ -7283,28 +7268,9 @@ ipcMain.handle("get-update-state", () => lastKnownUpdate);
 
 /**
  * Verificação a pedido. O arranque já verifica sozinho passados 10 s; isto é para quem quer
- * confirmar agora — e para dar uma resposta visível a quem carrega no botão.
+ * confirmar agora — bandeja e Definições partilham o toast de progresso.
  */
-ipcMain.handle("check-for-updates", async () => {
-  if (!app.isPackaged) {
-    return { ok: false, code: "UNSUPPORTED", state: lastKnownUpdate.state };
-  }
-  /** Na Store o botão nem aparece; o guarda fica para o caso de alguém chamar o canal à mão. */
-  if (isStoreBuild()) {
-    return { ok: false, code: "STORE_BUILD", state: "idle" };
-  }
-  try {
-    const result = await autoUpdater.checkForUpdates();
-    const version = result?.updateInfo?.version;
-    if (isNewerThanInstalled(version)) {
-      return { ok: true, state: canSelfInstallUpdate() ? "downloading" : "ready", version };
-    }
-    return { ok: true, state: "current", version: app.getVersion() };
-  } catch (error) {
-    diagLog(`[Update] Manual check failed: ${error?.message || error}`);
-    return { ok: false, code: "CHECK_FAILED", error: error?.message || String(error) };
-  }
-});
+ipcMain.handle("check-for-updates", () => runManualUpdateCheck());
 
 /** Reinício para instalar — o utilizador escolhe o momento, na linha das Definições. */
 ipcMain.on("install-update-now", () => {
