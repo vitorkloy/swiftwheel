@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="272" height="68" viewBox="0 0 272 68">
+  <defs>
+    <linearGradient id="ag" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#262626"/><stop offset="1" stop-color="#161616"/></linearGradient>
+    <linearGradient id="ahl" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#fff" stop-opacity=".10"/><stop offset=".5" stop-color="#fff" stop-opacity="0"/></linearGradient></defs>
+  <rect width="272" height="68" rx="17" fill="url(#ag)"/>
+  <rect width="272" height="68" rx="17" fill="url(#ahl)"/>
+  <rect x=".5" y=".5" width="271" height="67" rx="16.5" fill="none" stroke="#fff" stroke-opacity=".13"/>
+  <rect x="14" y="14" width="40" height="40" rx="11" fill="#fff" fill-opacity=".07"/>
+  <path transform="translate(23 22) scale(0.9166666666666666)" d="M12.152 6.896c-.948 0-2.415-1.078-3.96-1.04-2.04.027-3.91 1.183-4.961 3.014-2.117 3.675-.546 9.103 1.519 12.09 1.013 1.454 2.208 3.09 3.792 3.039 1.52-.065 2.09-.987 3.935-.987 1.831 0 2.35.987 3.96.948 1.637-.026 2.676-1.48 3.676-2.948 1.156-1.688 1.636-3.325 1.662-3.415-.039-.013-3.182-1.221-3.22-4.857-.026-3.04 2.48-4.494 2.597-4.559-1.429-2.09-3.623-2.324-4.39-2.376-2-.156-3.675 1.09-4.61 1.09zM15.53 3.83c.843-1.012 1.4-2.427 1.245-3.83-1.207.052-2.662.805-3.532 1.818-.78.896-1.454 2.338-1.273 3.714 1.338.104 2.715-.688 3.559-1.701" fill="#f2f2f2"/>
+  <text x="68" y="31" font-family="Inter" font-size="15" font-weight="600" fill="rgba(255,255,255,.93)">macOS · Apple Silicon</text>
+  <text x="68" y="50" font-family="Inter" font-size="12.5" fill="rgba(255,255,255,.38)">.dmg · 122 MB · M1 a M4</text>
+  <circle cx="242" cy="34.0" r="14" fill="rgba(255,255,255,.08)"/>
+      <path d="M242 27.0 v13 M236 35.0 l6 6 l6 -6" fill="none" stroke="rgba(255,255,255,.8)" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

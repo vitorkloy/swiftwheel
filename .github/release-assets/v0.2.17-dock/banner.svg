@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1280" height="400" viewBox="0 0 1280 400">
+  <defs>
+    <linearGradient id="bgl" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#1d1d1d"/><stop offset=".55" stop-color="#151515"/><stop offset="1" stop-color="#0d0d0d"/></linearGradient>
+    <radialGradient id="glow" cx=".12" cy="0" r=".8"><stop offset="0" stop-color="#fff" stop-opacity=".09"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+    <radialGradient id="glow2" cx=".82" cy=".55" r=".45"><stop offset="0" stop-color="#fff" stop-opacity=".06"/><stop offset="1" stop-color="#fff" stop-opacity="0"/></radialGradient>
+    <linearGradient id="tile" x1="0" y1="0" x2=".3" y2="1"><stop offset="0" stop-color="#4a4a4a"/><stop offset=".5" stop-color="#2c2c2c"/><stop offset="1" stop-color="#1b1b1b"/></linearGradient>
+    <linearGradient id="pill" x1="0" y1="0" x2="0" y2="1"><stop offset="0" stop-color="#2a2a2a" stop-opacity=".92"/><stop offset="1" stop-color="#151515" stop-opacity=".92"/></linearGradient>
+    <filter id="elev" x="-20%" y="-60%" width="140%" height="240%"><feDropShadow dx="0" dy="12" stdDeviation="16" flood-color="#000" flood-opacity=".55"/></filter>
+    <clipPath id="card"><rect width="1280" height="400" rx="24"/></clipPath>
+  </defs>
+  <g clip-path="url(#card)">
+    <rect width="1280" height="400" fill="url(#bgl)"/>
+    <rect width="1280" height="400" fill="url(#glow)"/>
+    <rect width="1280" height="400" fill="url(#glow2)"/>
+    <g transform="translate(1010 150) scale(1.55) translate(-256 -256)"><path d="M197.77 81.46 A184 184 0 0 1 314.23 81.46 L302.71 109.26 A154 154 0 0 0 209.29 109.26 Z" fill="none" stroke="#fff" stroke-opacity="0.05" stroke-width="2.2" stroke-linejoin="round"/><path d="M338.25 91.41 A184 184 0 0 1 420.59 173.75 L392.79 185.27 A154 154 0 0 0 326.73 119.21 Z" fill="none" stroke="#fff" stroke-opacity="0.062" stroke-width="2.2" stroke-linejoin="round"/><path d="M430.54 197.77 A184 184 0 0 1 430.54 314.23 L402.74 302.71 A154 154 0 0 0 402.74 209.29 Z" fill="none" stroke="#fff" stroke-opacity="0.07400000000000001" stroke-width="2.2" stroke-linejoin="round"/><path d="M420.59 338.25 A184 184 0 0 1 338.25 420.59 L326.73 392.79 A154 154 0 0 0 392.79 326.73 Z" fill="none" stroke="#fff" stroke-opacity="0.08600000000000001" stroke-width="2.2" stroke-linejoin="round"/><path d="M314.23 430.54 A184 184 0 0 1 197.77 430.54 L209.29 402.74 A154 154 0 0 0 302.71 402.74 Z" fill="none" stroke="#fff" stroke-opacity="0.098" stroke-width="2.2" stroke-linejoin="round"/><path d="M173.75 420.59 A184 184 0 0 1 91.41 338.25 L119.21 326.73 A154 154 0 0 0 185.27 392.79 Z" fill="none" stroke="#fff" stroke-opacity="0.11" stroke-width="2.2" stroke-linejoin="round"/><path d="M81.46 314.23 A184 184 0 0 1 81.46 197.77 L109.26 209.29 A154 154 0 0 0 109.26 302.71 Z" fill="none" stroke="#fff" stroke-opacity="0.12200000000000001" stroke-width="2.2" stroke-linejoin="round"/><path d="M91.41 173.75 A184 184 0 0 1 173.75 91.41 L185.27 119.21 A154 154 0 0 0 119.21 185.27 Z" fill="none" stroke="#fff" stroke-opacity="0.134" stroke-width="2.2" stroke-linejoin="round"/></g>
+    <circle cx="1010" cy="150" r="190" fill="none" stroke="#fff" stroke-opacity=".035"/>
+    <circle cx="1010" cy="150" r="330" fill="none" stroke="#fff" stroke-opacity=".03"/>
+  </g>
+  <rect x=".5" y=".5" width="1279" height="399" rx="23.5" fill="none" stroke="#fff" stroke-opacity=".10"/>
+
+  <svg x="72" y="72" width="88" height="88" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="lgbg" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#4a4a4a"/>
+      <stop offset="0.5" stop-color="#2c2c2c"/>
+      <stop offset="1" stop-color="#171717"/>
+    </linearGradient>
+    <linearGradient id="lgtl" gradientUnits="userSpaceOnUse" x1="110" y1="110" x2="190" y2="190">
+      <stop offset="0" stop-color="#f6f6f6"/>
+      <stop offset="1" stop-color="#d4d4d4"/>
+    </linearGradient>
+    <linearGradient id="lgcur" gradientUnits="userSpaceOnUse" x1="252" y1="252" x2="340" y2="360">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dcdcdc"/>
+    </linearGradient>
+    <filter id="lgsh" x="-20%" y="-20%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  
+  <rect x="2" y="2" width="508" height="508" rx="108" ry="108" fill="url(#lgbg)"/>
+
+  
+  <g transform="translate(256, 256) scale(1.32) translate(-256, -256)">
+    
+    <g stroke-width="12" stroke-linejoin="round">
+      <path d="M197.77 81.46 A184 184 0 0 1 314.23 81.46 L302.71 109.26 A154 154 0 0 0 209.29 109.26 Z" fill="#a9a9a9" stroke="#a9a9a9"/>
+      <path d="M338.25 91.41 A184 184 0 0 1 420.59 173.75 L392.79 185.27 A154 154 0 0 0 326.73 119.21 Z" fill="#9d9d9d" stroke="#9d9d9d"/>
+      <path d="M430.54 197.77 A184 184 0 0 1 430.54 314.23 L402.74 302.71 A154 154 0 0 0 402.74 209.29 Z" fill="#999999" stroke="#999999"/>
+      <path d="M420.59 338.25 A184 184 0 0 1 338.25 420.59 L326.73 392.79 A154 154 0 0 0 392.79 326.73 Z" fill="#909090" stroke="#909090"/>
+      <path d="M314.23 430.54 A184 184 0 0 1 197.77 430.54 L209.29 402.74 A154 154 0 0 0 302.71 402.74 Z" fill="#8f8f8f" stroke="#8f8f8f"/>
+      <path d="M173.75 420.59 A184 184 0 0 1 91.41 338.25 L119.21 326.73 A154 154 0 0 0 185.27 392.79 Z" fill="#9a9a9a" stroke="#9a9a9a"/>
+      <path d="M81.46 314.23 A184 184 0 0 1 81.46 197.77 L109.26 209.29 A154 154 0 0 0 109.26 302.71 Z" fill="#a6a6a6" stroke="#a6a6a6"/>
+      <path d="M91.41 173.75 A184 184 0 0 1 173.75 91.41 L185.27 119.21 A154 154 0 0 0 119.21 185.27 Z" fill="url(#lgtl)" stroke="url(#lgtl)"/>
+    </g>
+
+    
+    <path d="M260 264 L331 331 L289 340 L260 360 Z" fill="url(#lgcur)" stroke="url(#lgcur)" stroke-width="12" stroke-linejoin="round" filter="url(#lgsh)"/>
+  </g>
+</svg>
+  <text x="72" y="236" font-family="Space Grotesk" font-size="68" font-weight="600" letter-spacing="-2" fill="rgba(255,255,255,.93)">SwiftWheel<tspan dx="16" fill="rgba(255,255,255,.38)" font-weight="500">0.2.17</tspan></text>
+  <text x="74" y="278" font-family="Inter" font-size="21" fill="rgba(255,255,255,.58)">Uma Dock no lugar da barra do Windows.</text>
+  <g>
+    <rect x="72" y="310" width="168" height="38" rx="19" fill="#fff"/>
+    <text x="156" y="335" text-anchor="middle" font-family="Inter" font-size="15" font-weight="650" fill="#0a0a0b">Módulo Dock</text>
+    <rect x="252.5" y="310.5" width="135" height="37" rx="18.5" fill="#fff" fill-opacity=".06" stroke="#fff" stroke-opacity=".16"/>
+    <circle cx="272" cy="329" r="4" fill="#fff" fill-opacity=".7"/>
+    <text x="330" y="335" text-anchor="middle" font-family="Inter" font-size="15" font-weight="550" fill="rgba(255,255,255,.58)">Pré-release</text>
+  </g>
+
+  <g filter="url(#elev)"><rect x="638" y="284" width="578" height="76" rx="38.0" fill="url(#pill)"/></g>
+  <rect x="638.5" y="284.5" width="577" height="75" rx="38.0" fill="none" stroke="#fff" stroke-opacity=".13"/>
+  <svg x="650" y="296" width="52" height="52" viewBox="0 0 512 512">
+  <defs>
+    <linearGradient id="dkbg" x1="0" y1="0" x2="0.35" y2="1">
+      <stop offset="0" stop-color="#4a4a4a"/>
+      <stop offset="0.5" stop-color="#2c2c2c"/>
+      <stop offset="1" stop-color="#171717"/>
+    </linearGradient>
+    <linearGradient id="dktl" gradientUnits="userSpaceOnUse" x1="110" y1="110" x2="190" y2="190">
+      <stop offset="0" stop-color="#f6f6f6"/>
+      <stop offset="1" stop-color="#d4d4d4"/>
+    </linearGradient>
+    <linearGradient id="dkcur" gradientUnits="userSpaceOnUse" x1="252" y1="252" x2="340" y2="360">
+      <stop offset="0" stop-color="#ffffff"/>
+      <stop offset="1" stop-color="#dcdcdc"/>
+    </linearGradient>
+    <filter id="dksh" x="-20%" y="-20%" width="150%" height="150%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#000" flood-opacity="0.45"/>
+    </filter>
+  </defs>
+
+  
+  <rect x="2" y="2" width="508" height="508" rx="108" ry="108" fill="url(#dkbg)"/>
+
+  
+  <g transform="translate(256, 256) scale(1.32) translate(-256, -256)">
+    
+    <g stroke-width="12" stroke-linejoin="round">
+      <path d="M197.77 81.46 A184 184 0 0 1 314.23 81.46 L302.71 109.26 A154 154 0 0 0 209.29 109.26 Z" fill="#a9a9a9" stroke="#a9a9a9"/>
+      <path d="M338.25 91.41 A184 184 0 0 1 420.59 173.75 L392.79 185.27 A154 154 0 0 0 326.73 119.21 Z" fill="#9d9d9d" stroke="#9d9d9d"/>
+      <path d="M430.54 197.77 A184 184 0 0 1 430.54 314.23 L402.74 302.71 A154 154 0 0 0 402.74 209.29 Z" fill="#999999" stroke="#999999"/>
+      <path d="M420.59 338.25 A184 184 0 0 1 338.25 420.59 L326.73 392.79 A154 154 0 0 0 392.79 326.73 Z" fill="#909090" stroke="#909090"/>
+      <path d="M314.23 430.54 A184 184 0 0 1 197.77 430.54 L209.29 402.74 A154 154 0 0 0 302.71 402.74 Z" fill="#8f8f8f" stroke="#8f8f8f"/>
+      <path d="M173.75 420.59 A184 184 0 0 1 91.41 338.25 L119.21 326.73 A154 154 0 0 0 185.27 392.79 Z" fill="#9a9a9a" stroke="#9a9a9a"/>
+      <path d="M81.46 314.23 A184 184 0 0 1 81.46 197.77 L109.26 209.29 A154 154 0 0 0 109.26 302.71 Z" fill="#a6a6a6" stroke="#a6a6a6"/>
+      <path d="M91.41 173.75 A184 184 0 0 1 173.75 91.41 L185.27 119.21 A154 154 0 0 0 119.21 185.27 Z" fill="url(#dktl)" stroke="url(#dktl)"/>
+    </g>
+
+    
+    <path d="M260 264 L331 331 L289 340 L260 360 Z" fill="url(#dkcur)" stroke="url(#dkcur)" stroke-width="12" stroke-linejoin="round" filter="url(#dksh)"/>
+  </g>
+</svg><rect x="714" y="296" width="52" height="52" rx="13.52" fill="url(#tile)"/><rect x="714.5" y="296.5" width="51" height="51" rx="13.52" fill="none" stroke="#fff" stroke-opacity=".10"/><path d="M726.48 313.68 h9.36 l3.12 3.6400000000000006 h14.560000000000002 v17.16 h-27.04z" fill="#d9d9d9"/><rect x="778" y="286" width="52" height="52" rx="13.52" fill="url(#tile)"/><rect x="778.5" y="286.5" width="51" height="51" rx="13.52" fill="none" stroke="#fff" stroke-opacity=".10"/><circle cx="804.0" cy="312.0" r="11.96" fill="none" stroke="#d9d9d9" stroke-width="2.6"/><ellipse cx="804.0" cy="312.0" rx="5.2" ry="11.96" fill="none" stroke="#d9d9d9" stroke-width="2.08"/><line x1="792.04" y1="312.0" x2="815.96" y2="312.0" stroke="#d9d9d9" stroke-width="2.08"/><rect x="842" y="296" width="52" height="52" rx="13.52" fill="url(#tile)"/><rect x="842.5" y="296.5" width="51" height="51" rx="13.52" fill="none" stroke="#fff" stroke-opacity=".10"/><path d="M856.04 314.72 l6.76 6.76 l-6.76 6.76" fill="none" stroke="#d9d9d9" stroke-width="3.12" stroke-linecap="round" stroke-linejoin="round"/><line x1="866.96" y1="329.28" x2="879.44" y2="329.28" stroke="#d9d9d9" stroke-width="3.12" stroke-linecap="round"/><rect x="906" y="296" width="52" height="52" rx="13.52" fill="url(#tile)"/><rect x="906.5" y="296.5" width="51" height="51" rx="13.52" fill="none" stroke="#fff" stroke-opacity=".10"/><path d="M925.76 313.16 l-7.8 8.84 l7.8 8.84 M938.24 313.16 l7.8 8.84 l-7.8 8.84" fill="none" stroke="#d9d9d9" stroke-width="3.12" stroke-linecap="round" stroke-linejoin="round"/><rect x="970" y="296" width="52" height="52" rx="13.52" fill="url(#tile)"/><rect x="970.5" y="296.5" width="51" height="51" rx="13.52" fill="none" stroke="#fff" stroke-opacity=".10"/><path d="M991.84 330.32 v-18.72 l13.52 -3.12 v18.72" fill="none" stroke="#d9d9d9" stroke-width="2.86" stroke-linejoin="round"/><circle cx="988.72" cy="330.84000000000003" r="3.9" fill="#d9d9d9"/><circle cx="1002.24" cy="327.72" r="3.9" fill="#d9d9d9"/><rect x="1034" y="296" width="52" height="52" rx="13.52" fill="url(#tile)"/><rect x="1034.5" y="296.5" width="51" height="51" rx="13.52" fill="none" stroke="#fff" stroke-opacity=".10"/><path d="M1047.52 311.6 h24.96 a3.12 3.12 0 0 1 3.12 3.12 v12.48 a3.12 3.12 0 0 1 -3.12 3.12 h-15.6 l-6.24 5.2 v-5.2 h-3.12 a3.12 3.12 0 0 1 -3.12 -3.12 v-12.48 a3.12 3.12 0 0 1 3.12 -3.12z" fill="#d9d9d9"/><rect x="673.0" y="354" width="6" height="3" rx="1.5" fill="#fff" fill-opacity="0.45"/><rect x="797.0" y="354" width="14" height="3" rx="1.5" fill="#fff" fill-opacity="0.9"/><rect x="865.0" y="354" width="6" height="3" rx="1.5" fill="#fff" fill-opacity="0.45"/><g><rect x="760.0" y="236" width="88" height="28" rx="14" fill="#fff"/>
+      <text x="804.0" y="254.5" text-anchor="middle" font-family="Inter" font-size="13" font-weight="600" fill="#0a0a0b">↑ 6 px</text></g><line x1="1098.0" y1="302" x2="1098.0" y2="342" stroke="#fff" stroke-opacity=".13"/>
+      <text x="1158.0" y="320.0" text-anchor="middle" font-family="Space Grotesk" font-size="20" font-weight="600" fill="rgba(255,255,255,.93)">09:45</text>
+      <text x="1158.0" y="340.0" text-anchor="middle" font-family="Inter" font-size="12" fill="rgba(255,255,255,.38)">27/11/2026</text>
+</svg>
