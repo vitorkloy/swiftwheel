@@ -15,6 +15,7 @@ const DEFAULT_DOCK = {
   position: "bottom",
   monitor: "follow-mouse",
   pins: [],
+  pinsSeeded: false,
 };
 
 function clamp(n, min, max, fallback) {
@@ -50,7 +51,16 @@ function normalizeDockSettings(raw) {
     position: src.position === "left" || src.position === "right" ? src.position : "bottom",
     monitor: src.monitor === "primary" ? "primary" : "follow-mouse",
     pins,
+    pinsSeeded: src.pinsSeeded === true,
   };
+}
+
+/** Pins já gravados, ou a semente da taskbar só na primeira vez. */
+function pinsForMerge(settings, seedPins) {
+  const cfg = normalizeDockSettings(settings);
+  if (cfg.pinsSeeded) return cfg.pins;
+  if (cfg.pins.length) return cfg.pins;
+  return Array.isArray(seedPins) ? seedPins : [];
 }
 
 function sameCommand(a, b) {
@@ -73,6 +83,13 @@ function dockChrome(settings) {
     pillPad: 16,
     trayMin: 120,
     thickness: cfg.iconSize + cfg.liftPx + mag + 8 + 24,
+    /** Altura do botão na coluna (ícone + lift + indicador), ver `.dk-item`. */
+    itemButton: cfg.iconSize + cfg.liftPx + 8,
+    /** Mini tray empilhado: margem, borda, padding, relógio e até 5 chips. */
+    trayVertical: 8 + 1 + 10 + 26 + 5 * 28 + 4 * 6 + 8,
+    rootPad: 16,
+    pillPadSide: 28,
+    pillGap: 4,
   };
 }
 
@@ -88,7 +105,9 @@ function dockWindowBounds(monitor, settings, itemCount) {
   const mon = monitor || { x: 0, y: 0, width: 1920, height: 1080 };
   if (cfg.position === "left" || cfg.position === "right") {
     const width = chrome.thickness;
-    const height = Math.min(mon.height - 16, Math.max(160, itemsSpan));
+    const itemsH = n * chrome.itemButton + Math.max(0, n - 1) * chrome.gap;
+    const content = chrome.rootPad + chrome.pillPadSide + itemsH + chrome.pillGap + chrome.trayVertical;
+    const height = Math.min(mon.height - 16, Math.max(220, content));
     const y = mon.y + Math.round((mon.height - height) / 2);
     const x = cfg.position === "left" ? mon.x : mon.x + mon.width - width;
     return { x, y, width, height };
@@ -174,6 +193,7 @@ module.exports = {
   pickMonitor,
   cursorOnEdge,
   mergeDockItems,
+  pinsForMerge,
   sameCommand,
   pointInRect,
 };

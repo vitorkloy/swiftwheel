@@ -5041,10 +5041,12 @@ app.whenReady().then(async () => {
       return String(app.getLocale() || "").toLowerCase().startsWith("pt") ? "pt" : "en";
     },
     diagLog,
-    patchDockPins: (pins) => {
-      currentSettings.dock = { ...DEFAULT_DOCK, ...currentSettings.dock, pins: Array.isArray(pins) ? pins : [] };
+    patchDockPins: (pins, extra) => {
+      const nextPins = Array.isArray(pins) ? pins : [];
+      const pinsSeeded = extra && extra.pinsSeeded === false ? false : true;
+      currentSettings.dock = { ...DEFAULT_DOCK, ...currentSettings.dock, pins: nextPins, pinsSeeded };
       if (mainWindow && !mainWindow.isDestroyed()) {
-        mainWindow.webContents.send("dock-pins", currentSettings.dock.pins);
+        mainWindow.webContents.send("dock-pins", { pins: nextPins, pinsSeeded });
       }
     },
   });

@@ -42,6 +42,7 @@ export const DEFAULT_DOCK: DockSettings = {
   position: "bottom",
   monitor: "follow-mouse",
   pins: [],
+  pinsSeeded: false,
 };
 
 export const DEFAULT_MODULES: ModulePrefs = {
