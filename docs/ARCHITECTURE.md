@@ -16,7 +16,8 @@ o ShiftDrop, a captura e a prévia ligam, e se um toast ou som dispara. Sons
 são WAV curtos em `public/sounds/` (renderer) e, no processo principal, o mesmo
 arquivo via `file://`. Sem dependência extra e sem processo ocioso extra: o
 listener de arquivo só existe com o módulo ShiftDrop ligado; a captura só
-instala o overlay quando o módulo está ativo.
+instala o overlay quando o módulo está ativo; a Dock só esconde `Shell_TrayWnd`
+e instala o `WH_MOUSE_LL` com o módulo ligado.
 
 ## Layout
 
@@ -30,12 +31,14 @@ backend/          Electron main, preload, and the PowerShell helpers
   game-detection.cjs    fullscreen/game detection for focus protection
   win32-launch.js       command parsing and quoting for launching targets
   persistence-normalize.cjs   disk-blob → renderer shape
+  dock.cjs              Dock window, helper protocol, taskbar hide/restore
 src/              Renderer
   App.tsx               orchestration: state, persistence, IPC wiring, window modes
   components/
     RadialMenu.tsx      the wheel: layout, aiming, gestures, slices
     LicenseGate.tsx     the locked wheel shown without a license
     PrecisionSettings.tsx  the settings panel
+  dock/                 Dock pill renderer (separate BrowserWindow)
   index.css             design tokens and every non-Tailwind style
 scripts/          Build, launch and verification scripts
 nsis/             Installer customisation
@@ -141,6 +144,24 @@ Two rules learned the hard way: never gate a *write* on `cancelled` — cancella
 to stop work in flight, not to discard results already obtained — and merge asynchronous
 results **by id**, never by array identity, because the config legitimately changes while
 slow work is running.
+
+## Dock
+
+Substitui o Windhawk (`taskbar-styler` DockLike) sem injetar no `explorer.exe`.
+Janela Electron em pílula (tema VOR, hover-lift de 6 px) + helper `vor-dock.exe`:
+
+- `ShowWindow(SW_HIDE)` em `Shell_TrayWnd` / `Shell_SecondaryTrayWnd` enquanto o
+  módulo está ligado. Restaura ao desligar, ao sair, no lock (`WTS_SESSION_LOCK`
+  e `powerMonitor`) e se o processo pai morrer (`WaitForSingleObject` no PID).
+- Auto-hide com `WH_MOUSE_LL` (evento, não poll). Delay padrão 150 ms.
+- **Não** chama `SHAppBarMessage`: a Dock flutua; maximizadas podem cobri-la.
+- **Não** instala `WH_KEYBOARD_LL` nem `RegisterHotKey` de Win+número: esses
+  atalhos continuam no Explorer, mesmo com a barra só escondida.
+- Mini tray na própria pílula (relógio, volume, rede, notificações). Os ícones
+  de terceiros da bandeja do Windows seguem acessíveis com Win+B.
+
+O módulo nasce **desligado**: esconder a barra do Windows é opt-in, para um
+update não tirar a taskbar de quem já usa o SwiftWheel.
 
 ## Distribution channels
 
