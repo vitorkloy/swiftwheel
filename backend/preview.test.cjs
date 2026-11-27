@@ -60,7 +60,7 @@ function storedZip(files) {
 
 describe("native helper source", () => {
   it("stays on C# 4 syntax so Framework 4 csc can compile it", () => {
-    const files = ["vor-preview.cs", "vor-preview-handler.cs"].map((name) =>
+    const files = ["vor-preview.cs", "vor-preview-handler.cs", "virtual-desktop.cs"].map((name) =>
       fs.readFileSync(path.join(__dirname, "..", "native", name), "utf8"));
     const src = files.join("\n");
     assert.match(src, /bind <accel>/);

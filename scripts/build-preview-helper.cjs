@@ -7,6 +7,7 @@ const { execFileSync } = require("child_process");
 const root = path.join(__dirname, "..");
 const src = path.join(root, "native", "vor-preview.cs");
 const handlerSrc = path.join(root, "native", "vor-preview-handler.cs");
+const desktopSrc = path.join(root, "native", "virtual-desktop.cs");
 const out = path.join(root, "backend", "bin", "vor-preview.exe");
 if (process.platform !== "win32") {
   console.log("[preview-helper] fora do Windows, a saltar");
@@ -21,6 +22,6 @@ fs.mkdirSync(path.dirname(out), { recursive: true });
 execFileSync(csc, [
   "/nologo", "/optimize+", "/target:winexe", "/platform:anycpu",
   "/r:System.Windows.Forms.dll", "/r:System.Drawing.dll",
-  `/out:${out}`, src, handlerSrc,
+  `/out:${out}`, src, handlerSrc, desktopSrc,
 ], { stdio: "inherit" });
 console.log(`[preview-helper] ${out}`);

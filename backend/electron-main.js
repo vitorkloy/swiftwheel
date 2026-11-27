@@ -4253,7 +4253,9 @@ app.whenReady().then(async () => {
       const hideHoldRing = () => {
         if (!holdRing || holdRing.isDestroyed()) return;
         holdRing.webContents.executeJavaScript("window.hide && window.hide()").catch(() => {});
-        try { holdRing.hide(); } catch { /* ignore */ }
+        // Destruir em vez de hide(): um HWND escondido fica preso na desktop em que nasceu.
+        try { holdRing.destroy(); } catch { /* ignore */ }
+        holdRing = null;
       };
       const destroyHoldRingLater = () => {
         if (holdRingKill) clearTimeout(holdRingKill);
@@ -4286,6 +4288,7 @@ app.whenReady().then(async () => {
             });
             holdRing.setIgnoreMouseEvents(true, { forward: true });
             holdRing.setAlwaysOnTop(true, "screen-saver");
+            try { holdRing.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch { /* ignore */ }
             holdRing.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(HOLD_RING_HTML)}`).then(push).catch(() => {});
           } else push();
         } catch { /* o anel é só cosmético */ }
@@ -4479,6 +4482,7 @@ app.whenReady().then(async () => {
         const list = (Array.isArray(targets) ? targets : [targets]).map(String).filter(Boolean);
         list.forEach((p) => { if (!floatItems.includes(p)) floatItems.push(p); });
         if (floatShelf && !floatShelf.isDestroyed()) {
+          try { floatShelf.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch { /* ignore */ }
           floatShelf.showInactive();
           pushShelf();
           return;
@@ -4492,6 +4496,7 @@ app.whenReady().then(async () => {
           webPreferences: { preload: path.join(__dirname, "float-shelf-preload.js"), contextIsolation: true, sandbox: false },
         });
         floatShelf.setAlwaysOnTop(true, "floating");
+        try { floatShelf.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true }); } catch { /* ignore */ }
         let snapTimer = null;
         floatShelf.on("moved", snapShelf);
         floatShelf.on("move", () => { clearTimeout(snapTimer); snapTimer = setTimeout(snapShelf, 250); });

@@ -46,6 +46,15 @@ describe("ocr", () => {
     const capture = fs.readFileSync(path.join(__dirname, "..", "native", "vor-capture.cs"), "utf8");
     assert.match(capture, /wins-end/);
     assert.match(capture, /ListCaptureWindows/);
+    assert.match(capture, /todesktop/);
+    assert.match(capture, /restorefg/);
+    assert.match(capture, /VirtualDesktop/);
     assert.doesNotMatch(capture, /Clipboard\.SetImage/);
+    const desktop = fs.readFileSync(path.join(__dirname, "..", "native", "virtual-desktop.cs"), "utf8");
+    assert.match(desktop, /IVirtualDesktopManager/);
+    assert.match(desktop, /MoveWindowToDesktop/);
+    assert.doesNotMatch(desktop, /\$"/);
+    assert.doesNotMatch(desktop, /\?\./);
+    assert.doesNotMatch(desktop, /\basync\b/);
   });
 });
