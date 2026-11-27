@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Bell, Volume2, VolumeX, Wifi, WifiOff, Battery, BatteryCharging, LayoutGrid } from 'lucide-react';
 
 interface DockItem {
@@ -58,6 +58,7 @@ export function DockApp() {
   const [session, setSession] = useState<DockSession | null>(null);
   const [hot, setHot] = useState<string | null>(null);
   const [now, setNow] = useState(() => new Date());
+  const paintedRef = useRef(false);
 
   useEffect(() => {
     let alive = true;
@@ -73,6 +74,12 @@ export function DockApp() {
       unsub?.();
     };
   }, []);
+
+  useEffect(() => {
+    if (!session || paintedRef.current) return;
+    paintedRef.current = true;
+    void window.dock?.action({ action: 'painted' });
+  }, [session]);
 
   useEffect(() => {
     let timer = 0;

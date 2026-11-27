@@ -5,6 +5,9 @@
  * Sem AppBar: a janela flutua sobre o monitor (`bounds`), nunca sobre `workArea`.
  */
 
+const fs = require("fs");
+const path = require("path");
+
 const DEFAULT_DOCK = {
   enabled: false,
   iconSize: 48,
@@ -203,6 +206,25 @@ function writeHelperLine(stdin, line) {
   }
 }
 
+/** Só esconder a taskbar depois disto; se a pílula não pintar, restaurar. */
+const DOCK_APPEAR_TIMEOUT_MS = 4000;
+/** Primeira revelação: não esconder a pílula em 150 ms antes do utilizador a ver. */
+const DOCK_FIRST_HIDE_GRACE_MS = 2000;
+
+function resolveNativeHelper(fileName, roots) {
+  const name = String(fileName || "").trim();
+  if (!name) return null;
+  const list = Array.isArray(roots) ? roots : [];
+  for (const root of list) {
+    if (!root) continue;
+    const candidate = path.join(root, name);
+    try {
+      if (fs.existsSync(candidate)) return candidate;
+    } catch { /* ignore */ }
+  }
+  return null;
+}
+
 /** EPIPE/ECONNRESET no pipe não pode virar uncaughtException no main. */
 function guardHelperPipes(child, onError) {
   if (!child) return;
@@ -233,4 +255,7 @@ module.exports = {
   helperChildAlive,
   writeHelperLine,
   guardHelperPipes,
+  resolveNativeHelper,
+  DOCK_APPEAR_TIMEOUT_MS,
+  DOCK_FIRST_HIDE_GRACE_MS,
 };

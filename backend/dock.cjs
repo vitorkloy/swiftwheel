@@ -36,6 +36,10 @@ function installDock(ctx) {
   let placed = false;
   let iconCache = new Map();
   let powerHooks = false;
+  let trayHidden = false;
+  let appearTimer = null;
+  let visibleConfirmed = false;
+  let helperPath = ctx.dockHelperPath;
 
   const settings = () => lib.normalizeDockSettings(ctx.getDockSettings());
   const windowsOnly = () => process.platform === "win32";
@@ -49,11 +53,91 @@ function installDock(ctx) {
     return lib.writeHelperLine(helper.stdin, line);
   };
 
+  const dockLog = (msg) => {
+    if (typeof ctx.diagLog === "function") ctx.diagLog(`[Dock] ${msg}`);
+    try {
+      const dir = typeof ctx.app?.getPath === "function" ? ctx.app.getPath("userData") : null;
+      if (!dir) return;
+      const file = path.join(dir, "dock.log");
+      fs.appendFile(file, `[${new Date().toISOString()}] ${msg}\n`, () => {});
+    } catch { /* ignore */ }
+  };
+
+  const resolveHelper = () => {
+    const preferred = ctx.dockHelperPath;
+    const resources = typeof process.resourcesPath === "string" ? process.resourcesPath : "";
+    const unpackedDir = path.join(__dirname, "bin").replace(`app.asar${path.sep}`, `app.asar.unpacked${path.sep}`);
+    const found = lib.resolveNativeHelper("vor-dock.exe", [
+      preferred ? path.dirname(preferred) : "",
+      unpackedDir,
+      path.join(__dirname, "bin"),
+      resources ? path.join(resources, "app.asar.unpacked", "backend", "bin") : "",
+      resources ? path.join(resources, "bin") : "",
+    ]);
+    helperPath = found || preferred;
+    return helperPath;
+  };
+
   const restoreTaskbarOnce = () => {
     if (!windowsOnly()) return;
-    const exe = ctx.dockHelperPath;
-    if (!exe || !fs.existsSync(exe)) return;
+    const exe = resolveHelper();
+    if (!exe || !fs.existsSync(exe)) {
+      dockLog(`restore skipped — helper ausente (${exe || "?"})`);
+      return;
+    }
     try { spawn(exe, ["restore"], { windowsHide: true, stdio: "ignore" }).unref(); } catch { /* ignore */ }
+  };
+
+  const hideWindowsTaskbar = () => {
+    if (trayHidden) return;
+    helperSend("arm 1");
+    trayHidden = true;
+    dockLog("taskbar escondida — pílula visível");
+  };
+
+  const showWindowsTaskbar = () => {
+    helperSend("arm 0");
+    trayHidden = false;
+    restoreTaskbarOnce();
+  };
+
+  const clearAppearWatch = () => {
+    if (appearTimer) {
+      clearTimeout(appearTimer);
+      appearTimer = null;
+    }
+  };
+
+  const startAppearWatch = () => {
+    clearAppearWatch();
+    appearTimer = setTimeout(() => {
+      appearTimer = null;
+      if (visibleConfirmed) return;
+      dockLog(`timeout ${lib.DOCK_APPEAR_TIMEOUT_MS}ms — pílula não apareceu`);
+      failDock("timeout-visible");
+    }, lib.DOCK_APPEAR_TIMEOUT_MS);
+  };
+
+  const confirmDockVisible = () => {
+    if (!settings().enabled) return;
+    if (win && !win.isDestroyed()) {
+      try { if (!win.isVisible()) win.showInactive(); } catch { /* ignore */ }
+    }
+    visibleConfirmed = true;
+    clearAppearWatch();
+    hideWindowsTaskbar();
+    const cfg = settings();
+    if (cfg.autoHide && win && !win.isDestroyed()) {
+      const cursor = screen.getCursorScreenPoint();
+      const bounds = win.getBounds();
+      if (!lib.pointInRect(bounds, cursor)) {
+        clearTimeout(hideTimer);
+        hideTimer = setTimeout(() => {
+          hideTimer = null;
+          hideDock();
+        }, Math.max(cfg.autoHideDelayMs, lib.DOCK_FIRST_HIDE_GRACE_MS));
+      }
+    }
   };
 
   const sendToDock = (channel, payload) => {
@@ -160,6 +244,8 @@ function installDock(ctx) {
     if (!win || win.isDestroyed()) return;
     try { win.setAlwaysOnTop(true, "floating"); } catch { /* ignore */ }
     try { win.showInactive(); } catch { win.show(); }
+    dockLog(`janela showInactive ${JSON.stringify(win.getBounds())}`);
+    if (visibleConfirmed) hideWindowsTaskbar();
   };
 
   const hideDock = () => {
@@ -189,7 +275,7 @@ function installDock(ctx) {
     else await window.loadFile(ctx.dockHtmlPath);
   };
 
-  const createWindow = async () => {
+  const createWindow = () => {
     const window = new BrowserWindow({
       width: 640,
       height: 96,
@@ -227,7 +313,13 @@ function installDock(ctx) {
       event.preventDefault();
     });
     window.webContents.session.setPermissionRequestHandler((_wc, _perm, callback) => callback(false));
-    await loadDockPage(window);
+    window.webContents.on("did-fail-load", (_event, code, desc) => {
+      dockLog(`load fail ${code} ${desc}`);
+      failDock("load-fail");
+    });
+    window.webContents.on("did-finish-load", () => {
+      dockLog("página da pílula carregada");
+    });
     return window;
   };
 
@@ -235,13 +327,15 @@ function installDock(ctx) {
     if (win && !win.isDestroyed()) return win;
     if (creating) return creating;
     creating = (async () => {
-      const window = await createWindow();
-      if (!settings().enabled) {
-        try { window.close(); } catch { /* ignore */ }
-        return null;
-      }
+      const window = createWindow();
       win = window;
       sendDockHwnd();
+      await loadDockPage(window);
+      if (!settings().enabled) {
+        try { window.close(); } catch { /* ignore */ }
+        if (win === window) win = null;
+        return null;
+      }
       return win;
     })();
     try {
@@ -380,11 +474,13 @@ function installDock(ctx) {
 
   const startHelper = () => {
     if (!windowsOnly() || helper) return false;
-    const exe = ctx.dockHelperPath;
+    const exe = resolveHelper();
     if (!exe || !fs.existsSync(exe)) {
-      ctx.diagLog(`[Dock] helper nativo ausente (${exe})`);
+      dockLog(`helper nativo ausente (${exe || ctx.dockHelperPath})`);
+      failDock("helper-ausente");
       return false;
     }
+    dockLog(`helper ${exe}`);
     running = [];
     incomingWindows = [];
     incomingPins = [];
@@ -397,7 +493,7 @@ function installDock(ctx) {
       if (helper !== child) return;
       helper = null;
       helperUp = false;
-      restoreTaskbarOnce();
+      showWindowsTaskbar();
       hideDock();
       if (helperStopping) return;
       failDock(why);
@@ -432,7 +528,9 @@ function installDock(ctx) {
 
   const failDock = (why) => {
     helperCrashed = true;
-    restoreTaskbarOnce();
+    visibleConfirmed = false;
+    clearAppearWatch();
+    showWindowsTaskbar();
     hideDock();
     helperStopping = true;
     if (helper) {
@@ -447,12 +545,15 @@ function installDock(ctx) {
 
   const stopHelper = () => {
     helperStopping = true;
+    visibleConfirmed = false;
+    clearAppearWatch();
     helperSend("edge off");
     helperSend("arm 0");
     helperSend("quit");
     const child = helper;
     helper = null;
     helperUp = false;
+    trayHidden = false;
     try { if (child && child.stdin && !child.stdin.destroyed) child.stdin.end(); } catch { /* ignore */ }
     try { if (child) child.kill(); } catch { /* ignore */ }
     restoreTaskbarOnce();
@@ -462,35 +563,31 @@ function installDock(ctx) {
     const cfg = settings();
     if (!windowsOnly() || !cfg.enabled) {
       helperCrashed = false;
+      visibleConfirmed = false;
+      clearAppearWatch();
       stopHelper();
       hideDock();
       return;
     }
     if (helperCrashed) {
-      restoreTaskbarOnce();
+      showWindowsTaskbar();
       return;
     }
     if (!lib.helperChildAlive(helper)) {
       helper = null;
       startHelper();
     }
-    // Hook de auto-hide antes de esconder a barra: sem hook o utilizador fica sem as duas.
     helperSend(`slop 2`);
     helperSend(cfg.autoHide ? `edge ${cfg.position}` : "edge off");
-    helperSend("arm 1");
     sendDockHwnd();
     helperSend("pins");
     helperSend("list");
     helperSend("status");
-    if (!cfg.autoHide) {
-      const displays = displaysOf();
-      const cursor = screen.getCursorScreenPoint();
-      const monitor = lib.pickMonitor(displays, cursor, cfg.monitor);
-      void showDock(monitor);
-    } else if (visible) {
-      placeWindow(lastMonitor);
-      void pushSession();
-    }
+    const displays = displaysOf();
+    const cursor = screen.getCursorScreenPoint();
+    const monitor = lib.pickMonitor(displays, cursor, cfg.monitor);
+    if (!visibleConfirmed) startAppearWatch();
+    void showDock(monitor);
   };
 
   const fromDock = (event) => win && !win.isDestroyed() && event.sender === win.webContents;
@@ -596,7 +693,13 @@ function installDock(ctx) {
     const action = payload && payload.action;
     if (action === "ready") {
       sendDockHwnd();
-      return { ok: true, session: await pushSession() };
+      const session = await pushSession();
+      return { ok: true, session };
+    }
+    if (action === "painted") {
+      dockLog("renderer pintou a pílula");
+      confirmDockVisible();
+      return { ok: true };
     }
     if (action === "pointer-in") {
       clearTimeout(hideTimer);
@@ -628,7 +731,7 @@ function installDock(ctx) {
     try {
       powerMonitor.on("lock-screen", () => helperSend("lock"));
       powerMonitor.on("unlock-screen", () => helperSend("unlock"));
-      powerMonitor.on("shutdown", () => { stopHelper(); hideDock(); });
+      powerMonitor.on("shutdown", () => { showWindowsTaskbar(); stopHelper(); hideDock(); });
       powerMonitor.on("suspend", () => helperSend("lock"));
       powerMonitor.on("resume", () => helperSend("unlock"));
     } catch { /* ignore */ }
@@ -636,6 +739,9 @@ function installDock(ctx) {
 
   restoreTaskbarOnce();
   attachPower();
+  process.on("exit", () => {
+    try { restoreTaskbarOnce(); } catch { /* ignore */ }
+  });
   queueMicrotask(() => {
     if (settings().enabled) syncHelper();
   });
@@ -645,6 +751,8 @@ function installDock(ctx) {
     dispose: () => {
       showGen += 1;
       clearTimeout(hideTimer);
+      clearAppearWatch();
+      showWindowsTaskbar();
       stopHelper();
       hideDock();
       if (win && !win.isDestroyed()) {

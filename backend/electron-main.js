@@ -8601,6 +8601,10 @@ app.on("window-all-closed", (e) => {
   e.preventDefault();
 });
 
+app.on("before-quit", () => {
+  try { stopDockHelper(); } catch { /* ignore */ }
+});
+
 app.on("will-quit", () => {
   if (unixPlatform) unixPlatform.stopHook();
   /** Primeiro os helpers: enquanto viverem, o instalador não consegue tocar na pasta. */

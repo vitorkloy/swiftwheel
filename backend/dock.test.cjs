@@ -127,6 +127,22 @@ describe("helper pipes", () => {
     assert.deepEqual(seen, ["EPIPE", "EPIPE"]);
   });
 
+  it("resolveNativeHelper escolhe o primeiro exe que existe", () => {
+    const tmp = fs.mkdtempSync(path.join(require("os").tmpdir(), "dock-helper-"));
+    const missing = path.join(tmp, "missing");
+    const present = path.join(tmp, "present");
+    fs.mkdirSync(present);
+    fs.writeFileSync(path.join(present, "vor-dock.exe"), "x");
+    assert.equal(lib.resolveNativeHelper("vor-dock.exe", [missing, present]), path.join(present, "vor-dock.exe"));
+    assert.equal(lib.resolveNativeHelper("vor-dock.exe", [missing]), null);
+    fs.rmSync(tmp, { recursive: true, force: true });
+  });
+
+  it("timeout de aparecimento e graça do primeiro hide", () => {
+    assert.equal(lib.DOCK_APPEAR_TIMEOUT_MS, 4000);
+    assert.equal(lib.DOCK_FIRST_HIDE_GRACE_MS, 2000);
+  });
+
   it("helperChildAlive exige processo ainda a correr", () => {
     assert.equal(lib.helperChildAlive(null), false);
     assert.equal(lib.helperChildAlive({ killed: true, exitCode: null, stdin: { writable: true } }), false);
@@ -226,6 +242,11 @@ describe("native helper source", () => {
     assert.match(main, /guardHelperPipes/);
     assert.match(main, /disableDock/);
     assert.match(main, /helperCrashed/);
+    assert.match(main, /confirmDockVisible/);
+    assert.match(main, /hideWindowsTaskbar/);
+    assert.match(main, /timeout-visible/);
+    assert.match(main, /painted/);
+    assert.match(main, /DOCK_APPEAR_TIMEOUT_MS/);
     assert.doesNotMatch(main, /helperRestarts/);
     assert.doesNotMatch(main, /setTimeout\(\s*\(\)\s*=>\s*startHelper/);
     assert.match(settings, /id: 'dock'/);
