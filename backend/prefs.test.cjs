@@ -34,6 +34,7 @@ describe("prefs", () => {
     assert.equal(modules.preview, false);
     assert.equal(modules.radial, true);
     assert.equal(modules.shiftdrop, true);
+    assert.equal(modules.dock, false);
   });
 
   it("moduleOn trata ausência como ligado", () => {

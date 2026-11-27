@@ -45,6 +45,7 @@ import {
   Bell,
   Volume2,
   Layers,
+  AppWindow,
 } from 'lucide-react';
 import type { LucideIcon } from 'lucide-react';
 
@@ -63,10 +64,11 @@ const GROUP_ICONS: Record<string, LucideIcon> = {
   'File wheel': FileImage, Format: ImageIcon, Language: Languages, Performance: Gauge,
   Protection: Shield, Shortcuts: Keyboard, Startup: Power, Theme: SunMoon, Updates: RefreshCw,
   Wheel: Disc3, Workspaces: SquareStack, 'Your workspaces': LayoutGrid, Presence: Sparkles,
-  Modules: Layers, Notifications: Bell, Sounds: Volume2, Events: Bell,
+  Modules: Layers, Notifications: Bell, Sounds: Volume2, Events: Bell, Dock: AppWindow,
 };
 import type {
   AppItem,
+  DockSettings,
   ModulePrefs,
   NotificationPrefs,
   PreviewSettings,
@@ -76,6 +78,7 @@ import type {
   Workspace,
 } from '../types';
 import {
+  DEFAULT_DOCK,
   DEFAULT_MODULES,
   DEFAULT_NOTIFICATIONS,
   DEFAULT_PREVIEW,
@@ -103,7 +106,7 @@ interface PrecisionSettingsProps {
   isPage?: boolean;
 }
 
-type SectionId = 'general' | 'trigger' | 'appearance' | 'capture' | 'preview' | 'notifications' | 'spaces' | 'advanced';
+type SectionId = 'general' | 'trigger' | 'appearance' | 'capture' | 'preview' | 'dock' | 'notifications' | 'spaces' | 'advanced';
 
 /** O modal fica reservado ao que não cabe numa linha: listas longas, gravação e edição. */
 type Editor =
@@ -154,6 +157,7 @@ const SECTIONS: Array<{ id: SectionId; label: string; caption: string; icon: Luc
   { id: 'appearance', label: 'Appearance', caption: 'Shape, presence, and theme.', icon: Palette },
   { id: 'capture', label: 'Screenshots', caption: 'Freeze, mark, and keep a capture.', icon: Camera },
   { id: 'preview', label: 'Preview', caption: 'Instant file preview with Space.', icon: Eye },
+  { id: 'dock', label: 'Dock', caption: 'Pill launcher with hover-lift and auto-hide.', icon: AppWindow },
   { id: 'notifications', label: 'Notifications', caption: 'Which alerts and sounds to keep.', icon: Bell },
   { id: 'spaces', label: 'Workspaces', caption: 'Contexts and their shortcuts.', icon: SquareStack },
   { id: 'advanced', label: 'Advanced', caption: 'Performance, protection, and data.', icon: Shield },
@@ -189,6 +193,30 @@ const PT: Record<string, string> = {
   'Print Screen overlay, annotations and OCR.': 'Overlay do Print Screen, anotações e OCR.',
   'Preview module': 'Pré-visualização',
   'Space in Explorer opens a QuickLook-style window.': 'Espaço no Explorer abre uma janela estilo QuickLook.',
+  'Dock module': 'Dock',
+  'macOS-style pill that hides the Windows taskbar while it is on.': 'Pílula estilo macOS que esconde a barra de tarefas do Windows enquanto estiver ligada.',
+  Dock: 'Dock',
+  'Pill launcher with hover-lift and auto-hide.': 'Launcher em pílula, com hover-lift e auto-hide.',
+  'Enable Dock': 'Ligar a Dock',
+  'Shows the pill and hides the Windows taskbar. Off restores the taskbar and stops the helper.': 'Mostra a pílula e esconde a barra do Windows. Desligada, a barra volta e o helper para.',
+  'Width of each Dock icon.': 'Largura de cada ícone da Dock.',
+  'Hover lift': 'Elevação no hover',
+  'How many pixels the icon rises. Default is 6 px.': 'Quantos pixels o ícone sobe. O padrão é 6 px.',
+  'Hover magnification': 'Magnificação no hover',
+  'Scale the hovered icon and its neighbors. Off by default.': 'Aumenta o ícone sob o ponteiro e os vizinhos. Desligado por padrão.',
+  'Auto-hide': 'Ocultar automaticamente',
+  'Show when the pointer hits the edge; hide after the delay. Does not reserve desktop space.': 'Aparece ao encostar na borda e some depois do atraso. Não reserva área de trabalho.',
+  'Auto-hide delay': 'Atraso do auto-hide',
+  'How long the Dock stays after the pointer leaves. Default is 150 ms.': 'Quanto tempo a Dock fica visível depois que o ponteiro sai. O padrão é 150 ms.',
+  'Edge that holds the pill.': 'Borda onde fica a pílula.',
+  Bottom: 'Embaixo',
+  Left: 'Esquerda',
+  Right: 'Direita',
+  Monitor: 'Monitor',
+  'Follow the pointer or stay on the primary display.': 'Segue o ponteiro ou fica só no monitor principal.',
+  'Follow pointer': 'Seguir o ponteiro',
+  Primary: 'Principal',
+  'The clock and a mini tray live on the Dock. Win+number still goes to Explorer.': 'O relógio e um mini tray ficam na própria Dock. Win+número continua com o Explorer.',
   'Master switch': 'Interruptor mestre',
   'Silence every system notification.': 'Silencia todas as notificações do sistema.',
   'Capture copied': 'Captura copiada',
@@ -633,6 +661,7 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
 
   const shot: ScreenshotSettings = { ...DEFAULT_SCREENSHOT, ...config.screenshot };
   const preview: PreviewSettings = { ...DEFAULT_PREVIEW, ...config.preview };
+  const dock: DockSettings = { ...DEFAULT_DOCK, ...config.dock };
   const modules: ModulePrefs = { ...DEFAULT_MODULES, ...config.modules };
   const notifications: NotificationPrefs = { ...DEFAULT_NOTIFICATIONS, ...config.notifications };
   const sounds: SoundPrefs = { ...DEFAULT_SOUNDS, ...config.sounds };
@@ -652,6 +681,7 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
         modules: next,
         screenshot: { ...DEFAULT_SCREENSHOT, ...current.screenshot, enabled: next.capture },
         preview: { ...DEFAULT_PREVIEW, ...current.preview, enabled: next.preview },
+        dock: { ...DEFAULT_DOCK, ...current.dock, enabled: next.dock },
         enableMouseTrigger: next.radial ? (typeof current.enableMouseTrigger === 'boolean' ? current.enableMouseTrigger : true) : current.enableMouseTrigger,
       };
     });
@@ -667,6 +697,14 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
       ...current,
       sounds: { ...DEFAULT_SOUNDS, ...current.sounds, ...patch },
     }));
+  }, [setConfig]);
+  const updateDock = useCallback((patch: Partial<DockSettings>) => {
+    setConfig((current) => {
+      const dock = { ...DEFAULT_DOCK, ...current.dock, ...patch };
+      const nextModules = { ...DEFAULT_MODULES, ...current.modules };
+      if (typeof patch.enabled === 'boolean') nextModules.dock = patch.enabled;
+      return { ...current, dock, modules: nextModules };
+    });
   }, [setConfig]);
   const updateShot = useCallback((patch: Partial<ScreenshotSettings>) => {
     setConfig((current) => {
@@ -747,6 +785,12 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
           description: 'Space in Explorer opens a QuickLook-style window.',
           kind: 'bool', enabled: modules.preview,
           onToggle: () => updateModules({ preview: !modules.preview }),
+        },
+        {
+          key: 'mod-dock', group: 'Modules', title: 'Dock module',
+          description: 'macOS-style pill that hides the Windows taskbar while it is on.',
+          kind: 'bool', enabled: modules.dock,
+          onToggle: () => updateModules({ dock: !modules.dock }),
         },
         {
           key: 'workspaceSwitchMode', group: 'Workspaces', title: 'Workspace switching',
@@ -991,6 +1035,57 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
           kind: 'note',
         },
       ],
+      dock: [
+        {
+          key: 'dock-enabled', group: 'Dock', title: 'Enable Dock',
+          description: 'Shows the pill and hides the Windows taskbar. Off restores the taskbar and stops the helper.',
+          kind: 'bool', enabled: dock.enabled,
+          onToggle: () => updateDock({ enabled: !dock.enabled }),
+        },
+        range('dock-icon', 'Dock', 'Icon size', 'Width of each Dock icon.',
+          dock.iconSize, 32, 80, (value) => updateDock({ iconSize: value }), (value) => `${Math.round(value)} px`),
+        range('dock-lift', 'Dock', 'Hover lift', 'How many pixels the icon rises. Default is 6 px.',
+          dock.liftPx, 0, 24, (value) => updateDock({ liftPx: value }), (value) => `${Math.round(value)} px`),
+        {
+          key: 'dock-mag', group: 'Dock', title: 'Hover magnification',
+          description: 'Scale the hovered icon and its neighbors. Off by default.',
+          kind: 'bool', enabled: dock.magnification,
+          onToggle: () => updateDock({ magnification: !dock.magnification }),
+        },
+        {
+          key: 'dock-autohide', group: 'Dock', title: 'Auto-hide',
+          description: 'Show when the pointer hits the edge; hide after the delay. Does not reserve desktop space.',
+          kind: 'bool', enabled: dock.autoHide,
+          onToggle: () => updateDock({ autoHide: !dock.autoHide }),
+        },
+        range('dock-delay', 'Dock', 'Auto-hide delay', 'How long the Dock stays after the pointer leaves. Default is 150 ms.',
+          dock.autoHideDelayMs, 0, 800, (value) => updateDock({ autoHideDelayMs: value }), (value) => `${Math.round(value)} ms`, 10),
+        {
+          key: 'dock-position', group: 'Dock', title: 'Position',
+          description: 'Edge that holds the pill.',
+          kind: 'segmented', current: dock.position,
+          choices: [
+            { value: 'bottom', label: 'Bottom' },
+            { value: 'left', label: 'Left' },
+            { value: 'right', label: 'Right' },
+          ],
+          onChange: (value) => updateDock({ position: value as DockSettings['position'] }),
+        },
+        {
+          key: 'dock-monitor', group: 'Dock', title: 'Monitor',
+          description: 'Follow the pointer or stay on the primary display.',
+          kind: 'segmented', current: dock.monitor,
+          choices: [
+            { value: 'follow-mouse', label: 'Follow pointer' },
+            { value: 'primary', label: 'Primary' },
+          ],
+          onChange: (value) => updateDock({ monitor: value as DockSettings['monitor'] }),
+        },
+        {
+          key: 'dock-note', group: 'Dock', title: 'The clock and a mini tray live on the Dock. Win+number still goes to Explorer.',
+          kind: 'note',
+        },
+      ],
       notifications: [
         {
           key: 'notif-master', group: 'Notifications', title: 'Master switch',
@@ -1164,7 +1259,7 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
         },
       ],
     };
-  }, [config, gameMode, theme, apps, appVersion, update, updateShot, updatePreview, updateModules, updateNotifications, updateSounds, modules, notifications, sounds, shot, preview, updateInfo, updateBusy, updateNote, isStoreBuild, runUpdateCheck, onReset, onClose, deleteWorkspace, reorderWorkspaces, assignFileWheelKey]);
+  }, [config, gameMode, theme, apps, appVersion, update, updateShot, updatePreview, updateDock, updateModules, updateNotifications, updateSounds, modules, notifications, sounds, shot, preview, dock, updateInfo, updateBusy, updateNote, isStoreBuild, runUpdateCheck, onReset, onClose, deleteWorkspace, reorderWorkspaces, assignFileWheelKey]);
 
   const tr = (text?: string) => {
     if (!text) return '';
@@ -1196,7 +1291,7 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
   const isEmpty = results.length === 0;
 
   const sectionModuleOff = (id: SectionId) =>
-    (id === 'capture' && !modules.capture) || (id === 'preview' && !modules.preview);
+    (id === 'capture' && !modules.capture) || (id === 'preview' && !modules.preview) || (id === 'dock' && !modules.dock);
 
   const mouseButtonLabel = () => {
     const button = config.mouseTriggerButton ?? 'middle';
@@ -1310,9 +1405,10 @@ export const PrecisionSettings: React.FC<PrecisionSettingsProps> = ({
                     const foldSummary = group.name === 'App wheel' ? appWheelSummary : fileWheelSummary;
                     const pageMuted = !trimmedQuery && (
                       (sectionId === 'capture' && !modules.capture) ||
-                      (sectionId === 'preview' && !modules.preview)
+                      (sectionId === 'preview' && !modules.preview) ||
+                      (sectionId === 'dock' && !modules.dock)
                     );
-                    const enableKeys = new Set(['shot-enabled', 'preview-enabled']);
+                    const enableKeys = new Set(['shot-enabled', 'preview-enabled', 'dock-enabled']);
                     return (
                     <section className={`zs-group${foldable ? ' is-card' : ''}${foldable && expanded ? ' is-open' : ''}${pageMuted ? ' is-module-off' : ''}`} key={group.name}>
                       {foldable ? (

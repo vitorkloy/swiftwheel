@@ -71,6 +71,8 @@ jobs:
           npm run test:preview
           npm run test:file-wheel
           npm run test:capture
+          npm run test:prefs
+          npm run test:dock
       - name: Unix platform tests
         if: runner.os != 'Windows'
         run: npm run test:platform-unix
