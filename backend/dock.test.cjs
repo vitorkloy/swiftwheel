@@ -18,6 +18,15 @@ describe("dock-lib", () => {
     assert.equal(cfg.position, "bottom");
     assert.equal(cfg.monitor, "follow-mouse");
     assert.deepEqual(cfg.pins, []);
+    assert.equal(cfg.pinsSeeded, false);
+  });
+
+  it("pins vazios depois de pinsSeeded não voltam à semente da taskbar", () => {
+    const seed = [{ id: "s1", label: "Edge", command: "msedge" }];
+    assert.equal(lib.pinsForMerge({ pins: [], pinsSeeded: false }, seed).length, 1);
+    assert.equal(lib.pinsForMerge({ pins: [], pinsSeeded: true }, seed).length, 0);
+    assert.equal(lib.pinsForMerge({ pins: [{ command: "notepad" }], pinsSeeded: false }, seed).length, 1);
+    assert.equal(lib.pinsForMerge({ pins: [{ command: "notepad" }], pinsSeeded: false }, seed)[0].command, "notepad");
   });
 
   it("preserva pins e recusa comando vazio", () => {
@@ -39,6 +48,19 @@ describe("dock-lib", () => {
     assert.equal(bounds.y + bounds.height, 1080);
     assert.ok(bounds.x > 0);
     assert.ok(bounds.x + bounds.width < 1920);
+  });
+
+  it("na lateral a altura cobre os ícones empilhados, o tray e o padding da pílula", () => {
+    const monitor = { x: 0, y: 0, width: 1920, height: 1080 };
+    const cfg = { position: "left", iconSize: 48, liftPx: 6 };
+    const n = 6;
+    const bounds = lib.dockWindowBounds(monitor, cfg, n);
+    const chrome = lib.dockChrome(cfg);
+    const itemsH = n * chrome.itemButton + (n - 1) * chrome.gap;
+    const needed = chrome.rootPad + chrome.pillPadSide + itemsH + chrome.pillGap + chrome.trayVertical;
+    assert.ok(bounds.height >= Math.min(monitor.height - 16, needed));
+    assert.ok(bounds.height <= monitor.height - 16);
+    assert.equal(bounds.x, 0);
   });
 
   it("detecta a borda inferior com slop de 2 px", () => {
@@ -121,6 +143,23 @@ describe("native helper source", () => {
     assert.match(src, /CallNextHookEx/);
   });
 
+  it("GetModuleHandle vem do kernel32 e o hook de rato só liga com edge on", () => {
+    assert.match(src, /\[DllImport\("kernel32\.dll"[^\n]*GetModuleHandle/);
+    assert.doesNotMatch(src, /\[DllImport\("user32\.dll"[^\n]*GetModuleHandle/);
+    assert.match(src, /MSG_HOOK_ON/);
+    assert.match(src, /MSG_HOOK_OFF/);
+    assert.match(src, /RequestMouseHook\(false\)/);
+    assert.match(src, /UnhookWindowsHookEx/);
+    assert.match(src, /catch \(Exception ex\)/);
+  });
+
+  it("refresca a lista de janelas com SetWinEventHook, sem poll", () => {
+    assert.match(src, /SetWinEventHook/);
+    assert.match(src, /EVENT_OBJECT_SHOW/);
+    assert.match(src, /WINEVENT_OUTOFCONTEXT/);
+    assert.match(src, /UnhookWinEvent/);
+  });
+
   it("a janela Electron não reserva área e o auto-hide usa o delay do settings", () => {
     assert.match(main, /dockWindowBounds/);
     assert.match(main, /autoHideDelayMs/);
@@ -128,8 +167,20 @@ describe("native helper source", () => {
     assert.match(main, /powerMonitor/);
     assert.match(main, /lock-screen/);
     assert.match(main, /não encolhe o workArea/);
+    assert.match(main, /dipToScreenRect/);
+    assert.match(main, /screenToDipRect/);
+    assert.match(main, /pinsSeeded/);
+    assert.match(main, /showGen/);
+    assert.match(main, /creating/);
     assert.match(settings, /id: 'dock'/);
     assert.match(settings, /dock-enabled/);
     assert.match(settings, /150/);
+  });
+});
+
+describe("ci", () => {
+  it("unit tests no workflow usam shell bash", () => {
+    const yml = fs.readFileSync(path.join(__dirname, "..", ".github", "workflows", "build-windows.yml"), "utf8");
+    assert.match(yml, /name: Unit tests\s+shell: bash/);
   });
 });

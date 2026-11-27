@@ -1,7 +1,8 @@
 // vor-dock: helper nativo da Dock do SwiftWheel (Windows).
 // Fora de escopo: injetar no explorer.exe, reservar AppBar, ou engolir Win+número.
 // - Esconde/restaura Shell_TrayWnd (e Shell_SecondaryTrayWnd) só com ShowWindow.
-// - WH_MOUSE_LL só com auto-hide: emite edge in/out, sem poll do cursor.
+// - WH_MOUSE_LL só com auto-hide (edge on): emite edge in/out, sem poll do cursor.
+// - SetWinEventHook (OUTOFCONTEXT) refresca a lista de janelas com debounce.
 // - Se o processo pai morrer (WaitForSingleObject no PID), a barra volta sozinha.
 // - WTS_SESSION_LOCK / disconnect restauram; unlock volta a esconder se ainda armado.
 // Protocolo (linhas UTF-8):
@@ -43,14 +44,17 @@ static class VorDock
     [DllImport("user32.dll")] static extern bool BringWindowToTop(IntPtr h);
     [DllImport("user32.dll")] static extern bool AttachThreadInput(uint a, uint b, bool attach);
     [DllImport("user32.dll")] static extern bool PostMessage(IntPtr h, uint msg, IntPtr w, IntPtr l);
-    [DllImport("user32.dll")] static extern IntPtr SetWindowsHookEx(int id, HookProc p, IntPtr mod, uint tid);
+    [DllImport("user32.dll", SetLastError = true)] static extern IntPtr SetWindowsHookEx(int id, HookProc p, IntPtr mod, uint tid);
     [DllImport("user32.dll")] static extern bool UnhookWindowsHookEx(IntPtr h);
     [DllImport("user32.dll")] static extern IntPtr CallNextHookEx(IntPtr h, int c, IntPtr w, IntPtr l);
-    [DllImport("user32.dll")] static extern IntPtr GetModuleHandle(string n);
+    [DllImport("kernel32.dll", CharSet = CharSet.Unicode, SetLastError = true)] static extern IntPtr GetModuleHandle(string n);
     [DllImport("user32.dll")] static extern int GetMessage(out MSG m, IntPtr h, uint a, uint b);
     [DllImport("user32.dll")] static extern bool TranslateMessage(ref MSG m);
     [DllImport("user32.dll")] static extern IntPtr DispatchMessage(ref MSG m);
     [DllImport("user32.dll")] static extern uint GetCurrentThreadId();
+    [DllImport("user32.dll")] static extern bool PostThreadMessage(uint t, uint msg, IntPtr w, IntPtr l);
+    [DllImport("user32.dll")] static extern IntPtr SetWinEventHook(uint min, uint max, IntPtr mod, WinEventProc proc, uint pid, uint tid, uint flags);
+    [DllImport("user32.dll")] static extern bool UnhookWinEvent(IntPtr h);
     [DllImport("user32.dll")] static extern IntPtr MonitorFromPoint(POINT pt, uint flags);
     [DllImport("user32.dll", CharSet = CharSet.Unicode)] static extern bool GetMonitorInfo(IntPtr h, ref MONITORINFO info);
     [DllImport("user32.dll")] static extern bool GetCursorPos(out POINT pt);
@@ -95,6 +99,7 @@ static class VorDock
     }
     delegate IntPtr HookProc(int code, IntPtr w, IntPtr l);
     delegate bool EnumProc(IntPtr h, IntPtr l);
+    delegate void WinEventProc(IntPtr h, uint evt, IntPtr hwnd, int obj, int child, uint thread, uint time);
 
     const int SW_HIDE = 0;
     const int SW_SHOW = 5;
@@ -118,6 +123,15 @@ static class VorDock
     const int WS_EX_APPWINDOW = 0x00040000;
     const uint GA_ROOTOWNER = 3;
     const int DWMWA_CLOAKED = 14;
+    const uint EVENT_SYSTEM_FOREGROUND = 0x0003;
+    const uint EVENT_OBJECT_CREATE = 0x8000;
+    const uint EVENT_OBJECT_DESTROY = 0x8001;
+    const uint EVENT_OBJECT_SHOW = 0x8002;
+    const uint EVENT_OBJECT_HIDE = 0x8003;
+    const uint WINEVENT_OUTOFCONTEXT = 0;
+    const uint WINEVENT_SKIPOWNPROCESS = 2;
+    const uint MSG_HOOK_ON = 0x8001;
+    const uint MSG_HOOK_OFF = 0x8002;
 
     static readonly object outLock = new object();
     static IntPtr stdoutHandle;
@@ -136,6 +150,10 @@ static class VorDock
     static bool edgeInside;
     static HiddenForm form;
     static int parentPid;
+    static IntPtr winHookObj = IntPtr.Zero;
+    static IntPtr winHookFg = IntPtr.Zero;
+    static WinEventProc winProc = OnWinEvent;
+    static System.Threading.Timer listDebounce;
 
     static void Emit(string s)
     {
@@ -259,8 +277,16 @@ static class VorDock
     static void SetArmed(bool value)
     {
         armed = value;
-        if (value) HideTray();
-        else RestoreTray();
+        if (value)
+        {
+            HideTray();
+            StartWinEvents();
+        }
+        else
+        {
+            RestoreTray();
+            StopWinEvents();
+        }
     }
 
     static void SetEdge(string arg)
@@ -270,10 +296,55 @@ static class VorDock
         {
             edgeWatch = false;
             edgeInside = false;
+            RequestMouseHook(false);
             return;
         }
         if (side == "left" || side == "right" || side == "bottom") edgeSide = side;
         edgeWatch = true;
+        RequestMouseHook(true);
+    }
+
+    static void StartWinEvents()
+    {
+        if (winHookFg != IntPtr.Zero) return;
+        winProc = OnWinEvent;
+        winHookFg = SetWinEventHook(EVENT_SYSTEM_FOREGROUND, EVENT_SYSTEM_FOREGROUND, IntPtr.Zero, winProc, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+        winHookObj = SetWinEventHook(EVENT_OBJECT_CREATE, EVENT_OBJECT_HIDE, IntPtr.Zero, winProc, 0, 0, WINEVENT_OUTOFCONTEXT | WINEVENT_SKIPOWNPROCESS);
+    }
+
+    static void StopWinEvents()
+    {
+        if (winHookFg != IntPtr.Zero) { UnhookWinEvent(winHookFg); winHookFg = IntPtr.Zero; }
+        if (winHookObj != IntPtr.Zero) { UnhookWinEvent(winHookObj); winHookObj = IntPtr.Zero; }
+    }
+
+    static void OnWinEvent(IntPtr h, uint evt, IntPtr hwnd, int obj, int child, uint thread, uint time)
+    {
+        if (!armed) return;
+        if (obj != 0) return;
+        if (evt != EVENT_SYSTEM_FOREGROUND && evt != EVENT_OBJECT_CREATE && evt != EVENT_OBJECT_DESTROY && evt != EVENT_OBJECT_SHOW && evt != EVENT_OBJECT_HIDE)
+            return;
+        ScheduleWindows();
+    }
+
+    static void ScheduleWindows()
+    {
+        if (!armed) return;
+        if (listDebounce == null)
+        {
+            listDebounce = new System.Threading.Timer(delegate
+            {
+                if (!armed) return;
+                try
+                {
+                    if (form != null && form.IsHandleCreated)
+                        form.BeginInvoke((Action)EmitWindows);
+                }
+                catch { }
+            }, null, 80, Timeout.Infinite);
+        }
+        else
+            listDebounce.Change(80, Timeout.Infinite);
     }
 
     static void ParseHostRect(string arg)
@@ -329,18 +400,47 @@ static class VorDock
         if (armed) HideTray();
     }
 
-    static void HookLoop()
+    static void RequestMouseHook(bool on)
     {
-        hookThread = GetCurrentThreadId();
-        mouseProc = MouseCallback;
+        uint msg = on ? MSG_HOOK_ON : MSG_HOOK_OFF;
+        if (hookThread != 0) PostThreadMessage(hookThread, msg, IntPtr.Zero, IntPtr.Zero);
+    }
+
+    static void InstallMouseHook()
+    {
+        if (mouseHook != IntPtr.Zero) return;
+        if (mouseProc == null) mouseProc = MouseCallback;
         mouseHook = SetWindowsHookEx(WH_MOUSE_LL, mouseProc, GetModuleHandle(null), 0);
         if (mouseHook == IntPtr.Zero) Emit("log hook-fail " + Marshal.GetLastWin32Error());
-        MSG m;
-        while (GetMessage(out m, IntPtr.Zero, 0, 0) > 0)
+    }
+
+    static void RemoveMouseHook()
+    {
+        if (mouseHook == IntPtr.Zero) return;
+        UnhookWindowsHookEx(mouseHook);
+        mouseHook = IntPtr.Zero;
+    }
+
+    static void HookLoop()
+    {
+        try
         {
-            TranslateMessage(ref m);
-            DispatchMessage(ref m);
+            hookThread = GetCurrentThreadId();
+            if (edgeWatch) InstallMouseHook();
+            MSG m;
+            while (GetMessage(out m, IntPtr.Zero, 0, 0) > 0)
+            {
+                if (m.msg == MSG_HOOK_ON) { InstallMouseHook(); continue; }
+                if (m.msg == MSG_HOOK_OFF) { RemoveMouseHook(); continue; }
+                TranslateMessage(ref m);
+                DispatchMessage(ref m);
+            }
         }
+        catch (Exception ex)
+        {
+            Emit("log hook-fail " + Clean(ex.Message));
+        }
+        RemoveMouseHook();
     }
 
     static IntPtr MouseCallback(int code, IntPtr w, IntPtr l)

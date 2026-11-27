@@ -482,10 +482,17 @@ export default function App() {
     };
   }, []);
   useEffect(() => {
-    return window.electron?.onDockPins?.((pins) => {
+    return window.electron?.onDockPins?.((payload) => {
+      const pins = Array.isArray(payload) ? payload : payload?.pins;
+      const pinsSeeded = Array.isArray(payload) ? undefined : payload?.pinsSeeded;
       setConfig((current) => ({
         ...current,
-        dock: { ...DEFAULT_DOCK, ...current.dock, pins: Array.isArray(pins) ? pins : [] },
+        dock: {
+          ...DEFAULT_DOCK,
+          ...current.dock,
+          pins: Array.isArray(pins) ? pins : current.dock?.pins ?? [],
+          ...(typeof pinsSeeded === "boolean" ? { pinsSeeded } : {}),
+        },
       }));
     });
   }, []);

@@ -17,19 +17,22 @@ const DEFAULT_DOCK = lib.DEFAULT_DOCK;
 
 function installDock(ctx) {
   let win = null;
+  let creating = null;
   let helper = null;
   let helperUp = false;
   let helperRestarts = 0;
   let visible = false;
   let hideTimer = null;
   let pending = null;
+  let sessionGen = 0;
+  let showGen = 0;
   let running = [];
   let incomingWindows = [];
   let incomingPins = [];
   let seedPins = [];
-  let seeded = false;
   let trayStatus = { vol: 50, mute: 0, battery: 100, ac: 1, online: 1, hasbatt: 0 };
   let lastMonitor = { x: 0, y: 0, width: 1920, height: 1080 };
+  let placed = false;
   let iconCache = new Map();
   let powerHooks = false;
 
@@ -72,14 +75,18 @@ function installDock(ctx) {
     return url;
   };
 
+  const mergeItems = (cfg) => lib.mergeDockItems(lib.pinsForMerge(cfg, seedPins), running);
+
   const buildSession = async () => {
+    const gen = ++sessionGen;
     const cfg = settings();
-    const items = lib.mergeDockItems(cfg.pins.length ? cfg.pins : seedPins, running);
+    const items = mergeItems(cfg);
     const withIcons = [];
     for (const item of items) {
       const icon = item.icon || (await iconFor(item.iconPath || item.command));
       withIcons.push({ ...item, icon });
     }
+    if (gen !== sessionGen) return pending;
     const session = {
       visible,
       settings: cfg,
@@ -95,8 +102,26 @@ function installDock(ctx) {
 
   const pushSession = async () => {
     const session = await buildSession();
-    sendToDock("dock-session", session);
+    if (session) sendToDock("dock-session", session);
     return session;
+  };
+
+  const dipToPhysical = (rect) => {
+    try {
+      if (rect && typeof screen.dipToScreenRect === "function") {
+        return screen.dipToScreenRect(win && !win.isDestroyed() ? win : null, rect);
+      }
+    } catch { /* ignore */ }
+    return rect;
+  };
+
+  const physicalToDip = (rect) => {
+    try {
+      if (rect && typeof screen.screenToDipRect === "function") {
+        return screen.screenToDipRect(win && !win.isDestroyed() ? win : null, rect);
+      }
+    } catch { /* ignore */ }
+    return rect;
   };
 
   const displaysOf = () => screen.getAllDisplays().map((d) => ({
@@ -107,18 +132,21 @@ function installDock(ctx) {
   const placeWindow = (monitor) => {
     if (!win || win.isDestroyed()) return null;
     const cfg = settings();
-    const items = lib.mergeDockItems(cfg.pins.length ? cfg.pins : seedPins, running);
+    const items = mergeItems(cfg);
     const bounds = lib.dockWindowBounds(monitor, cfg, items.length);
     lastMonitor = monitor;
+    placed = true;
     win.setBounds(bounds);
-    helperSend(`hostrect ${bounds.x} ${bounds.y} ${bounds.width} ${bounds.height}`);
+    const phys = dipToPhysical(bounds) || bounds;
+    helperSend(`hostrect ${Math.round(phys.x)} ${Math.round(phys.y)} ${Math.round(phys.width)} ${Math.round(phys.height)}`);
     return bounds;
   };
 
   const showDock = async (monitor) => {
-    const cfg = settings();
-    if (!cfg.enabled) return;
+    const gen = ++showGen;
+    if (!settings().enabled) return;
     await ensureWindow();
+    if (gen !== showGen || !settings().enabled) return;
     if (!win || win.isDestroyed()) return;
     const mon = monitor || lastMonitor || screen.getPrimaryDisplay().bounds;
     placeWindow(mon);
@@ -127,12 +155,16 @@ function installDock(ctx) {
     helperSend("list");
     helperSend("status");
     await pushSession();
+    if (gen !== showGen || !settings().enabled) return;
+    if (!win || win.isDestroyed()) return;
     try { win.setAlwaysOnTop(true, "floating"); } catch { /* ignore */ }
     try { win.showInactive(); } catch { win.show(); }
   };
 
   const hideDock = () => {
+    showGen += 1;
     visible = false;
+    placed = false;
     clearTimeout(hideTimer);
     helperSend("hostrect 0 0 0 0");
     if (win && !win.isDestroyed()) {
@@ -200,9 +232,22 @@ function installDock(ctx) {
 
   const ensureWindow = async () => {
     if (win && !win.isDestroyed()) return win;
-    win = await createWindow();
-    sendDockHwnd();
-    return win;
+    if (creating) return creating;
+    creating = (async () => {
+      const window = await createWindow();
+      if (!settings().enabled) {
+        try { window.close(); } catch { /* ignore */ }
+        return null;
+      }
+      win = window;
+      sendDockHwnd();
+      return win;
+    })();
+    try {
+      return await creating;
+    } finally {
+      creating = null;
+    }
   };
 
   const sendDockHwnd = () => {
@@ -215,13 +260,13 @@ function installDock(ctx) {
   };
 
   const persistPins = (pins) => {
-    if (typeof ctx.patchDockPins === "function") ctx.patchDockPins(pins);
+    if (typeof ctx.patchDockPins === "function") {
+      ctx.patchDockPins(Array.isArray(pins) ? pins : [], { pinsSeeded: true });
+    }
   };
 
   const applySeedIfNeeded = () => {
-    const cfg = settings();
-    if (seeded || cfg.pins.length > 0 || seedPins.length === 0) return;
-    seeded = true;
+    if (settings().pinsSeeded) return;
     persistPins(seedPins);
   };
 
@@ -261,7 +306,12 @@ function installDock(ctx) {
       };
       if (kind === "in") {
         clearTimeout(hideTimer);
-        void showDock(monitor);
+        const dip = physicalToDip(monitor) || monitor;
+        const cfg = settings();
+        const chosen = cfg.monitor === "primary"
+          ? lib.pickMonitor(displaysOf(), { x: dip.x + dip.width / 2, y: dip.y + dip.height / 2 }, "primary")
+          : dip;
+        void showDock(chosen);
       } else if (kind === "out") {
         scheduleHide();
       }
@@ -292,7 +342,7 @@ function installDock(ctx) {
       }
       incomingWindows = [];
       running = grouped;
-      applySeedIfNeeded();
+      if (visible && placed) placeWindow(lastMonitor);
       void pushSession();
     } else if (cmd === "pin") {
       incomingPins.push(lib.normalizeDockPin({
@@ -551,6 +601,7 @@ function installDock(ctx) {
   return {
     sync: syncHelper,
     dispose: () => {
+      showGen += 1;
       clearTimeout(hideTimer);
       stopHelper();
       hideDock();

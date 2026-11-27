@@ -135,6 +135,8 @@ export interface DockSettings {
   position: "bottom" | "left" | "right";
   monitor: "follow-mouse" | "primary";
   pins: DockPin[];
+  /** True depois da primeira semente da taskbar; pins vazio passa a ser intencional. */
+  pinsSeeded?: boolean;
 }
 
 /** Ligar/desligar cada módulo. Desligado: sem hooks, listeners ou processos. */
@@ -520,7 +522,7 @@ export interface ElectronAPI {
   ) => () => void;
   startPreview?: (filePath: string) => Promise<{ ok: boolean; error?: string }>;
   /** Pins da Dock gravados no processo principal (fixar/desafixar no próprio Dock). */
-  onDockPins?: (callback: (pins: DockPin[]) => void) => () => void;
+  onDockPins?: (callback: (payload: { pins: DockPin[]; pinsSeeded?: boolean }) => void) => () => void;
 }
 
 declare global {
